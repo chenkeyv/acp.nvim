@@ -101,6 +101,28 @@ local function append_text(state, text)
 	follow_output(state)
 end
 
+local function set_run_status(state, status)
+	if not valid_buf(state.output_buf) then
+		return
+	end
+
+	if state.run_status == status then
+		return
+	end
+
+	local line = ("Status: %s"):format(status)
+	local line_count = vim.api.nvim_buf_line_count(state.output_buf)
+	if state.run_status_line and state.run_status_line < line_count then
+		set_output_lines(state, state.run_status_line, state.run_status_line + 1, { line })
+	else
+		state.run_status_line = line_count
+		set_output_lines(state, -1, -1, { line, "" })
+	end
+
+	state.run_status = status
+	follow_output(state)
+end
+
 local function trim(text)
 	return text:gsub("^%s+", ""):gsub("%s+$", "")
 end
@@ -561,7 +583,7 @@ local function create_buffers(state)
 	set_buf_options(state.output_buf, {
 		bufhidden = "wipe",
 		buftype = "nofile",
-		filetype = "markdown",
+		filetype = "acp",
 		modifiable = true,
 		swapfile = false,
 	})
@@ -573,7 +595,7 @@ local function create_buffers(state)
 	})
 
 	vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, {
-		("# ACP: %s"):format(state.adapter),
+		("ACP: %s"):format(state.adapter),
 		"",
 	})
 	vim.bo[state.output_buf].modifiable = false
@@ -781,32 +803,48 @@ function M.send()
 	end
 
 	state.busy = true
+	state.streaming = false
+	state.run_status = nil
+	state.run_status_line = nil
+
+	clear_input(state)
+	append_lines(state, { "", "You", "" })
+	append_lines(state, vim.split(prompt, "\n", { plain = true }))
+	append_lines(state, { "", "Agent", "" })
+	set_run_status(state, "starting")
+	pcall(vim.cmd, "redraw")
 
 	if not state.connection:ensure_session() then
 		state.busy = false
+		set_run_status(state, "error: failed to start session")
 		return
 	end
 
-	clear_input(state)
-	append_lines(state, { "", "### You", "" })
-	append_lines(state, vim.split(prompt, "\n", { plain = true }))
-	append_lines(state, { "", "### Agent", "" })
+	set_run_status(state, "running")
 
 	local ok = state.connection:prompt(prompt, {
 		message_chunk = function(text)
+			if not state.streaming then
+				state.streaming = true
+				set_run_status(state, "streaming")
+			end
 			append_text(state, text)
 		end,
 		thought_chunk = function(text)
-			append_lines(state, { "", ("> %s"):format(text), "" })
+			set_run_status(state, "thinking")
+			append_lines(state, { "", ("Thought: %s"):format(text), "" })
 		end,
 		tool_call = function(update)
-			append_lines(state, { "", ("_Tool: %s_"):format(update.title or update.kind or "tool call"), "" })
+			set_run_status(state, ("tool: %s"):format(update.title or update.kind or "tool call"))
+			append_lines(state, { "", ("Tool: %s"):format(update.title or update.kind or "tool call"), "" })
 		end,
 		tool_update = function(update)
-			append_lines(state, { "", ("_Tool update: %s_"):format(update.status or update.title or "updated"), "" })
+			set_run_status(state, ("tool: %s"):format(update.status or update.title or "updated"))
+			append_lines(state, { "", ("Tool update: %s"):format(update.status or update.title or "updated"), "" })
 		end,
 		file_written = function(path)
-			append_lines(state, { "", ("_Wrote `%s`_"):format(vim.fn.fnamemodify(path, ":.")), "" })
+			set_run_status(state, ("wrote %s"):format(vim.fn.fnamemodify(path, ":.")))
+			append_lines(state, { "", ("Wrote %s"):format(vim.fn.fnamemodify(path, ":.")), "" })
 		end,
 		session_info = function(update)
 			if update.title and update.title ~= "" then
@@ -822,18 +860,20 @@ function M.send()
 			end
 		end,
 		stderr = function(text)
-			append_lines(state, { "", ("```stderr\n%s\n```"):format(text:gsub("%s+$", "")), "" })
+			append_lines(state, { "", "stderr:" })
+			append_lines(state, vim.split(text:gsub("%s+$", ""), "\n", { plain = true }))
+			append_lines(state, { "" })
 		end,
 		done = function(stop_reason)
 			state.busy = false
-			append_lines(state, { "", ("_Stopped: %s_"):format(stop_reason or "done"), "" })
+			set_run_status(state, ("stopped: %s"):format(stop_reason or "done"))
 			if valid_win(state.input_win) then
 				vim.api.nvim_set_current_win(state.input_win)
 			end
 		end,
 		error = function(message)
 			state.busy = false
-			append_lines(state, { "", ("_Error: %s_"):format(message), "" })
+			set_run_status(state, ("error: %s"):format(message))
 			if valid_win(state.input_win) then
 				vim.api.nvim_set_current_win(state.input_win)
 			end
@@ -842,7 +882,7 @@ function M.send()
 
 	if not ok then
 		state.busy = false
-		append_lines(state, { "_Failed to send prompt._", "" })
+		set_run_status(state, "error: failed to send prompt")
 	end
 end
 
@@ -872,6 +912,7 @@ function M.stop()
 	end
 	state.connection:stop()
 	state.busy = false
+	set_run_status(state, "stopped")
 	notify("Stopped ACP agent")
 end
 

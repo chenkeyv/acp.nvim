@@ -5,7 +5,8 @@ Minimal Agent Client Protocol client for Neovim.
 This plugin provides an editor-native ACP chat surface:
 
 - dedicated ACP tab by default
-- output buffer for streamed agent responses
+- plain output buffer for streamed agent responses
+- output-visible run status for active prompts, tools, and completion
 - floating Markdown input prompt for completion-friendly editing
 - `codex-acp` and `claude-agent-acp` adapter presets
 - basic ACP JSON-RPC, session, prompt, permission, and file read/write support
