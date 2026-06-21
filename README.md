@@ -31,6 +31,25 @@ vim.pack.add({
 })
 ```
 
+The Codex adapter automatically reads the active Codex model and context window
+from Codex metadata. Other adapters can provide prompt-title metadata with
+static values or a resolver function:
+
+```lua
+vim.g.acp_nvim_config = {
+	adapters = {
+		claude_code = {
+			metadata = function()
+				return {
+					model = "claude-sonnet-4.5",
+					context_window = 200000,
+				}
+			end,
+		},
+	},
+}
+```
+
 ## Commands
 
 - `:AcpChat [codex|claude_code]` opens the default dedicated tab layout
