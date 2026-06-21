@@ -203,7 +203,7 @@ local function input_float_config(state)
 		height = input_height,
 		style = "minimal",
 		border = "rounded",
-		title = " Prompt  <C-s> send  <leader>aq stop ",
+		title = " Prompt  <Enter> newline  <C-Enter> send  <leader>aq stop ",
 		title_pos = "left",
 		zindex = 50,
 	}
@@ -229,7 +229,7 @@ local function apply_window_options(state)
 			vim.wo[state.output_win].winbar = (" ACP %s "):format(state.adapter)
 		end
 		if state.mode == "window" and valid_win(state.input_win) then
-			vim.wo[state.input_win].winbar = " Prompt  <C-s> send  <leader>aq stop "
+			vim.wo[state.input_win].winbar = " Prompt  <Enter> newline  <C-Enter> send  <leader>aq stop "
 		end
 	end
 end
@@ -258,7 +258,7 @@ local function apply_float_layout(state)
 		height = dims.input_height,
 		style = "minimal",
 		border = "rounded",
-		title = " Prompt  <C-s> send  <leader>aq stop ",
+		title = " Prompt  <Enter> newline  <C-Enter> send  <leader>aq stop ",
 		title_pos = "left",
 		zindex = 50,
 	}
@@ -416,6 +416,8 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 	end
 
+	vim.keymap.set("i", "<CR>", "<CR>", { buffer = state.input_buf, desc = "Insert newline" })
+	vim.keymap.set({ "n", "i" }, "<C-CR>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<C-s>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
 end
 

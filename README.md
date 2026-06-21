@@ -41,6 +41,12 @@ vim.pack.add({
 - `:AcpStop` stops the current agent process
 - `:AcpHealth [adapter]` checks whether the adapter command is available
 
+In the prompt buffer:
+
+- `<Enter>` inserts a newline
+- `<C-Enter>` sends the prompt
+- `<C-s>` also sends the prompt as a terminal-compatible fallback
+
 ## Status
 
 This is an early minimal ACP client. Terminal operations, session switching, and
