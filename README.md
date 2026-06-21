@@ -5,6 +5,7 @@ Minimal Agent Client Protocol client for Neovim.
 This plugin provides an editor-native ACP chat surface:
 
 - dedicated ACP tab by default
+- side panel for open ACP sessions
 - plain output buffer for streamed agent responses
 - output-visible run status for active prompts, tools, and completion
 - floating Markdown input prompt for completion-friendly editing
@@ -59,7 +60,12 @@ vim.g.acp_nvim_config = {
 - `:AcpChatWindow [adapter]` opens a split-window layout
 - `:AcpSend` sends the current prompt
 - `:AcpStop` stops the current agent process
+- `:AcpSessions` focuses the sessions side panel
 - `:AcpHealth [adapter]` checks whether the adapter command is available
+
+In the sessions panel:
+
+- `<Enter>` focuses the session under the cursor
 
 In the prompt buffer:
 

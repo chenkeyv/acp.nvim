@@ -9,6 +9,7 @@ local defaults = {
 		width_ratio = 0.88,
 		height_ratio = 0.86,
 		input_height = 7,
+		session_panel_width = 28,
 	},
 	adapters = {
 		codex = {
@@ -34,6 +35,7 @@ local states = {}
 local sessions = {}
 local next_session_id = 1
 local codex_metadata_cache = {}
+local session_panel_lines = {}
 
 local function notify(message, level)
 	vim.notify(message, level or vim.log.levels.INFO, { title = "ACP" })
@@ -61,6 +63,16 @@ local function set_output_lines(state, start, stop, lines)
 	vim.bo[state.output_buf].modifiable = true
 	vim.api.nvim_buf_set_lines(state.output_buf, start, stop, false, lines)
 	vim.bo[state.output_buf].modifiable = false
+end
+
+local function set_panel_lines(bufnr, lines)
+	if not valid_buf(bufnr) then
+		return
+	end
+
+	vim.bo[bufnr].modifiable = true
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
 end
 
 local function follow_output(state)
@@ -101,6 +113,53 @@ local function append_text(state, text)
 	follow_output(state)
 end
 
+local function sorted_sessions()
+	local list = {}
+	for _, state in pairs(sessions) do
+		if not state.closed then
+			table.insert(list, state)
+		end
+	end
+
+	table.sort(list, function(left, right)
+		return left.id < right.id
+	end)
+	return list
+end
+
+local function session_status(state)
+	if state.busy then
+		return state.run_status or "running"
+	end
+	return state.run_status or "idle"
+end
+
+local function render_session_panel(state)
+	if not valid_buf(state.session_panel_buf) then
+		return
+	end
+
+	local lines = { "Sessions", "" }
+	local line_ids = {}
+	for _, session in ipairs(sorted_sessions()) do
+		local marker = session.id == state.id and ">" or " "
+		local model = session.model and session.model ~= "" and (" " .. session.model) or ""
+		table.insert(lines, ("%s #%d %s%s"):format(marker, session.id, session.adapter, model))
+		line_ids[#lines] = session.id
+		table.insert(lines, ("  %s"):format(session_status(session)))
+		line_ids[#lines] = session.id
+	end
+
+	session_panel_lines[state.session_panel_buf] = line_ids
+	set_panel_lines(state.session_panel_buf, lines)
+end
+
+local function refresh_session_panels()
+	for _, state in pairs(sessions) do
+		render_session_panel(state)
+	end
+end
+
 local function set_run_status(state, status)
 	if not valid_buf(state.output_buf) then
 		return
@@ -121,6 +180,7 @@ local function set_run_status(state, status)
 
 	state.run_status = status
 	follow_output(state)
+	refresh_session_panels()
 end
 
 local function trim(text)
@@ -403,6 +463,7 @@ local function set_tab_title(state, title)
 
 	state.title = title
 	pcall(vim.api.nvim_tabpage_set_var, state.tabpage, "acp_title", title)
+	refresh_session_panels()
 end
 
 local function float_layout()
@@ -457,7 +518,7 @@ local function input_float_config(state)
 end
 
 local function apply_window_options(state)
-	for _, winid in ipairs({ state.output_win, state.input_win }) do
+	for _, winid in ipairs({ state.session_panel_win, state.output_win, state.input_win }) do
 		if valid_win(winid) then
 			vim.wo[winid].wrap = true
 			vim.wo[winid].linebreak = true
@@ -469,6 +530,15 @@ local function apply_window_options(state)
 				vim.wo[winid].winfixbuf = true
 			end)
 		end
+	end
+
+	if valid_win(state.session_panel_win) then
+		vim.wo[state.session_panel_win].wrap = false
+		vim.wo[state.session_panel_win].linebreak = false
+		vim.wo[state.session_panel_win].cursorline = true
+		pcall(function()
+			vim.wo[state.session_panel_win].winfixwidth = true
+		end)
 	end
 
 	if state.mode ~= "float" then
@@ -541,7 +611,43 @@ local function apply_window_layout(state)
 	end
 end
 
+local function register_session_panel_autocmd(state)
+	if not state.group or not valid_buf(state.session_panel_buf) then
+		return
+	end
+
+	vim.api.nvim_create_autocmd("BufWipeout", {
+		group = state.group,
+		buffer = state.session_panel_buf,
+		callback = function()
+			session_panel_lines[state.session_panel_buf] = nil
+		end,
+	})
+end
+
+local function create_session_panel_buffer(state)
+	state.session_panel_buf = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(state.session_panel_buf, ("ACP://%s/%d/sessions"):format(state.adapter, state.id))
+	set_buf_options(state.session_panel_buf, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-sessions",
+		modifiable = true,
+		swapfile = false,
+	})
+	set_panel_lines(state.session_panel_buf, { "Sessions", "" })
+	vim.keymap.set("n", "<CR>", function()
+		M.select_session()
+	end, { buffer = state.session_panel_buf, desc = "Open ACP session" })
+	register_session_panel_autocmd(state)
+end
+
 local function apply_tab_layout(state)
+	if not valid_buf(state.session_panel_buf) then
+		create_session_panel_buffer(state)
+		states[state.session_panel_buf] = state
+	end
+
 	if not valid_win(state.output_win) then
 		vim.cmd("tabnew")
 		state.tabpage = vim.api.nvim_get_current_tabpage()
@@ -549,6 +655,18 @@ local function apply_tab_layout(state)
 		state.output_win = vim.api.nvim_get_current_win()
 		vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
 	end
+
+	if not valid_win(state.session_panel_win) and valid_buf(state.session_panel_buf) then
+		local output_win = state.output_win
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd(("topleft %dvsplit"):format(config.layout.session_panel_width))
+		state.session_panel_win = vim.api.nvim_get_current_win()
+		vim.api.nvim_win_set_buf(state.session_panel_win, state.session_panel_buf)
+		pcall(vim.api.nvim_win_set_width, state.session_panel_win, config.layout.session_panel_width)
+		vim.api.nvim_set_current_win(output_win)
+	end
+
+	render_session_panel(state)
 
 	if valid_win(state.input_win) then
 		vim.api.nvim_win_set_config(state.input_win, input_float_config(state))
@@ -574,6 +692,7 @@ local function apply_layout(state)
 end
 
 local function create_buffers(state)
+	create_session_panel_buffer(state)
 	state.output_buf = vim.api.nvim_create_buf(false, true)
 	state.input_buf = vim.api.nvim_create_buf(false, true)
 
@@ -609,15 +728,19 @@ local function unregister(state)
 
 	state.closed = true
 	state.connection:stop()
+	session_panel_lines[state.session_panel_buf] = nil
+	states[state.session_panel_buf] = nil
 	states[state.output_buf] = nil
 	states[state.input_buf] = nil
 	sessions[state.id] = nil
 
-	for _, winid in ipairs({ state.output_win, state.input_win }) do
+	for _, winid in ipairs({ state.session_panel_win, state.output_win, state.input_win }) do
 		if valid_win(winid) then
 			pcall(vim.api.nvim_win_close, winid, true)
 		end
 	end
+
+	refresh_session_panels()
 end
 
 local function register_autocmds(state)
@@ -632,6 +755,8 @@ local function register_autocmds(state)
 			end
 		end,
 	})
+
+	register_session_panel_autocmd(state)
 
 	vim.api.nvim_create_autocmd("BufWipeout", {
 		group = group,
@@ -728,6 +853,10 @@ function M.setup(opts)
 		M.stop()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpSessions", function()
+		M.focus_sessions()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpHealth", function(command)
 		M.health(command.args ~= "" and command.args or nil)
 	end, {
@@ -767,11 +896,13 @@ function M.open(adapter_name, opts)
 
 	create_buffers(state)
 	sessions[id] = state
+	states[state.session_panel_buf] = state
 	states[state.output_buf] = state
 	states[state.input_buf] = state
 	register_keymaps(state)
 	register_autocmds(state)
 	apply_layout(state)
+	refresh_session_panels()
 
 	vim.api.nvim_set_current_win(state.input_win)
 end
@@ -784,6 +915,58 @@ local function current_state()
 		return nil
 	end
 	return state
+end
+
+local function focus_session(state)
+	if not state or state.closed then
+		notify("ACP session is no longer available", vim.log.levels.WARN)
+		return
+	end
+
+	if state.mode == "tab" and state.tabpage and vim.api.nvim_tabpage_is_valid(state.tabpage) then
+		vim.api.nvim_set_current_tabpage(state.tabpage)
+	end
+
+	apply_layout(state)
+
+	if valid_win(state.input_win) then
+		vim.api.nvim_set_current_win(state.input_win)
+	elseif valid_win(state.output_win) then
+		vim.api.nvim_set_current_win(state.output_win)
+	end
+
+	refresh_session_panels()
+end
+
+function M.select_session()
+	local bufnr = vim.api.nvim_get_current_buf()
+	local line = vim.api.nvim_win_get_cursor(0)[1]
+	local id = session_panel_lines[bufnr] and session_panel_lines[bufnr][line]
+	if not id then
+		return
+	end
+
+	focus_session(sessions[id])
+end
+
+function M.focus_sessions()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	if state.mode ~= "tab" or not valid_win(state.session_panel_win) then
+		if state.mode == "tab" then
+			apply_layout(state)
+		end
+	end
+
+	if state.mode ~= "tab" or not valid_win(state.session_panel_win) then
+		notify("This ACP session does not have a sessions panel", vim.log.levels.WARN)
+		return
+	end
+
+	vim.api.nvim_set_current_win(state.session_panel_win)
 end
 
 function M.send()
