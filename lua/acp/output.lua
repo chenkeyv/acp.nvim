@@ -652,6 +652,16 @@ function M.code_blocks(lines)
 	return blocks
 end
 
+function M.code_block_at(lines, lnum)
+	local line = tonumber(lnum) or 1
+	for _, block in ipairs(M.code_blocks(lines)) do
+		if line >= block.start_line and line <= block.end_line then
+			return block
+		end
+	end
+	return nil
+end
+
 function M.code_block_lines(blocks)
 	local lines = { "ACP Output Code Blocks", "" }
 	local line_blocks = {}

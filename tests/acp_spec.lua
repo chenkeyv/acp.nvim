@@ -436,6 +436,9 @@ test("output dashboard and section helpers are rendered", function()
 	eq(blocks[2].end_line, 6)
 	eq(blocks[2].closed, false)
 	eq(blocks[2].lines[1], "plain")
+	local block_at = acp_output.code_block_at({ "Agent", "```lua", "print(1)", "```" }, 3)
+	eq(block_at.language, "lua")
+	eq(block_at.lines[1], "print(1)")
 	local block_picker, line_blocks = acp_output.code_block_lines(blocks)
 	local block_text = table.concat(block_picker, "\n")
 	ok(block_text:find("ACP Output Code Blocks", 1, true))
@@ -1141,6 +1144,21 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			"```",
 		})
 		vim.bo[output_buf].modifiable = false
+		vim.api.nvim_set_current_win(output_win)
+		local code_line
+		for index, output_line in ipairs(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false)) do
+			if output_line:find("print('from acp')", 1, true) then
+				code_line = index
+				break
+			end
+		end
+		ok(code_line, "output should contain a code block")
+		vim.api.nvim_win_set_cursor(output_win, { code_line, 0 })
+		vim.cmd("AcpOutputOpen")
+		local direct_code_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[direct_code_buf].filetype, "lua")
+		eq(table.concat(vim.api.nvim_buf_get_lines(direct_code_buf, 0, -1, false), "\n"), "print('from acp')")
+		pcall(vim.cmd, "tabclose!")
 		vim.api.nvim_set_current_win(output_win)
 		vim.cmd("AcpCodeBlocks")
 		picker_buf = vim.api.nvim_get_current_buf()

@@ -1237,31 +1237,18 @@ function jump_to_file_reference(reference)
 	return true
 end
 
-local function open_output_reference_at_cursor(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
+local function visible_output_window(state)
 	local winid = vim.api.nvim_get_current_win()
 	if not (valid_win(winid) and vim.api.nvim_win_get_buf(winid) == state.output_buf) then
 		winid = vim.fn.bufwinid(state.output_buf)
 	end
 	if not valid_win(winid) then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
+		return nil
 	end
+	return winid
+end
 
-	local cursor = vim.api.nvim_win_get_cursor(winid)
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local reference = output.file_reference_at(lines, cursor[1], cursor[2], {
-		cwd = state.cwd,
-	})
-	if not reference then
-		notify("No local file reference found under the cursor", vim.log.levels.WARN)
-		return false
-	end
-
+local function jump_output_reference(state, output_winid, reference)
 	local target_win
 	if state.source and valid_win(state.source.winid) then
 		local current_tab = vim.api.nvim_get_current_tabpage()
@@ -1270,13 +1257,80 @@ local function open_output_reference_at_cursor(state)
 		end
 	end
 	if not target_win then
-		vim.api.nvim_set_current_win(winid)
+		vim.api.nvim_set_current_win(output_winid)
 		vim.cmd("rightbelow split")
 		target_win = vim.api.nvim_get_current_win()
 	end
 
 	vim.api.nvim_set_current_win(target_win)
 	return jump_to_file_reference(reference)
+end
+
+local function output_cursor_context(state)
+	if not state or not valid_buf(state.output_buf) then
+		return nil
+	end
+
+	local winid = visible_output_window(state)
+	if not winid then
+		return nil
+	end
+
+	local cursor = vim.api.nvim_win_get_cursor(winid)
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	return {
+		winid = winid,
+		cursor = cursor,
+		lines = lines,
+		reference = output.file_reference_at(lines, cursor[1], cursor[2], {
+			cwd = state.cwd,
+		}),
+		code_block = output.code_block_at(lines, cursor[1]),
+	}
+end
+
+local function open_output_reference_at_cursor(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local context_info = output_cursor_context(state)
+	if not context_info then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	local reference = context_info.reference
+	if not reference then
+		notify("No local file reference found under the cursor", vim.log.levels.WARN)
+		return false
+	end
+
+	return jump_output_reference(state, context_info.winid, reference)
+end
+
+local function open_output_context_at_cursor(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local context_info = output_cursor_context(state)
+	if not context_info then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	if context_info.reference then
+		return jump_output_reference(state, context_info.winid, context_info.reference)
+	end
+	if context_info.code_block then
+		return open_output_code_block_buffer(state, context_info.code_block)
+	end
+
+	notify("No ACP output item found under the cursor", vim.log.levels.WARN)
+	return false
 end
 
 local function source_range(source)
@@ -1901,6 +1955,9 @@ local function register_keymaps(state)
 	local open_reference = function()
 		open_output_reference_at_cursor(state)
 	end
+	local open_context = function()
+		open_output_context_at_cursor(state)
+	end
 	local open_problems = function()
 		open_output_problems(state)
 	end
@@ -1968,6 +2025,7 @@ local function register_keymaps(state)
 	vim.keymap.set("n", "]]", function()
 		jump_output_section(state, 1)
 	end, { buffer = state.output_buf, desc = "Next ACP output section" })
+	vim.keymap.set("n", "<CR>", open_context, { buffer = state.output_buf, desc = "Open ACP output item" })
 	vim.keymap.set("n", "gf", open_reference, { buffer = state.output_buf, desc = "Open ACP output file reference" })
 	vim.keymap.set("n", "<leader>az", "za", { buffer = state.output_buf, desc = "Toggle ACP output fold" })
 	vim.keymap.set({ "n", "i" }, "<M-p>", previous_prompt, { buffer = state.input_buf, desc = "Previous ACP prompt" })
@@ -2120,7 +2178,7 @@ function M.setup(opts)
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpOutputOpen", function()
-		M.open_output_reference()
+		M.open_output_context()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
@@ -2508,8 +2566,8 @@ local function action_palette_items(state)
 		add_action(items, "Yank output section", "Copy the current transcript section into the unnamed register", "<leader>ay", "session", function()
 			M.yank_output_section()
 		end)
-		add_action(items, "Open output reference", "Jump from the transcript reference under the cursor into source", "gf", "session", function()
-			M.open_output_reference()
+		add_action(items, "Open output item", "Open a transcript file reference or code block under the cursor", "<CR>", "session", function()
+			M.open_output_context()
 		end)
 		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
 			M.open_code_blocks()
@@ -3241,6 +3299,15 @@ function M.open_output_reference()
 	end
 
 	open_output_reference_at_cursor(state)
+end
+
+function M.open_output_context()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_context_at_cursor(state)
 end
 
 function M.open_code_blocks()
