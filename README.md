@@ -52,7 +52,7 @@ This plugin provides an editor-native ACP chat surface:
 - native folds for collapsing transcript sections
 - non-blocking adapter startup and session creation
 - floating slash-command picker for adapter-advertised commands
-- native slash-command completion in the prompt buffer
+- native slash-command and `@workflow` completion in the prompt buffer
 - prompt-buffer ghost text and draft statistics while composing
 - prompt-focused action picker with source, LSP, Tree-sitter, output, and session workflows
 - floating session config picker for adapter-advertised model, mode, and reasoning options
@@ -207,13 +207,13 @@ In the sessions panel:
 
 In the prompt buffer:
 
-- empty prompts show ghost-text workflow hints; non-empty prompts show draft stats
+- empty prompts show ghost-text workflow hints for actions and `@context` completion; non-empty prompts show draft stats
 - `?` opens composer-focused actions with source context preview
 - `<Enter>` inserts a newline
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
-- `<C-Space>` opens native ACP prompt completion
+- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@diagnostics`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>am` opens a persistent output map with progress rails and item counts

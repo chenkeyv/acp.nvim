@@ -25,7 +25,7 @@ function M.info(lines, opts)
 
 	if content == "" then
 		local hint = opts.busy and "Agent is responding - <leader>aq stop"
-			or "Ask ACP - <C-s> send | ? actions | <C-Space> completion"
+			or "Ask ACP - <C-s> send | ? actions | @context completion"
 		return {
 			empty = true,
 			ghost = hint,

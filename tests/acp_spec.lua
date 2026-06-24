@@ -14,6 +14,7 @@ local history = require("acp.history")
 local acp_output = require("acp.output")
 local permission = require("acp.permission")
 local picker = require("acp.picker")
+local prompt_completion = require("acp.prompt_completion")
 local prompt_view = require("acp.prompt_view")
 local references = require("acp.references")
 local session_view = require("acp.session_view")
@@ -236,6 +237,7 @@ test("prompt view renders ghost text and draft stats", function()
 	ok(empty.empty)
 	ok(empty.ghost:find("<C%-s> send"))
 	ok(empty.ghost:find("? actions", 1, true))
+	ok(empty.ghost:find("@context", 1, true))
 
 	local busy = prompt_view.info({ "" }, { busy = true })
 	ok(busy.ghost:find("responding", 1, true))
@@ -1260,6 +1262,28 @@ test("slash command completion items are rendered for completefunc", function()
 	eq(#all_items, 2)
 	eq(all_items[2].word, "/test")
 	eq(all_items[2].menu, "ACP")
+
+	eq(prompt_completion.start("/pl", 3), 0)
+	eq(prompt_completion.start("ask /pl", 7), -3)
+	eq(prompt_completion.start("@con", 4), 0)
+	eq(prompt_completion.start("ask @co", 7), 4)
+
+	local workflow_items = prompt_completion.items(commands, "@co")
+	eq(workflow_items[1].word, "@context")
+	eq(workflow_items[1].kind, "Snippet")
+	eq(workflow_items[1].user_data, "acp.nvim:context")
+	eq(prompt_completion.action_id(workflow_items[1]), "context")
+	local code_action_item = prompt_completion.items(commands, "@code")[1]
+	eq(code_action_item.word, "@code-actions")
+	eq(code_action_item.menu, "LSP")
+
+	local completion_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_set_current_buf(completion_buf)
+	vim.api.nvim_buf_set_lines(completion_buf, 0, -1, false, { "ask @context now" })
+	vim.api.nvim_win_set_cursor(0, { 1, 12 })
+	ok(prompt_completion.remove_completed_word(completion_buf, vim.api.nvim_get_current_win(), "@context"))
+	eq(vim.api.nvim_buf_get_lines(completion_buf, 0, -1, false)[1], "ask  now")
+	pcall(vim.api.nvim_buf_delete, completion_buf, { force = true })
 end)
 
 test("available commands updates are forwarded to active handlers", function()
@@ -1316,6 +1340,14 @@ test("config option updates are forwarded to active handlers", function()
 end)
 
 test("prompt history recalls sent prompts and restores draft", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_name(source_buf, vim.fn.tempname() .. ".lua")
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local prompt_context_value = 1",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+
 	local input_buf
 	local original_notify = vim.notify
 	vim.notify = function() end
@@ -1335,6 +1367,25 @@ test("prompt history recalls sent prompts and restores draft", function()
 			end
 		end
 		ok(ghost, "empty prompt should show ghost text")
+
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "@con" })
+		vim.api.nvim_win_set_cursor(0, { 1, 4 })
+		eq(require("acp.ui").completefunc(1, ""), 0)
+		local completion_items = require("acp.ui").completefunc(0, "@con")
+		eq(completion_items[1].word, "@context")
+		eq(completion_items[1].user_data, "acp.nvim:context")
+
+		local state_id = tonumber(vim.api.nvim_buf_get_name(input_buf):match("ACP://[^/]+/(%d+)/input$"))
+		ok(state_id, "input buffer name should include the ACP session id")
+		require("acp.ui").handle_prompt_completion_action(state_id, {
+			word = "@context",
+			user_data = "acp.nvim:context",
+		})
+		local context_text = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(not context_text:find("@context", 1, true), "completion action should remove the trigger word")
+		ok(context_text:find("Context", 1, true), "completion action should insert rendered context")
+		ok(context_text:find("prompt_context_value", 1, true), "completion action should use the captured source")
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "" })
 
 		local keys = vim.api.nvim_replace_termcodes("?", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
@@ -1408,6 +1459,9 @@ test("prompt history recalls sent prompts and restores draft", function()
 	vim.notify = original_notify
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if source_buf and vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 	end
 	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
 	if not passed then

@@ -3204,6 +3204,20 @@ local function register_autocmds(state)
 		end,
 	})
 
+	vim.api.nvim_create_autocmd("CompleteDone", {
+		group = group,
+		buffer = state.input_buf,
+		callback = function()
+			local completed_item = {
+				word = vim.v.completed_item and vim.v.completed_item.word,
+				user_data = vim.v.completed_item and vim.v.completed_item.user_data,
+			}
+			vim.schedule(function()
+				M.handle_prompt_completion_action(state.id, completed_item)
+			end)
+		end,
+	})
+
 	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
 		group = group,
 		buffer = state.output_buf,
@@ -6200,9 +6214,62 @@ function M.open_treesitter()
 	open_treesitter_picker(state, node_list)
 end
 
+function M.handle_prompt_completion_action(state_id, completed_item)
+	local state = sessions[state_id]
+	if not (state and valid_buf(state.input_buf) and valid_win(state.input_win)) then
+		return
+	end
+
+	local prompt_completion = require("acp.prompt_completion")
+	local item = completed_item or {}
+	local action_id = prompt_completion.action_id(item)
+	if not action_id then
+		return
+	end
+
+	vim.api.nvim_set_current_win(state.input_win)
+	prompt_completion.remove_completed_word(state.input_buf, state.input_win, item.word)
+	refresh_prompt_hints(state)
+
+	local runners = {
+		context = function()
+			M.add_context()
+		end,
+		diagnostics = function()
+			M.open_diagnostics()
+		end,
+		code_actions = function()
+			M.open_code_actions()
+		end,
+		hover = function()
+			M.add_hover()
+		end,
+		references = function()
+			M.open_references()
+		end,
+		symbols = function()
+			M.open_symbols()
+		end,
+		workspace = function()
+			M.open_workspace_symbols()
+		end,
+		treesitter = function()
+			M.open_treesitter()
+		end,
+		output = function()
+			M.draft_output_section()
+		end,
+	}
+
+	local runner = runners[action_id]
+	if runner then
+		runner()
+	end
+end
+
 function M.completefunc(findstart, base)
 	if tonumber(findstart) == 1 then
-		return acp_commands.completion_start(vim.fn.getline("."), vim.fn.col(".") - 1)
+		return require("acp.prompt_completion").start(vim.fn.getline("."), vim.fn.col(".") - 1)
 	end
 
 	local state = states[vim.api.nvim_get_current_buf()]
@@ -6210,7 +6277,7 @@ function M.completefunc(findstart, base)
 		return {}
 	end
 
-	return acp_commands.completion_items(state.available_commands, base)
+	return require("acp.prompt_completion").items(state.available_commands, base)
 end
 
 function M.prompt_previous()
