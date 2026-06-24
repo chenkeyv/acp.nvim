@@ -13,6 +13,7 @@ local history = require("acp.history")
 local acp_output = require("acp.output")
 local permission = require("acp.permission")
 local picker = require("acp.picker")
+local prompt_view = require("acp.prompt_view")
 local references = require("acp.references")
 local session_view = require("acp.session_view")
 local symbols = require("acp.symbols")
@@ -188,6 +189,21 @@ test("floating picker renders preview windows for mapped source rows", function(
 	eq(vim.api.nvim_buf_get_lines(view.preview_bufnr, 0, -1, false)[1], "preview row 4")
 	view.close()
 	ok(not vim.api.nvim_win_is_valid(view.preview_winid), "preview window should close with picker")
+end)
+
+test("prompt view renders ghost text and draft stats", function()
+	local empty = prompt_view.info({ "" })
+	ok(empty.empty)
+	ok(empty.ghost:find("<C%-s> send"))
+
+	local busy = prompt_view.info({ "" }, { busy = true })
+	ok(busy.ghost:find("responding", 1, true))
+
+	local draft = prompt_view.info({ "hello ACP", "with context" })
+	ok(not draft.empty)
+	ok(draft.stats:find("2 lines", 1, true))
+	ok(draft.stats:find("22 chars", 1, true))
+	ok(draft.stats:find("4 words", 1, true))
 end)
 
 test("session panel view renders status and badges", function()
@@ -710,6 +726,30 @@ test("prompt history recalls sent prompts and restores draft", function()
 		vim.cmd("AcpChatWindow test")
 		input_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[input_buf].completefunc, "v:lua.acp_nvim_completefunc")
+		local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
+		local marks = vim.api.nvim_buf_get_extmarks(input_buf, prompt_ns, 0, -1, { details = true })
+		local ghost = false
+		for _, mark in ipairs(marks) do
+			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
+				if chunk[1] and chunk[1]:find("Ask ACP", 1, true) then
+					ghost = true
+				end
+			end
+		end
+		ok(ghost, "empty prompt should show ghost text")
+
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "draft prompt" })
+		vim.api.nvim_exec_autocmds("TextChanged", { buffer = input_buf })
+		marks = vim.api.nvim_buf_get_extmarks(input_buf, prompt_ns, 0, -1, { details = true })
+		local stats = false
+		for _, mark in ipairs(marks) do
+			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
+				if chunk[1] and chunk[1]:find("2 words", 1, true) then
+					stats = true
+				end
+			end
+		end
+		ok(stats, "non-empty prompt should show draft stats")
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "first prompt" })
 		vim.cmd("AcpSend")

@@ -22,6 +22,7 @@ This plugin provides an editor-native ACP chat surface:
 - non-blocking adapter startup and session creation
 - floating slash-command picker for adapter-advertised commands
 - native slash-command completion in the prompt buffer
+- prompt-buffer ghost text and draft statistics while composing
 - floating session config picker for adapter-advertised model, mode, and reasoning options
 - per-session prompt history recall
 - plain-text transcript history under Neovim state
@@ -126,6 +127,7 @@ In the sessions panel:
 
 In the prompt buffer:
 
+- empty prompts show ghost-text workflow hints; non-empty prompts show draft stats
 - `<Enter>` inserts a newline
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback

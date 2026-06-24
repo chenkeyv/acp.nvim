@@ -12,6 +12,7 @@ local history = require("acp.history")
 local metadata = require("acp.metadata")
 local output = require("acp.output")
 local picker = require("acp.picker")
+local prompt_view = require("acp.prompt_view")
 local references = require("acp.references")
 local session_view = require("acp.session_view")
 local symbols = require("acp.symbols")
@@ -54,6 +55,7 @@ local sessions = {}
 local next_session_id = 1
 local session_panel_lines = {}
 local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
+local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 local session_panel_ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
 
 local function notify(message, level)
@@ -70,6 +72,7 @@ end
 
 local function define_highlights()
 	output.define_highlights()
+	prompt_view.define_highlights()
 	session_view.define_highlights()
 end
 
@@ -453,6 +456,8 @@ local function refresh_session_panels()
 	end
 end
 
+local refresh_prompt_hints
+
 local function set_run_status(state, status)
 	if not valid_buf(state.output_buf) then
 		return
@@ -479,6 +484,7 @@ local function set_run_status(state, status)
 	end
 	refresh_output_highlights(state)
 	refresh_output_chrome(state)
+	refresh_prompt_hints(state)
 	follow_output(state)
 	refresh_session_panels()
 end
@@ -543,6 +549,36 @@ local function refresh_prompt_chrome(state)
 	end
 end
 
+refresh_prompt_hints = function(state)
+	if not valid_buf(state.input_buf) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(state.input_buf, prompt_ns, 0, -1)
+	local lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
+	local info = prompt_view.info(lines, {
+		busy = state.busy,
+	})
+	if info.empty then
+		pcall(vim.api.nvim_buf_set_extmark, state.input_buf, prompt_ns, 0, 0, {
+			virt_text = { { info.ghost, "AcpPromptGhost" } },
+			virt_text_pos = "eol",
+			hl_mode = "combine",
+			priority = 80,
+		})
+		return
+	end
+
+	local row = math.max(0, #lines - 1)
+	local last = lines[#lines] or ""
+	pcall(vim.api.nvim_buf_set_extmark, state.input_buf, prompt_ns, row, #last, {
+		virt_text = { { info.stats, "AcpPromptStats" } },
+		virt_text_pos = "eol",
+		hl_mode = "combine",
+		priority = 80,
+	})
+end
+
 local function input_prompt(state)
 	if not valid_buf(state.input_buf) then
 		return nil
@@ -576,6 +612,7 @@ local function set_input_text(state, text)
 		local last = vim.api.nvim_buf_get_lines(state.input_buf, line_count - 1, line_count, false)[1] or ""
 		pcall(vim.api.nvim_win_set_cursor, state.input_win, { line_count, #last })
 	end
+	refresh_prompt_hints(state)
 end
 
 local function clear_input(state)
@@ -606,6 +643,7 @@ local function append_input_text(state, text)
 		local last = vim.api.nvim_buf_get_lines(state.input_buf, line_count - 1, line_count, false)[1] or ""
 		pcall(vim.api.nvim_win_set_cursor, state.input_win, { line_count, #last })
 	end
+	refresh_prompt_hints(state)
 end
 
 local function record_prompt(state, prompt)
@@ -1207,6 +1245,7 @@ local function create_buffers(state)
 	state.output_dashboard_lines = #dashboard
 	set_output_lines(state, 0, -1, dashboard)
 	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
+	refresh_prompt_hints(state)
 end
 
 local function unregister(state)
@@ -1260,6 +1299,14 @@ local function register_autocmds(state)
 		buffer = state.input_buf,
 		callback = function()
 			unregister(state)
+		end,
+	})
+
+	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+		group = group,
+		buffer = state.input_buf,
+		callback = function()
+			refresh_prompt_hints(state)
 		end,
 	})
 end
