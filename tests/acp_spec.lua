@@ -9,6 +9,7 @@ local file_review = require("acp.file_review")
 local hover = require("acp.hover")
 local history = require("acp.history")
 local permission = require("acp.permission")
+local references = require("acp.references")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
 local Connection = require("acp.connection").Connection
@@ -83,6 +84,7 @@ test("setup registers public user commands", function()
 		"AcpConfig",
 		"AcpCodeActions",
 		"AcpHover",
+		"AcpReferences",
 		"AcpSymbols",
 		"AcpTreeSitter",
 		"AcpHistory",
@@ -94,6 +96,40 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("LSP references are flattened and rendered for picker", function()
+	local uri = vim.uri_from_fname("/tmp/acp-reference.lua")
+	local flattened = references.flatten({
+		{
+			uri = uri,
+			range = {
+				start = { line = 1, character = 0 },
+				["end"] = { line = 1, character = 5 },
+			},
+		},
+		{
+			targetUri = uri,
+			targetSelectionRange = {
+				start = { line = 3, character = 0 },
+				["end"] = { line = 4, character = 1 },
+			},
+		},
+		{
+			uri = uri,
+		},
+	})
+
+	eq(#flattened, 2)
+	local range = references.range(flattened[2])
+	eq(range.line1, 4)
+	eq(range.line2, 5)
+
+	local lines, line_references = references.picker_lines(flattened)
+	local text = table.concat(lines, "\n")
+	ok(text:find("acp%-reference%.lua:2"))
+	ok(text:find("acp%-reference%.lua:4"))
+	eq(line_references[3].uri, uri)
 end)
 
 test("diagnostic picker lines render source and code", function()
@@ -744,6 +780,76 @@ test("hover command drafts LSP hover context", function()
 		ok(prompt:find("`value`: any", 1, true))
 		ok(prompt:find("Context", 1, true))
 		ok(prompt:find("Line: local value = missing", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("references command drafts selected LSP reference context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	local path = vim.fn.tempname() .. ".lua"
+	vim.api.nvim_buf_set_name(source_buf, path)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = 1",
+		"print(value)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 6 })
+
+	local uri = vim.uri_from_bufnr(source_buf)
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/references")
+		eq(params.position.line, 0)
+		eq(params.position.character, 6)
+		eq(params.context.includeDeclaration, true)
+		callback({
+			[1] = {
+				result = {
+					{
+						uri = uri,
+						range = {
+							start = { line = 1, character = 6 },
+							["end"] = { line = 1, character = 11 },
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpReferences")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-references")
+
+		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP reference as context.", 1, true))
+		ok(prompt:find("Reference:", 1, true))
+		ok(prompt:find("Selection: lines 2-2", 1, true))
+		ok(prompt:find("print%(value%)"))
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all

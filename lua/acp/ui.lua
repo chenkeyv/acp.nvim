@@ -8,6 +8,7 @@ local diagnostics = require("acp.diagnostics")
 local hover = require("acp.hover")
 local history = require("acp.history")
 local metadata = require("acp.metadata")
+local references = require("acp.references")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
 
@@ -651,6 +652,36 @@ local function hover_prompt(source, hover_text)
 	}, "\n")
 end
 
+local function reference_prompt(reference)
+	local bufnr, err = references.bufnr(reference)
+	if not bufnr then
+		return nil, err
+	end
+	local range = references.range(reference)
+	if not range then
+		return nil, "LSP reference has no range"
+	end
+
+	local reference_source = context.capture(bufnr, nil, range)
+	if reference_source then
+		reference_source.cursor = { range.line1, 0 }
+	end
+	local rendered_context = context.render(reference_source, {
+		treesitter_text_lines = 24,
+		selection_limit = 80,
+	})
+	if not rendered_context then
+		return nil, "Failed to render LSP reference context"
+	end
+
+	return table.concat({
+		"Use this LSP reference as context.",
+		("Reference: %s:%d"):format(references.display_path(reference), range.line1),
+		"",
+		rendered_context,
+	}, "\n")
+end
+
 local function escape_tabline(text)
 	return tostring(text):gsub("%%", "%%%%")
 end
@@ -1020,6 +1051,9 @@ local function register_keymaps(state)
 	local add_hover = function()
 		M.add_hover()
 	end
+	local open_references = function()
+		M.open_references()
+	end
 	local open_symbols = function()
 		M.open_symbols()
 	end
@@ -1042,6 +1076,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
 		vim.keymap.set("n", "<leader>aa", open_code_actions, { buffer = bufnr, desc = "Open ACP LSP code actions" })
 		vim.keymap.set("n", "<leader>ah", add_hover, { buffer = bufnr, desc = "Add ACP LSP hover context" })
+		vim.keymap.set("n", "<leader>ar", open_references, { buffer = bufnr, desc = "Open ACP LSP references" })
 		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
 		vim.keymap.set("n", "<leader>at", open_treesitter, { buffer = bufnr, desc = "Open ACP Tree-sitter nodes" })
 		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
@@ -1200,6 +1235,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpHover", function()
 		M.add_hover()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpReferences", function()
+		M.open_references()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpSymbols", function()
@@ -2068,6 +2107,58 @@ local function open_treesitter_picker(state, node_list)
 	return true
 end
 
+local function open_reference_picker(state, reference_list)
+	if not reference_list or #reference_list == 0 then
+		notify("No LSP references found for the source cursor", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_references = references.picker_lines(reference_list)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/references"):format(state.adapter, state.id))
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-references",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+
+	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
+	vim.wo[winid].cursorline = true
+	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
+
+	vim.keymap.set("n", "<CR>", function()
+		local reference = line_references[vim.api.nvim_win_get_cursor(winid)[1]]
+		if not reference then
+			return
+		end
+		local prompt, err = reference_prompt(reference)
+		if not prompt then
+			notify(err or "Failed to render LSP reference context", vim.log.levels.ERROR)
+			return
+		end
+		close_picker(winid, bufnr)
+		append_input_text(state, prompt)
+		if not state.busy then
+			set_run_status(state, "reference context added")
+		end
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
+	end, { buffer = bufnr, nowait = true, desc = "Add ACP reference context" })
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			close_picker(winid, bufnr)
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP references" })
+	end
+
+	return true
+end
+
 function M.select_session()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local line = vim.api.nvim_win_get_cursor(0)[1]
@@ -2249,6 +2340,31 @@ function M.add_hover()
 		if valid_win(state.input_win) then
 			vim.api.nvim_set_current_win(state.input_win)
 		end
+	end)
+end
+
+function M.open_references()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading references")
+	end
+	references.request(state.source, function(reference_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_reference_picker(state, reference_list)
 	end)
 end
 
