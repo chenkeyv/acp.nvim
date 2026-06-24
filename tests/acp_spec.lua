@@ -121,6 +121,8 @@ test("setup registers public user commands", function()
 		"AcpOutputProblems",
 		"AcpDiagnostics",
 		"AcpDiagnosticsQuickfix",
+		"AcpWorkspaceDiagnostics",
+		"AcpWorkspaceDiagnosticsQuickfix",
 		"AcpCommands",
 		"AcpConfig",
 		"AcpCodeActions",
@@ -961,6 +963,62 @@ test("diagnostic picker lines render source and code", function()
 	})
 	eq(range.line1, 3)
 	eq(range.line2, 5)
+
+	local first_buf = vim.api.nvim_create_buf(true, false)
+	local second_buf = vim.api.nvim_create_buf(true, false)
+	local nofile_buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[first_buf].swapfile = false
+	vim.bo[second_buf].swapfile = false
+	vim.api.nvim_buf_set_name(first_buf, vim.fn.tempname() .. "-workspace-a.lua")
+	vim.api.nvim_buf_set_name(second_buf, vim.fn.tempname() .. "-workspace-b.lua")
+	vim.bo[nofile_buf].buftype = "nofile"
+	local ns = vim.api.nvim_create_namespace("acp.nvim.test.workspace-diagnostics")
+	vim.diagnostic.set(ns, first_buf, {
+		{
+			lnum = 0,
+			col = 6,
+			severity = vim.diagnostic.severity.WARN,
+			message = "workspace warn item",
+		},
+	})
+	vim.diagnostic.set(ns, second_buf, {
+		{
+			lnum = 2,
+			col = 3,
+			severity = vim.diagnostic.severity.ERROR,
+			message = "workspace error item",
+		},
+	})
+	vim.diagnostic.set(ns, nofile_buf, {
+		{
+			lnum = 0,
+			col = 0,
+			severity = vim.diagnostic.severity.ERROR,
+			message = "ignored nofile workspace item",
+		},
+	})
+
+	local workspace_items = {}
+	for _, item in ipairs(acp_diagnostics.workspace_items()) do
+		if item.message:find("workspace ", 1, true) then
+			table.insert(workspace_items, item)
+		end
+	end
+	eq(#workspace_items, 2)
+	eq(workspace_items[1].bufnr, second_buf)
+	ok(workspace_items[1].path:find("workspace%-b%.lua", 1, false))
+	local workspace_lines = table.concat(acp_diagnostics.picker_lines(workspace_items), "\n")
+	ok(workspace_lines:find("workspace%-b%.lua:3:4 ERROR", 1, false))
+	ok(workspace_lines:find("workspace warn item", 1, true))
+	local workspace_qf = acp_diagnostics.quickfix_items(workspace_items)
+	eq(workspace_qf[1].bufnr, second_buf)
+	eq(workspace_qf[1].lnum, 3)
+	vim.diagnostic.reset(ns, first_buf)
+	vim.diagnostic.reset(ns, second_buf)
+	vim.diagnostic.reset(ns, nofile_buf)
+	pcall(vim.api.nvim_buf_delete, first_buf, { force = true })
+	pcall(vim.api.nvim_buf_delete, second_buf, { force = true })
+	pcall(vim.api.nvim_buf_delete, nofile_buf, { force = true })
 end)
 
 test("LSP hover markdown content is normalized", function()
@@ -1632,6 +1690,9 @@ test("slash command completion items are rendered for completefunc", function()
 	local subtype_item = prompt_completion.items(commands, "@sub")[1]
 	eq(subtype_item.word, "@subtypes")
 	eq(prompt_completion.action_id(subtype_item), "subtypes")
+	local workspace_diagnostic_item = prompt_completion.items(commands, "@workspace-d")[1]
+	eq(workspace_diagnostic_item.word, "@workspace-diagnostics")
+	eq(prompt_completion.action_id(workspace_diagnostic_item), "workspace_diagnostics")
 
 	local completion_buf = vim.api.nvim_create_buf(true, true)
 	vim.api.nvim_set_current_buf(completion_buf)
@@ -2603,6 +2664,8 @@ test("actions command opens a session action palette", function()
 		local type_definitions_quickfix = false
 		local workspace_symbols_quickfix = false
 		local symbols_quickfix = false
+		local workspace_diagnostics = false
+		local workspace_diagnostics_quickfix = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
@@ -2628,6 +2691,12 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Diagnostics quickfix", 1, true) then
 				diagnostics_quickfix = true
+			end
+			if line:find("Workspace diagnostics", 1, true) then
+				workspace_diagnostics = true
+			end
+			if line:find("Workspace diagnostics quickfix", 1, true) then
+				workspace_diagnostics_quickfix = true
 			end
 			if line:find("Smart context", 1, true) then
 				smart_context_action = true
@@ -2689,6 +2758,8 @@ test("actions command opens a session action palette", function()
 		ok(output_actions, "action palette should include output actions")
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
+		ok(workspace_diagnostics, "action palette should include workspace diagnostics")
+		ok(workspace_diagnostics_quickfix, "action palette should include workspace diagnostics quickfix")
 		ok(smart_context_action, "action palette should include smart context")
 		ok(signature_help, "action palette should include signature help")
 		ok(inlay_hints_action, "action palette should include inlay hints")
@@ -2912,6 +2983,123 @@ test("diagnostics command drafts selected diagnostic context", function()
 	end
 	if vim.api.nvim_buf_is_valid(source_buf) then
 		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("workspace diagnostics command drafts selected loaded-buffer diagnostic context", function()
+	local source_buf = vim.api.nvim_create_buf(true, false)
+	local other_buf = vim.api.nvim_create_buf(true, false)
+	vim.bo[source_buf].swapfile = false
+	vim.bo[other_buf].swapfile = false
+	vim.api.nvim_buf_set_name(source_buf, vim.fn.tempname() .. "-workspace-source.lua")
+	vim.api.nvim_buf_set_name(other_buf, vim.fn.tempname() .. "-workspace-other.lua")
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local source_value = missing_source",
+		"print(source_value)",
+	})
+	vim.api.nvim_buf_set_lines(other_buf, 0, -1, false, {
+		"local other = missing_other",
+		"return other",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.bo[other_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+
+	local ns = vim.api.nvim_create_namespace("acp.nvim.test.workspace-diagnostic-picker")
+	vim.diagnostic.set(ns, source_buf, {
+		{
+			lnum = 0,
+			col = 21,
+			end_lnum = 0,
+			end_col = 35,
+			severity = vim.diagnostic.severity.WARN,
+			message = "workspace source warning",
+			source = "lua_ls",
+		},
+	})
+	vim.diagnostic.set(ns, other_buf, {
+		{
+			lnum = 0,
+			col = 14,
+			end_lnum = 0,
+			end_col = 27,
+			severity = vim.diagnostic.severity.ERROR,
+			message = "workspace other error",
+			source = "lua_ls",
+			code = "undefined-global",
+		},
+	})
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpWorkspaceDiagnostics")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-workspace-diagnostics")
+		local picker_text = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+		ok(picker_text:find("workspace%-other%.lua:1:15 ERROR", 1, false))
+		ok(picker_text:find("workspace source warning", 1, true))
+
+		local preview_found = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local bufnr = vim.api.nvim_win_get_buf(winid)
+			if bufnr ~= picker_buf and vim.bo[bufnr].buftype == "nofile" and vim.bo[bufnr].filetype == "lua" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+				if preview:find("local other = missing_other", 1, true) then
+					preview_found = true
+					break
+				end
+			end
+		end
+		ok(preview_found, "workspace diagnostics picker should preview the selected buffer")
+
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qflist.title:find("ACP workspace diagnostics", 1, true))
+		eq(#qflist.items, 2)
+		eq(qflist.items[1].bufnr, other_buf)
+		ok(qflist.items[1].text:find("workspace other error", 1, true))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after workspace diagnostics quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpWorkspaceDiagnosticsQuickfix")
+		qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qflist.title:find("ACP workspace diagnostics", 1, true))
+		eq(#qflist.items, 2)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpWorkspaceDiagnostics")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Fix this diagnostic. Keep the change focused", 1, true))
+		ok(prompt:find("workspace other error", 1, true))
+		ok(prompt:find("local other = missing_other", 1, true))
+		ok(prompt:find("ERROR [lua_ls] (undefined-global): workspace other error", 1, true))
+	end)
+
+	vim.diagnostic.reset(ns, source_buf)
+	vim.diagnostic.reset(ns, other_buf)
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(other_buf) then
+		pcall(vim.api.nvim_buf_delete, other_buf, { force = true })
 	end
 	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
 	if not passed then

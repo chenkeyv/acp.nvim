@@ -2358,6 +2358,12 @@ local function prompt_action_items()
 	add("Diagnostics quickfix", "Send source diagnostics to quickfix", "<leader>aD", "LSP", function()
 		M.open_diagnostics_quickfix()
 	end)
+	add("Workspace diagnostics", "Draft a focused fix from diagnostics across loaded project buffers", ":AcpWorkspaceDiagnostics", "LSP", function()
+		M.open_workspace_diagnostics()
+	end)
+	add("Workspace diagnostics quickfix", "Send loaded-buffer diagnostics to quickfix", ":AcpWorkspaceDiagnosticsQuickfix", "LSP", function()
+		M.open_workspace_diagnostics_quickfix()
+	end)
 	add("Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
 		M.open_code_actions()
 	end)
@@ -3703,6 +3709,14 @@ function M.setup(opts)
 		M.open_diagnostics_quickfix()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpWorkspaceDiagnostics", function()
+		M.open_workspace_diagnostics()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpWorkspaceDiagnosticsQuickfix", function()
+		M.open_workspace_diagnostics_quickfix()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpCommands", function()
 		M.open_commands()
 	end, {})
@@ -4239,6 +4253,12 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Diagnostics quickfix", "Send source diagnostics to quickfix", "<leader>aD", "LSP", function()
 			M.open_diagnostics_quickfix()
+		end)
+		add_action(items, "Workspace diagnostics", "Draft a focused fix from diagnostics across loaded project buffers", ":AcpWorkspaceDiagnostics", "LSP", function()
+			M.open_workspace_diagnostics()
+		end)
+		add_action(items, "Workspace diagnostics quickfix", "Send loaded-buffer diagnostics to quickfix", ":AcpWorkspaceDiagnosticsQuickfix", "LSP", function()
+			M.open_workspace_diagnostics_quickfix()
 		end)
 		add_action(items, "Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
 			M.open_code_actions()
@@ -4958,6 +4978,80 @@ local function open_diagnostic_picker(state)
 		view.close()
 		open_diagnostics_quickfix(state, items)
 	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP diagnostics quickfix" })
+
+	return true
+end
+
+function M._open_workspace_diagnostics_quickfix(state, items)
+	items = items or diagnostics.workspace_items()
+	if #items == 0 then
+		notify("No diagnostics found in loaded project buffers", vim.log.levels.WARN)
+		return false
+	end
+
+	vim.fn.setqflist({}, " ", {
+		title = ("ACP workspace diagnostics #%s"):format(tostring(state and state.id or "?")),
+		items = diagnostics.quickfix_items(items),
+	})
+	vim.cmd("copen")
+	return true
+end
+
+function M._open_workspace_diagnostic_picker(state)
+	local items = diagnostics.workspace_items()
+	if #items == 0 then
+		notify("No diagnostics found in loaded project buffers", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_items = diagnostics.picker_lines(items)
+	local view
+	view = picker.open({
+		name = ("ACP://%s/%d/workspace-diagnostics"):format(state.adapter, state.id),
+		filetype = "acp-workspace-diagnostics",
+		lines = lines,
+		title = " ACP workspace diagnostics ",
+		submit_desc = "Draft ACP workspace diagnostic fix",
+		close_desc = "Close ACP workspace diagnostics",
+		preview = function(row)
+			local item = line_items[row]
+			if not (item and item.bufnr and valid_buf(item.bufnr)) then
+				return nil
+			end
+			return source_preview(
+				item.bufnr,
+				diagnostics.range(item),
+				(" Diagnostic %s "):format(diagnostics.severity_name(item.severity))
+			)
+		end,
+		on_submit = function(row, view)
+			local item = line_items[row]
+			if not (item and item.bufnr and valid_buf(item.bufnr)) then
+				return
+			end
+			local source = {
+				bufnr = item.bufnr,
+				winid = vim.fn.bufwinid(item.bufnr),
+			}
+			local prompt = diagnostic_item_prompt(source, item)
+			if not prompt then
+				notify("Failed to render diagnostic context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("workspace diagnostic: %s"):format(diagnostics.severity_name(item.severity)))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
+	})
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		M._open_workspace_diagnostics_quickfix(state, items)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP workspace diagnostics quickfix" })
 
 	return true
 end
@@ -5917,6 +6011,24 @@ function M.open_diagnostics_quickfix()
 	end
 
 	open_diagnostics_quickfix(state)
+end
+
+function M.open_workspace_diagnostics()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	M._open_workspace_diagnostic_picker(state)
+end
+
+function M.open_workspace_diagnostics_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	M._open_workspace_diagnostics_quickfix(state)
 end
 
 function M.open_commands()
@@ -6985,6 +7097,9 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		diagnostics = function()
 			M.open_diagnostics()
+		end,
+		workspace_diagnostics = function()
+			M.open_workspace_diagnostics()
 		end,
 		code_actions = function()
 			M.open_code_actions()

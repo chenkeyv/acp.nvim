@@ -88,6 +88,7 @@ This plugin provides an editor-native ACP chat surface:
 - context and review draft commands for source/Visual-mode workflows
 - LSP diagnostic fix drafts from the current buffer or visual range
 - quickfix export for source diagnostics from ACP diagnostic workflows
+- workspace diagnostics picker across loaded project buffers with source previews and quickfix export
 - floating permission chooser with numbered actions
 - floating terminal command approval with live output in tool calls
 - floating batch file-write review with diff previews before applying agent edits
@@ -177,6 +178,8 @@ vim.g.acp_nvim_config = {
 - `:AcpOutputProblems` opens transcript errors and stderr as native diagnostics in the location list
 - `:AcpDiagnostics` opens a picker for source-buffer diagnostics
 - `:AcpDiagnosticsQuickfix` sends source-buffer diagnostics to quickfix
+- `:AcpWorkspaceDiagnostics` opens diagnostics across loaded project buffers
+- `:AcpWorkspaceDiagnosticsQuickfix` sends loaded-buffer diagnostics to quickfix
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
@@ -233,7 +236,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
-- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@supertypes`/`@subtypes`/`@output` workflows
+- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@workspace-diagnostics`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@supertypes`/`@subtypes`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>am` opens a persistent output map with progress rails and item counts
@@ -298,7 +301,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file, diagnostics, LSP-call-hierarchy, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-workspace-symbol, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
+- changed-file, diagnostics, workspace-diagnostics, LSP-call-hierarchy, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-workspace-symbol, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 

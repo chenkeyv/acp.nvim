@@ -22,6 +22,12 @@ local workflows = {
 		info = "Open source diagnostics as focused ACP context.",
 	},
 	{
+		id = "workspace_diagnostics",
+		trigger = "@workspace-diagnostics",
+		menu = "LSP",
+		info = "Open diagnostics across loaded project buffers as focused ACP context.",
+	},
+	{
 		id = "code_actions",
 		trigger = "@code-actions",
 		menu = "LSP",

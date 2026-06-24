@@ -71,6 +71,16 @@ local function buffer_path(bufnr)
 	return vim.fn.fnamemodify(name, ":.")
 end
 
+local function diagnostic_copy(bufnr, item)
+	local copy = {}
+	for key, value in pairs(item or {}) do
+		copy[key] = value
+	end
+	copy.bufnr = bufnr
+	copy.path = buffer_path(bufnr)
+	return copy
+end
+
 local function counts(items)
 	local result = {
 		[vim.diagnostic.severity.ERROR] = 0,
@@ -112,6 +122,45 @@ function M.items(bufnr, opts)
 		return (severity_order[left.severity] or 99) < (severity_order[right.severity] or 99)
 	end)
 
+	return diagnostics
+end
+
+function M.workspace_items(opts)
+	opts = opts or {}
+	local diagnostics = {}
+
+	for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+		if
+			vim.api.nvim_buf_is_valid(bufnr)
+			and vim.api.nvim_buf_is_loaded(bufnr)
+			and (opts.include_nofile or vim.bo[bufnr].buftype == "")
+		then
+			for _, item in ipairs(M.items(bufnr)) do
+				table.insert(diagnostics, diagnostic_copy(bufnr, item))
+			end
+		end
+	end
+
+	table.sort(diagnostics, function(left, right)
+		if (severity_order[left.severity] or 99) ~= (severity_order[right.severity] or 99) then
+			return (severity_order[left.severity] or 99) < (severity_order[right.severity] or 99)
+		end
+		if (left.path or "") ~= (right.path or "") then
+			return (left.path or "") < (right.path or "")
+		end
+		if (left.lnum or 0) ~= (right.lnum or 0) then
+			return (left.lnum or 0) < (right.lnum or 0)
+		end
+		return (left.col or 0) < (right.col or 0)
+	end)
+
+	if opts.limit and #diagnostics > opts.limit then
+		local limited = {}
+		for index = 1, opts.limit do
+			limited[index] = diagnostics[index]
+		end
+		return limited
+	end
 	return diagnostics
 end
 
@@ -172,10 +221,11 @@ function M.picker_lines(items)
 	for index, item in ipairs(items or {}) do
 		local source = item.source and item.source ~= "" and (" [" .. item.source .. "]") or ""
 		local code = item.code and item.code ~= "" and (" (" .. tostring(item.code) .. ")") or ""
-		table.insert(lines, ("%d. %d:%d %s%s%s"):format(
+		local location = item.path and ("%s:%d:%d"):format(item.path, (item.lnum or 0) + 1, (item.col or 0) + 1)
+			or ("%d:%d"):format((item.lnum or 0) + 1, (item.col or 0) + 1)
+		table.insert(lines, ("%d. %s %s%s%s"):format(
 			index,
-			(item.lnum or 0) + 1,
-			(item.col or 0) + 1,
+			location,
 			M.severity_name(item.severity),
 			source,
 			code
@@ -191,13 +241,18 @@ function M.picker_lines(items)
 end
 
 function M.quickfix_items(bufnr, items)
+	if type(bufnr) == "table" and items == nil then
+		items = bufnr
+		bufnr = nil
+	end
+
 	local qf_items = {}
 	for _, item in ipairs(items or {}) do
 		local severity = M.severity_name(item.severity)
 		local source = item.source and item.source ~= "" and (" [" .. item.source .. "]") or ""
 		local code = item.code and item.code ~= "" and (" (" .. tostring(item.code) .. ")") or ""
 		table.insert(qf_items, {
-			bufnr = bufnr,
+			bufnr = item.bufnr or bufnr,
 			lnum = (item.lnum or 0) + 1,
 			col = (item.col or 0) + 1,
 			end_lnum = (item.end_lnum or item.lnum or 0) + 1,
