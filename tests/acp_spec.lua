@@ -18,6 +18,7 @@ local picker = require("acp.picker")
 local prompt_completion = require("acp.prompt_completion")
 local prompt_view = require("acp.prompt_view")
 local references = require("acp.references")
+local selection_ranges = require("acp.selection_ranges")
 local session_view = require("acp.session_view")
 local signature = require("acp.signature")
 local source_view = require("acp.source_view")
@@ -122,6 +123,7 @@ test("setup registers public user commands", function()
 		"AcpCodeActions",
 		"AcpHover",
 		"AcpSignature",
+		"AcpSelectionRanges",
 		"AcpCallers",
 		"AcpCallersQuickfix",
 		"AcpCallees",
@@ -981,6 +983,52 @@ test("LSP signature help is normalized", function()
 	eq(signature.text({ signatures = {} }), nil)
 end)
 
+test("LSP selection ranges are flattened for picker rows", function()
+	local items = selection_ranges.flatten({
+		[1] = {
+			result = {
+				{
+					range = {
+						start = { line = 2, character = 14 },
+						["end"] = { line = 2, character = 19 },
+					},
+					parent = {
+						range = {
+							start = { line = 1, character = 0 },
+							["end"] = { line = 4, character = 0 },
+						},
+					},
+				},
+			},
+		},
+	})
+
+	eq(#items, 2)
+	eq(items[1].label, "cursor expression")
+	eq(items[1].range.line1, 3)
+	eq(items[1].range.col1, 15)
+	eq(items[2].label, "semantic block")
+	eq(items[2].range.line1, 2)
+	eq(items[2].range.line2, 4)
+
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local function add(a, b)",
+		"  if a then",
+		"    return a + b",
+		"  end",
+		"end",
+	})
+	local lines, line_items = selection_ranges.picker_lines(items, { bufnr = source_buf })
+	local text = table.concat(lines, "\n")
+	ok(text:find("ACP Selection Ranges", 1, true))
+	ok(text:find("cursor expression", 1, true))
+	ok(text:find("semantic block", 1, true))
+	ok(text:find("return a %+ b"))
+	eq(line_items[3], items[1])
+	pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+end)
+
 test("LSP document highlights are normalized for source marks", function()
 	local items = lsp_highlights.normalize({
 		{
@@ -1392,6 +1440,9 @@ test("slash command completion items are rendered for completefunc", function()
 	local signature_item = prompt_completion.items(commands, "@sig")[1]
 	eq(signature_item.word, "@signature")
 	eq(prompt_completion.action_id(signature_item), "signature")
+	local selection_item = prompt_completion.items(commands, "@sel")[1]
+	eq(selection_item.word, "@selection")
+	eq(prompt_completion.action_id(selection_item), "selection")
 	local caller_item = prompt_completion.items(commands, "@caller")[1]
 	eq(caller_item.word, "@callers")
 	eq(prompt_completion.action_id(caller_item), "callers")
@@ -2346,6 +2397,7 @@ test("actions command opens a session action palette", function()
 		local yank_code_block = false
 		local diagnostics_quickfix = false
 		local signature_help = false
+		local selection_ranges_action = false
 		local lsp_highlight_action = false
 		local callers_quickfix = false
 		local callees_quickfix = false
@@ -2384,6 +2436,9 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Signature help", 1, true) then
 				signature_help = true
+			end
+			if line:find("Selection ranges", 1, true) then
+				selection_ranges_action = true
 			end
 			if line:find("LSP highlights", 1, true) then
 				lsp_highlight_action = true
@@ -2428,6 +2483,7 @@ test("actions command opens a session action palette", function()
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
 		ok(signature_help, "action palette should include signature help")
+		ok(selection_ranges_action, "action palette should include selection ranges")
 		ok(lsp_highlight_action, "action palette should include LSP highlights")
 		ok(callers_quickfix, "action palette should include callers quickfix")
 		ok(callees_quickfix, "action palette should include callees quickfix")
@@ -2941,6 +2997,84 @@ test("signature command drafts LSP signature help context", function()
 		ok(prompt:find("* right", 1, true))
 		ok(prompt:find("Right value.", 1, true))
 		ok(prompt:find("Line: local result = join%(left, right%)"))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("selection ranges command drafts selected LSP semantic range context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local function add(a, b)",
+		"  if a then",
+		"    return a + b",
+		"  end",
+		"end",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 3, 13 })
+
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/selectionRange")
+		eq(params.positions[1].line, 2)
+		eq(params.positions[1].character, 13)
+		callback({
+			[1] = {
+				result = {
+					{
+						range = {
+							start = { line = 2, character = 11 },
+							["end"] = { line = 2, character = 16 },
+						},
+						parent = {
+							range = {
+								start = { line = 1, character = 2 },
+								["end"] = { line = 3, character = 5 },
+							},
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpSelectionRanges")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-selection-ranges")
+		local picker_text = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+		ok(picker_text:find("cursor expression", 1, true))
+		ok(picker_text:find("semantic block", 1, true))
+
+		local keys = vim.api.nvim_replace_termcodes("j<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP selection range as context: semantic block.", 1, true))
+		ok(prompt:find("Selection: lines 2%-4 %(3 line%(s%)%)"))
+		ok(prompt:find("Selected text:", 1, true))
+		ok(prompt:find("  if a then", 1, true))
+		ok(prompt:find("    return a %+ b"))
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all

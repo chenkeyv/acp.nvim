@@ -34,6 +34,12 @@ local workflows = {
 		info = "Insert LSP signature help for the source cursor.",
 	},
 	{
+		id = "selection",
+		trigger = "@selection",
+		menu = "LSP",
+		info = "Open LSP semantic selection ranges as focused context.",
+	},
+	{
 		id = "references",
 		trigger = "@references",
 		menu = "LSP",

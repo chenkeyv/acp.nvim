@@ -11,7 +11,7 @@ This plugin provides an editor-native ACP chat surface:
 - native session close controls from commands, actions, and the session sidebar
 - command-style ACP action palette for discovering session and global workflows
 - searchable floating pickers for actions, sessions, output, history, diagnostics, LSP, and Tree-sitter workflows
-- source preview windows for diagnostics, LSP location, symbol, code-action, and Tree-sitter pickers
+- source preview windows for diagnostics, LSP location, symbol, code-action, selection-range, and Tree-sitter pickers
 - plain output buffer for streamed agent responses
 - visual output dashboard with source, model, context window, and key workflow hints
 - animated dashboard activity badge with run status and live transcript counts
@@ -63,6 +63,7 @@ This plugin provides an editor-native ACP chat surface:
 - async LSP code-action picker for drafting focused fix/refactor prompts
 - async LSP hover context insertion for source-cursor documentation
 - async LSP signature-help insertion for call-site context
+- async LSP selection-range picker for semantic source context
 - async LSP incoming/outgoing call-hierarchy pickers with quickfix export
 - async LSP document-highlight marks for read/write source occurrences
 - async LSP references picker with quickfix export for focused usage context
@@ -176,6 +177,7 @@ vim.g.acp_nvim_config = {
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
 - `:AcpHover` inserts LSP hover documentation for the source cursor
 - `:AcpSignature` inserts LSP signature help for the source cursor
+- `:AcpSelectionRanges` opens LSP semantic selection ranges for the source cursor
 - `:AcpCallers` opens an LSP incoming-call picker for the source cursor
 - `:AcpCallersQuickfix` sends incoming LSP calls for the source cursor to quickfix
 - `:AcpCallees` opens an LSP outgoing-call picker for the source cursor
@@ -220,7 +222,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
-- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@diagnostics`/`@signature`/`@callers`/`@callees`/`@output` workflows
+- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@diagnostics`/`@signature`/`@selection`/`@callers`/`@callees`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>am` opens a persistent output map with progress rails and item counts
