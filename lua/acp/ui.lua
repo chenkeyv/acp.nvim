@@ -5,6 +5,7 @@ local acp_commands = require("acp.commands")
 local acp_config = require("acp.config")
 local context = require("acp.context")
 local diagnostics = require("acp.diagnostics")
+local health = require("acp.health")
 local hover = require("acp.hover")
 local history = require("acp.history")
 local metadata = require("acp.metadata")
@@ -1320,6 +1321,10 @@ function M.setup(opts)
 	})
 end
 
+function M.get_config()
+	return vim.deepcopy(config)
+end
+
 local function append_role_text(state, role, text)
 	if not text or text == "" then
 		return
@@ -2313,22 +2318,7 @@ function M.send()
 end
 
 function M.health(adapter_name)
-	adapter_name = adapter_name or config.default_adapter
-	local adapter = config.adapters[adapter_name]
-	if not adapter then
-		notify(("Unknown ACP adapter: %s"):format(adapter_name), vim.log.levels.ERROR)
-		return
-	end
-
-	local command = adapter.command and adapter.command[1]
-	if command and vim.fn.executable(command) == 1 then
-		notify(("%s adapter command found: %s"):format(adapter_name, table.concat(adapter.command, " ")))
-	else
-		notify(
-			("%s adapter command is missing: %s"):format(adapter_name, table.concat(adapter.command or {}, " ")),
-			vim.log.levels.WARN
-		)
-	end
+	health.notify(config, adapter_name or config.default_adapter, notify)
 end
 
 function M.stop()

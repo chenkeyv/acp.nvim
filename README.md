@@ -33,6 +33,7 @@ This plugin provides an editor-native ACP chat surface:
 - quickfix navigation for files changed during an ACP session
 - floating diagnostics picker for drafting focused fixes
 - floating Markdown input prompt for completion-friendly editing
+- native `:checkhealth acp` diagnostics for adapter commands and metadata
 - `codex-acp` and `claude-agent-acp` adapter presets
 - basic ACP JSON-RPC, session, prompt, permission, terminal, and file read/write support
 
@@ -104,7 +105,8 @@ vim.g.acp_nvim_config = {
 - `:AcpHistoryDraft [adapter]` opens saved transcript history and drafts a new chat from the selected transcript
 - `:AcpAddContext` inserts source-buffer context into the current prompt
 - `:AcpFixDiagnostics [adapter]` opens chat with a diagnostics-focused draft prompt
-- `:AcpHealth [adapter]` checks whether the adapter command is available
+- `:AcpHealth [adapter]` checks the adapter command and prompt metadata wiring
+- `:checkhealth acp` checks configured adapter commands and prompt metadata wiring
 
 In the sessions panel:
 

@@ -169,4 +169,7 @@ function M.apply_session(state, update)
 	return changed
 end
 
+M.codex_config_path = codex_config_path
+M.codex_model = codex_model
+
 return M

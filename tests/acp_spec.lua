@@ -5,6 +5,7 @@ local acp_commands = require("acp.commands")
 local acp_config = require("acp.config")
 local acp_context = require("acp.context")
 local acp_diagnostics = require("acp.diagnostics")
+local acp_health = require("acp.health")
 local file_review = require("acp.file_review")
 local hover = require("acp.hover")
 local history = require("acp.history")
@@ -96,6 +97,69 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("health report checks adapter commands and metadata", function()
+	local items = acp_health.items({
+		default_adapter = "test",
+		adapters = {
+			test = {
+				command = { "missing-acp-test-command" },
+				metadata = {
+					model = "test-model",
+					context_window = 1000,
+				},
+			},
+		},
+	}, { adapter_name = "test" })
+	local text = table.concat(vim.tbl_map(function(item)
+		return ("%s:%s"):format(item.level, item.message)
+	end, items), "\n")
+
+	ok(text:find("error:test adapter command is missing: missing-acp-test-command", 1, true))
+	ok(text:find("info:Prompt metadata model: test-model", 1, true))
+	ok(text:find("info:Prompt metadata context window: 1000", 1, true))
+
+	local codex_items = acp_health.items({
+		default_adapter = "codex",
+		adapters = {
+			codex = {
+				command = { "missing-acp-test-command" },
+				codex_command = { "missing-codex-test-command" },
+				metadata = "codex",
+			},
+		},
+	}, { adapter_name = "codex" })
+	local codex_text = table.concat(vim.tbl_map(function(item)
+		return ("%s:%s"):format(item.level, item.message)
+	end, codex_items), "\n")
+
+	ok(codex_text:find("error:codex adapter command is missing: missing-acp-test-command", 1, true))
+	ok(codex_text:find("warn:Codex CLI is missing: missing-codex-test-command", 1, true))
+end)
+
+test("health renderer uses Neovim health reporters", function()
+	local reports = {}
+	acp_health.render({
+		{ level = "ok", message = "adapter ready" },
+		{ level = "warn", message = "metadata partial" },
+	}, {
+		start = function(message)
+			table.insert(reports, "start:" .. message)
+		end,
+		ok = function(message)
+			table.insert(reports, "ok:" .. message)
+		end,
+		warn = function(message)
+			table.insert(reports, "warn:" .. message)
+		end,
+	})
+
+	eq(reports, {
+		"start:acp.nvim",
+		"ok:adapter ready",
+		"warn:metadata partial",
+	})
 end)
 
 test("LSP references are flattened and rendered for picker", function()
