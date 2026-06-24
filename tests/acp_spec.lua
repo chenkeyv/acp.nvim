@@ -67,6 +67,8 @@ test("setup registers public user commands", function()
 		"AcpChatWindow",
 		"AcpChatBuffer",
 		"AcpSend",
+		"AcpPromptPrev",
+		"AcpPromptNext",
 		"AcpStop",
 		"AcpSessions",
 		"AcpChanges",
@@ -76,6 +78,44 @@ test("setup registers public user commands", function()
 		"AcpHealth",
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
+	end
+end)
+
+test("prompt history recalls sent prompts and restores draft", function()
+	local input_buf
+	local original_notify = vim.notify
+	vim.notify = function() end
+
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "first prompt" })
+		vim.cmd("AcpSend")
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "second prompt", "details" })
+		vim.cmd("AcpSend")
+
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "draft prompt" })
+		vim.cmd("AcpPromptPrev")
+		eq(table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n"), "second prompt\ndetails")
+
+		vim.cmd("AcpPromptPrev")
+		eq(table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n"), "first prompt")
+
+		vim.cmd("AcpPromptNext")
+		eq(table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n"), "second prompt\ndetails")
+
+		vim.cmd("AcpPromptNext")
+		eq(table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n"), "draft prompt")
+	end)
+
+	vim.notify = original_notify
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
 	end
 end)
 

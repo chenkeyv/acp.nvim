@@ -10,6 +10,7 @@ This plugin provides an editor-native ACP chat surface:
 - output-visible run status for active prompts, tools, and completion
 - Neovim highlight groups for readable transcript sections
 - non-blocking adapter startup and session creation
+- per-session prompt history recall
 - plain-text transcript history under Neovim state
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
 - visual/range context capture for selected code
@@ -72,6 +73,8 @@ vim.g.acp_nvim_config = {
 - `:AcpChatWindow [adapter]` opens a split-window layout
 - `:AcpChatBuffer [adapter]` opens the split-window layout
 - `:AcpSend` sends the current prompt
+- `:AcpPromptPrev` recalls the previous sent prompt in the current ACP session
+- `:AcpPromptNext` steps forward through prompt history or restores the draft
 - `:AcpStop` stops the current agent process
 - `:AcpSessions` focuses the sessions side panel
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
@@ -89,6 +92,7 @@ In the prompt buffer:
 - `<Enter>` inserts a newline
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
+- `<M-p>` / `<M-n>` recall previous/next prompts for the current session
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>af` opens the current session's changed files in quickfix
 

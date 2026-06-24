@@ -295,6 +295,7 @@ local function prompt_title(state)
 
 	table.insert(parts, "<Enter> newline")
 	table.insert(parts, "<C-Enter> send")
+	table.insert(parts, "M-p/M-n history")
 	table.insert(parts, "<leader>aq stop")
 	return (" %s "):format(table.concat(parts, "  "))
 end
@@ -330,15 +331,34 @@ local function input_prompt(state)
 	return prompt
 end
 
+local function raw_input_text(state)
+	if not valid_buf(state.input_buf) then
+		return ""
+	end
+
+	return table.concat(vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false), "\n")
+end
+
+local function set_input_text(state, text)
+	if not valid_buf(state.input_buf) then
+		return
+	end
+
+	local lines = text and text ~= "" and vim.split(text, "\n", { plain = true }) or { "" }
+	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, lines)
+	if valid_win(state.input_win) then
+		local line_count = vim.api.nvim_buf_line_count(state.input_buf)
+		local last = vim.api.nvim_buf_get_lines(state.input_buf, line_count - 1, line_count, false)[1] or ""
+		pcall(vim.api.nvim_win_set_cursor, state.input_win, { line_count, #last })
+	end
+end
+
 local function clear_input(state)
 	if not valid_buf(state.input_buf) then
 		return
 	end
 
-	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
-	if valid_win(state.input_win) then
-		pcall(vim.api.nvim_win_set_cursor, state.input_win, { 1, 0 })
-	end
+	set_input_text(state, "")
 end
 
 local function append_input_text(state, text)
@@ -360,6 +380,44 @@ local function append_input_text(state, text)
 		local line_count = vim.api.nvim_buf_line_count(state.input_buf)
 		local last = vim.api.nvim_buf_get_lines(state.input_buf, line_count - 1, line_count, false)[1] or ""
 		pcall(vim.api.nvim_win_set_cursor, state.input_win, { line_count, #last })
+	end
+end
+
+local function record_prompt(state, prompt)
+	if not prompt or prompt == "" then
+		return
+	end
+
+	state.prompt_history = state.prompt_history or {}
+	if state.prompt_history[#state.prompt_history] ~= prompt then
+		table.insert(state.prompt_history, prompt)
+	end
+	state.prompt_history_cursor = #state.prompt_history + 1
+	state.prompt_history_draft = nil
+end
+
+local function recall_prompt(state, delta)
+	local history = state.prompt_history or {}
+	if #history == 0 then
+		notify("No ACP prompt history for this session", vim.log.levels.WARN)
+		return
+	end
+
+	local cursor = state.prompt_history_cursor or (#history + 1)
+	if cursor > #history then
+		state.prompt_history_draft = raw_input_text(state)
+	end
+
+	cursor = math.max(1, math.min(#history + 1, cursor + delta))
+	state.prompt_history_cursor = cursor
+	if cursor == #history + 1 then
+		set_input_text(state, state.prompt_history_draft or "")
+	else
+		set_input_text(state, history[cursor])
+	end
+
+	if valid_win(state.input_win) then
+		vim.api.nvim_set_current_win(state.input_win)
 	end
 end
 
@@ -775,14 +833,24 @@ local function register_keymaps(state)
 	local open_changes = function()
 		M.open_changes()
 	end
+	local previous_prompt = function()
+		M.prompt_previous()
+	end
+	local next_prompt = function()
+		M.prompt_next()
+	end
 
 	for _, bufnr in ipairs({ state.output_buf, state.input_buf }) do
 		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
+		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
+		vim.keymap.set("n", "<leader>an", next_prompt, { buffer = bufnr, desc = "Next ACP prompt" })
 	end
 
 	vim.keymap.set("n", "<leader>ac", add_context, { buffer = state.input_buf, desc = "Add ACP editor context" })
+	vim.keymap.set({ "n", "i" }, "<M-p>", previous_prompt, { buffer = state.input_buf, desc = "Previous ACP prompt" })
+	vim.keymap.set({ "n", "i" }, "<M-n>", next_prompt, { buffer = state.input_buf, desc = "Next ACP prompt" })
 	vim.keymap.set("i", "<CR>", "<CR>", { buffer = state.input_buf, desc = "Insert newline" })
 	vim.keymap.set({ "n", "i" }, "<C-CR>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<C-s>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
@@ -891,6 +959,14 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpSend", function()
 		M.send()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpPromptPrev", function()
+		M.prompt_previous()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpPromptNext", function()
+		M.prompt_next()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpStop", function()
@@ -1090,6 +1166,24 @@ function M.open_changes()
 	end
 end
 
+function M.prompt_previous()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	recall_prompt(state, -1)
+end
+
+function M.prompt_next()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	recall_prompt(state, 1)
+end
+
 function M.send()
 	local state = current_state()
 	if not state then
@@ -1106,6 +1200,7 @@ function M.send()
 		return
 	end
 
+	record_prompt(state, prompt)
 	state.busy = true
 	state.streaming = false
 	state.run_status = nil
