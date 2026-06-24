@@ -90,6 +90,7 @@ test("setup registers public user commands", function()
 		"AcpOutput",
 		"AcpOutputSearch",
 		"AcpOutputYank",
+		"AcpOutputOpen",
 		"AcpCodeBlocks",
 		"AcpOutputLocations",
 		"AcpOutputQuickfix",
@@ -443,14 +444,20 @@ test("output dashboard and section helpers are rendered", function()
 
 	local ref_file = vim.fn.tempname() .. ".lua"
 	vim.fn.writefile({ "local one = 1", "local two = 2" }, ref_file)
+	local ref_line = ("Check %s:2:7 for details."):format(ref_file)
 	local refs = acp_output.file_references({
-		("Check %s:2:7 for details."):format(ref_file),
+		ref_line,
 		"Ignore https://example.com:443 and missing-file.lua:3",
 	})
 	eq(#refs, 1)
 	eq(refs[1].path, vim.fn.fnamemodify(ref_file, ":p"))
 	eq(refs[1].line, 2)
 	eq(refs[1].column, 7)
+	eq(refs[1].source_col, ref_line:find(ref_file, 1, true))
+	local ref_at = acp_output.file_reference_at({ ref_line }, 1, ref_line:find(ref_file, 1, true), {})
+	eq(ref_at.path, refs[1].path)
+	eq(ref_at.line, 2)
+	eq(ref_at.column, 7)
 	local ref_picker, line_refs = acp_output.file_reference_lines(refs)
 	local ref_text = table.concat(ref_picker, "\n")
 	ok(ref_text:find("ACP Output Locations", 1, true))
@@ -1167,6 +1174,25 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		})
 		vim.bo[output_buf].modifiable = false
 		vim.api.nvim_set_current_win(output_win)
+		local ref_line
+		local ref_col
+		for index, output_line in ipairs(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false)) do
+			local first = output_line:find("lua/acp/output.lua", 1, true)
+			if first then
+				ref_line = index
+				ref_col = first - 1
+				break
+			end
+		end
+		ok(ref_line, "output should contain a file reference")
+		vim.api.nvim_win_set_cursor(output_win, { ref_line, ref_col })
+		vim.cmd("AcpOutputOpen")
+		location_buf = vim.api.nvim_get_current_buf()
+		ok(vim.api.nvim_buf_get_name(location_buf):find("lua/acp/output.lua", 1, true))
+		eq(vim.api.nvim_win_get_cursor(0)[1], 1)
+		ok(vim.api.nvim_buf_is_valid(output_buf), "output buffer should survive direct reference navigation")
+		vim.api.nvim_set_current_win(output_win)
+		eq(vim.api.nvim_win_get_buf(output_win), output_buf)
 		vim.cmd("AcpOutputQuickfix")
 		local qflist = vim.fn.getqflist({ title = 1, items = 1 })
 		ok(qflist.title:find("ACP output locations", 1, true))

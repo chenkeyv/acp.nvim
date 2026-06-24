@@ -19,6 +19,7 @@ This plugin provides an editor-native ACP chat surface:
 - cursor-aware current-section highlighting in the output buffer
 - searchable output transcript picker with context previews and jump-to-line navigation
 - current-section yank action with a short visual pulse in the output buffer
+- direct `gf` navigation from transcript file references into source
 - searchable output code-block picker with language-aware previews and scratch buffers
 - searchable output location picker for jumping from transcript file references into source
 - quickfix export for transcript file references
@@ -119,6 +120,7 @@ vim.g.acp_nvim_config = {
 - `:AcpOutput` opens a floating outline of the current output transcript
 - `:AcpOutputSearch` opens every non-empty output line with context previews
 - `:AcpOutputYank` yanks the current output section into the unnamed register
+- `:AcpOutputOpen` opens the local file reference under the output cursor
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
 - `:AcpOutputLocations` opens local file references from the current output with source previews
 - `:AcpOutputQuickfix` sends local file references from the current output to quickfix
@@ -177,6 +179,7 @@ In the output buffer:
 - `za` toggles the fold under the cursor
 - `zM` closes all transcript folds
 - `zR` opens all transcript folds
+- `gf` opens the local file reference under the cursor
 - `<leader>ax` searches output transcript lines
 - `<leader>ay` yanks the current output section
 - `<leader>av` opens the output outline

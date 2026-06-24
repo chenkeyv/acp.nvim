@@ -76,6 +76,39 @@ local function parse_reference_token(token)
 	return raw_path, tonumber(line), tonumber(column) or 1
 end
 
+local function reference_from_token(token, opts)
+	opts = opts or {}
+	local raw_path, target_line, column = parse_reference_token(token)
+	local path = resolve_reference_path(raw_path, opts.cwd)
+	if not path or not target_line then
+		return nil
+	end
+
+	return {
+		path = path,
+		display_path = display_path(path, opts.cwd),
+		line = target_line,
+		column = column,
+		source_line = opts.source_line,
+		source_col = opts.source_col,
+		source_end_col = opts.source_end_col,
+		source_text = clean(opts.source_text),
+	}
+end
+
+local function each_reference_token(line, callback)
+	line = tostring(line or "")
+	local start = 1
+	while start <= #line do
+		local first, last = line:find(reference_token_pattern, start)
+		if not first then
+			break
+		end
+		callback(line:sub(first, last), first, last)
+		start = last + 1
+	end
+end
+
 local function format_count(value)
 	local number = tonumber(value)
 	if not number then
@@ -172,7 +205,7 @@ function M.dashboard_lines(state, opts)
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
 		summary_label(opts.stats),
-		"Keys: <leader>ax search | <leader>ay yank | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>ak actions",
+		"Keys: <leader>ax search | gf refs | <leader>ay yank | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>ak actions",
 		"",
 	}
 end
@@ -650,30 +683,62 @@ function M.file_references(lines, opts)
 	local seen = {}
 
 	for source_line, line in ipairs(lines or {}) do
-		for token in tostring(line):gmatch(reference_token_pattern) do
-			local raw_path, target_line, column = parse_reference_token(token)
-			local path = resolve_reference_path(raw_path, cwd)
-			if path and target_line then
-				local key = ("%s:%d:%d"):format(path, target_line, column)
+		each_reference_token(line, function(token, first, last)
+			local reference = reference_from_token(token, {
+				cwd = cwd,
+				source_line = source_line,
+				source_col = first,
+				source_end_col = last,
+				source_text = line,
+			})
+			if reference then
+				local key = ("%s:%d:%d"):format(reference.path, reference.line, reference.column)
 				if not seen[key] then
 					seen[key] = true
-					table.insert(references, {
-						path = path,
-						display_path = display_path(path, cwd),
-						line = target_line,
-						column = column,
-						source_line = source_line,
-						source_text = clean(line),
-					})
+					table.insert(references, reference)
 					if #references >= limit then
 						return references
 					end
 				end
 			end
+		end)
+		if #references >= limit then
+			return references
 		end
 	end
 
 	return references
+end
+
+function M.file_reference_at(lines, lnum, col, opts)
+	opts = opts or {}
+	lines = lines or {}
+	local source_line = math.max(1, math.min(tonumber(lnum) or 1, #lines))
+	local line = lines[source_line]
+	if not line then
+		return nil
+	end
+
+	local cursor_col = (tonumber(col) or 0) + 1
+	local fallback
+	each_reference_token(line, function(token, first, last)
+		local reference = reference_from_token(token, {
+			cwd = opts.cwd or vim.fn.getcwd(),
+			source_line = source_line,
+			source_col = first,
+			source_end_col = last,
+			source_text = line,
+		})
+		if not reference then
+			return
+		end
+
+		fallback = fallback or reference
+		if cursor_col >= first and cursor_col <= last + 1 then
+			fallback = reference
+		end
+	end)
+	return fallback
 end
 
 function M.file_reference_lines(references)
