@@ -1581,6 +1581,19 @@ test("history browser opens when entries exist", function()
 	local bufnr = vim.api.nvim_get_current_buf()
 	eq(vim.bo[bufnr].filetype, "acp-history")
 
+	local preview_found = false
+	for _, winid in ipairs(vim.api.nvim_list_wins()) do
+		local preview_bufnr = vim.api.nvim_win_get_buf(winid)
+		if preview_bufnr ~= bufnr and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "acp" then
+			local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
+			if preview:find("History Browser Test", 1, true) then
+				preview_found = true
+				break
+			end
+		end
+	end
+	ok(preview_found, "history browser should show transcript preview")
+
 	local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 	vim.api.nvim_feedkeys(keys, "xt", false)
 	local entry_bufnr = vim.api.nvim_get_current_buf()

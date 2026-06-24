@@ -1,3 +1,5 @@
+local picker = require("acp.picker")
+
 local M = {}
 
 local function history_dir()
@@ -164,15 +166,6 @@ function M.replay_prompt(entry, opts)
 	return table.concat(prompt, "\n")
 end
 
-local function close_window(winid, bufnr)
-	if winid and vim.api.nvim_win_is_valid(winid) then
-		pcall(vim.api.nvim_win_close, winid, true)
-	end
-	if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-		pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
-	end
-end
-
 function M.open_entry(entry)
 	if not entry or not entry.path then
 		return false
@@ -201,38 +194,39 @@ end
 
 local function browser_lines(entries, opts)
 	local lines = { "ACP History", "" }
+	local line_entries = {}
 	for index, entry in ipairs(entries) do
 		table.insert(lines, ("%d. %s"):format(index, entry.title))
+		line_entries[#lines] = entry
 		table.insert(lines, ("   %s  %s  %s"):format(entry.updated, entry.adapter, entry.model))
+		line_entries[#lines] = entry
 	end
 	table.insert(lines, "")
 	if opts.open_chat then
-		table.insert(lines, "Press <Enter> to draft a chat, o to open read-only, or q/<Esc> to close.")
+		table.insert(lines, "Press <Enter> to draft a chat, o to open read-only, / to filter, or q/<Esc> to close.")
 	else
-		table.insert(lines, "Press <Enter> to open, or q/<Esc> to close.")
+		table.insert(lines, "Press <Enter> to open, / to filter, or q/<Esc> to close.")
 	end
-	return lines
+	return lines, line_entries
 end
 
-local function window_config(lines)
-	local width = 0
-	for _, line in ipairs(lines) do
-		width = math.max(width, #line)
+local function entry_preview(entry)
+	if not entry or not entry.path then
+		return nil
 	end
-	width = math.max(58, math.min(width + 4, vim.o.columns - 4))
-	local height = math.max(8, math.min(#lines, vim.o.lines - 6))
+
+	local ok, lines = pcall(vim.fn.readfile, entry.path, "", 80)
+	if not ok then
+		return nil
+	end
+	if #lines == 0 then
+		lines = { "" }
+	end
 
 	return {
-		relative = "editor",
-		row = math.max(1, math.floor((vim.o.lines - height) / 2) - 1),
-		col = math.max(0, math.floor((vim.o.columns - width) / 2)),
-		width = width,
-		height = height,
-		style = "minimal",
-		border = "rounded",
-		title = " ACP history ",
-		title_pos = "left",
-		zindex = 65,
+		lines = lines,
+		filetype = "acp",
+		title = (" %s "):format(entry.title or entry.name or "ACP history"),
 	}
 end
 
@@ -244,53 +238,41 @@ function M.open_browser(opts)
 		return false
 	end
 
-	local lines = browser_lines(entries, opts)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, "ACP://history")
-	vim.bo[bufnr].buftype = "nofile"
-	vim.bo[bufnr].bufhidden = "wipe"
-	vim.bo[bufnr].filetype = "acp-history"
-	vim.bo[bufnr].swapfile = false
-	vim.bo[bufnr].modifiable = true
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, window_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	local function selected_entry()
-		local line = vim.api.nvim_win_get_cursor(winid)[1]
-		local index = math.floor((line - 3) / 2) + 1
-		return entries[index]
-	end
-
-	local function open_readonly()
-		local entry = selected_entry()
-		close_window(winid, bufnr)
-		M.open_entry(entry)
-	end
-
-	local function open_chat()
-		local entry = selected_entry()
-		close_window(winid, bufnr)
-		opts.open_chat(entry)
-	end
-
-	vim.keymap.set("n", "<CR>", opts.open_chat and open_chat or open_readonly, {
-		buffer = bufnr,
-		nowait = true,
-		desc = opts.open_chat and "Draft ACP chat from history" or "Open ACP history entry",
+	local lines, line_entries = browser_lines(entries, opts)
+	local view
+	view = picker.open({
+		name = "ACP://history",
+		filetype = "acp-history",
+		lines = lines,
+		title = " ACP history ",
+		submit_desc = opts.open_chat and "Draft ACP chat from history" or "Open ACP history entry",
+		close_desc = "Close ACP history",
+		preview = function(row)
+			return entry_preview(line_entries[row])
+		end,
+		on_submit = function(row, picker_view)
+			local entry = line_entries[row]
+			if not entry then
+				return
+			end
+			picker_view.close()
+			if opts.open_chat then
+				opts.open_chat(entry)
+			else
+				M.open_entry(entry)
+			end
+		end,
 	})
 
 	if opts.open_chat then
-		vim.keymap.set("n", "o", open_readonly, { buffer = bufnr, nowait = true, desc = "Open ACP history entry" })
-	end
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_window(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP history" })
+		vim.keymap.set("n", "o", function()
+			local entry = line_entries[view.source_row()]
+			if not entry then
+				return
+			end
+			view.close()
+			M.open_entry(entry)
+		end, { buffer = view.bufnr, nowait = true, desc = "Open ACP history entry" })
 	end
 
 	return true

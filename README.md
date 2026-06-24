@@ -8,7 +8,7 @@ This plugin provides an editor-native ACP chat surface:
 - side panel for open ACP sessions
 - visual session sidebar with current-session highlighting and status badges
 - command-style ACP action palette for discovering session and global workflows
-- searchable floating pickers for actions, sessions, output, diagnostics, LSP, and Tree-sitter workflows
+- searchable floating pickers for actions, sessions, output, history, diagnostics, LSP, and Tree-sitter workflows
 - source preview windows for diagnostics, symbols, references, code actions, and Tree-sitter pickers
 - plain output buffer for streamed agent responses
 - visual output dashboard with source, model, context window, and key workflow hints
@@ -25,7 +25,7 @@ This plugin provides an editor-native ACP chat surface:
 - prompt-buffer ghost text and draft statistics while composing
 - floating session config picker for adapter-advertised model, mode, and reasoning options
 - per-session prompt history recall
-- plain-text transcript history under Neovim state
+- searchable, previewable plain-text transcript history under Neovim state
 - saved transcript replay into a new chat draft
 - adapter-backed session listing and restoration
 - async LSP code-action picker for drafting focused fix/refactor prompts
