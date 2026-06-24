@@ -167,8 +167,15 @@ local function refresh_output_highlights(state)
 				opts.sign_text = style.sign_text
 				opts.sign_hl_group = style.sign_hl_group or style.line_hl_group or style.badge_hl or "AcpBadge"
 			end
+			local activity_lens = output.activity_lens_chunks(line, state.output_animation_frame)
 			if style.separator then
 				opts.virt_lines = { { { style.separator, style.separator_hl_group or style.line_hl_group or "AcpOutputMeta" } } }
+				if activity_lens then
+					table.insert(opts.virt_lines, activity_lens)
+				end
+				opts.virt_lines_above = true
+			elseif activity_lens then
+				opts.virt_lines = { activity_lens }
 				opts.virt_lines_above = true
 			end
 			if line:match("^Keys:") then

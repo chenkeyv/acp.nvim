@@ -40,6 +40,7 @@ This plugin provides an editor-native ACP chat surface:
 - quickfix export for transcript file references
 - Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
 - tool and terminal virtual headers with activity labels and action hints
+- animated tool, terminal, stderr, and file-write activity cards in the output gutter
 - sign-column markers for transcript sections, references, code blocks, run status, tools, files, and errors
 - native statuscolumn transcript rail with section, code, reference, and problem markers
 - right-aligned output timeline badges with section index and transcript progress

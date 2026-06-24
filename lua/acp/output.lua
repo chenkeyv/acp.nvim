@@ -307,6 +307,11 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentItem", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputActivity", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputActivityCard", { fg = "#c0caf5", bg = "#24283b", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputActivityTool", { fg = "#1a1b26", bg = "#bb9af7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputActivityTerminal", { fg = "#1a1b26", bg = "#2ac3de", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputActivityFile", { fg = "#1a1b26", bg = "#9ece6a", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputActivityProblem", { fg = "#1a1b26", bg = "#f7768e", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputLive", { fg = "#1a1b26", bg = "#f7768e", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputMotion", { fg = "#1a1b26", bg = "#2ac3de", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputIdle", { link = "Comment", default = true })
@@ -335,6 +340,57 @@ function M.activity_separator(line)
 	if line:match("^stderr:") then
 		return "---- STDERR: problem output | K inspect | <leader>ae problems ----"
 	end
+end
+
+function M.activity_lens_chunks(line, frame)
+	line = line or ""
+	local label
+	local title
+	local hint
+	local hl
+	if line:match("^Tool update:") then
+		label = " TOOL UPDATE "
+		title = clean(line:gsub("^Tool update:%s*", "")) or "updated"
+		hint = "K inspect | ]o/[o items | ? actions"
+		hl = "AcpOutputActivityTool"
+	elseif line:match("^Tool:") then
+		label = " TOOL CALL "
+		title = clean(line:gsub("^Tool:%s*", "")) or "tool"
+		hint = "K inspect | ]o/[o items | ? actions"
+		hl = "AcpOutputActivityTool"
+	elseif line:match("^Terminal:") then
+		label = " TERMINAL "
+		title = clean(line:gsub("^Terminal:%s*", "")) or "terminal"
+		hint = "streaming output | K inspect | <leader>ae problems"
+		hl = "AcpOutputActivityTerminal"
+	elseif line:match("^Terminal output truncated") then
+		label = " TERMINAL WARN "
+		title = "output truncated"
+		hint = "<leader>ae problems | K inspect"
+		hl = "AcpOutputActivityProblem"
+	elseif line:match("^stderr:") then
+		label = " STDERR "
+		title = clean(line:gsub("^stderr:%s*", "")) or "problem output"
+		hint = "<leader>ae problems | K inspect"
+		hl = "AcpOutputActivityProblem"
+	elseif line:match("^Wrote ") then
+		label = " FILE WRITE "
+		title = clean(line:gsub("^Wrote%s+", "")) or "file"
+		hint = ":AcpChanges preview | <leader>af files"
+		hl = "AcpOutputActivityFile"
+	else
+		return nil
+	end
+
+	if #title > 46 then
+		title = title:sub(1, 43) .. "..."
+	end
+	return {
+		{ (" %s "):format(M.motion_frame(frame)), "AcpOutputMotion" },
+		{ label, hl },
+		{ (" %s "):format(title), "AcpOutputActivityCard" },
+		{ ("| %s "):format(hint), "AcpOutputHint" },
+	}
 end
 
 function M.line_style(line)

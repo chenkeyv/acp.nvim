@@ -677,6 +677,20 @@ test("output dashboard and section helpers are rendered", function()
 	local error_badge, error_hl = acp_output.activity_badge({ run_status = "error: failed" }, {}, 1)
 	ok(error_badge:find("error: failed", 1, true))
 	eq(error_hl, "AcpBadgeError")
+	local tool_lens = acp_output.activity_lens_chunks("Tool: shell", 2)
+	eq(tool_lens[1][2], "AcpOutputMotion")
+	eq(tool_lens[2][1], " TOOL CALL ")
+	eq(tool_lens[2][2], "AcpOutputActivityTool")
+	ok(tool_lens[3][1]:find("shell", 1, true))
+	ok(tool_lens[4][1]:find("K inspect", 1, true))
+	local terminal_lens = acp_output.activity_lens_chunks("Terminal: term-1", 2)
+	eq(terminal_lens[2][1], " TERMINAL ")
+	eq(terminal_lens[2][2], "AcpOutputActivityTerminal")
+	local file_lens = acp_output.activity_lens_chunks("Wrote lua/acp/init.lua", 2)
+	eq(file_lens[2][1], " FILE WRITE ")
+	eq(file_lens[2][2], "AcpOutputActivityFile")
+	local stderr_lens = acp_output.activity_lens_chunks("stderr: failed", 2)
+	eq(stderr_lens[2][2], "AcpOutputActivityProblem")
 	local live_status, live_status_hl = acp_output.live_status_label({ run_status = "streaming" }, 2)
 	ok(live_status:find("/ live: streaming", 1, true))
 	ok(live_status:find("[=>  ]", 1, true))
@@ -2233,6 +2247,35 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(agent_separator, "output agent separator should be rendered")
 		ok(user_summary, "output section summary should be rendered")
 		ok(user_timeline, "output section timeline should be rendered")
+		local original_output_line_count = vim.api.nvim_buf_line_count(output_buf)
+		vim.bo[output_buf].modifiable = true
+		vim.api.nvim_buf_set_lines(output_buf, -1, -1, false, {
+			"",
+			"Tool: shell",
+			"",
+			"Terminal: term-1",
+			"",
+			"Wrote lua/acp/init.lua",
+			"",
+		})
+		vim.bo[output_buf].modifiable = false
+		vim.api.nvim_exec_autocmds("TextChanged", { buffer = output_buf })
+		marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
+		local tool_activity_card = false
+		local terminal_activity_card = false
+		local file_activity_card = false
+		for _, mark in ipairs(marks) do
+			tool_activity_card = tool_activity_card or has_virt_line(mark, " TOOL CALL ")
+			terminal_activity_card = terminal_activity_card or has_virt_line(mark, " TERMINAL ")
+			file_activity_card = file_activity_card or has_virt_line(mark, " FILE WRITE ")
+		end
+		ok(tool_activity_card, "tool output should render an activity card")
+		ok(terminal_activity_card, "terminal output should render an activity card")
+		ok(file_activity_card, "file writes should render an activity card")
+		vim.bo[output_buf].modifiable = true
+		vim.api.nvim_buf_set_lines(output_buf, original_output_line_count, -1, false, {})
+		vim.bo[output_buf].modifiable = false
+		vim.api.nvim_exec_autocmds("TextChanged", { buffer = output_buf })
 		local updated_dashboard = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, 7, false), "\n")
 		ok(updated_dashboard:find("Transcript: 3 sections | 0 code | 0 locs | 0 changes", 1, true))
 		local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
