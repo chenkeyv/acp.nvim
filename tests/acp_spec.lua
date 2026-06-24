@@ -1483,6 +1483,17 @@ test("sessions command opens a picker from source buffers", function()
 	local text = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
 	ok(text:find("ACP Sessions", 1, true))
 	ok(text:find("test", 1, true))
+	local preview_found = false
+	for _, winid in ipairs(vim.api.nvim_list_wins()) do
+		local bufnr = vim.api.nvim_win_get_buf(winid)
+		if bufnr ~= picker_buf and vim.bo[bufnr].buftype == "nofile" then
+			local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+			if preview:find("ACP Session Preview", 1, true) and preview:find("No transcript output yet", 1, true) then
+				preview_found = true
+			end
+		end
+	end
+	ok(preview_found, "session picker should show a transcript preview")
 
 	local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 	vim.api.nvim_feedkeys(keys, "xt", false)

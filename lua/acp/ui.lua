@@ -3545,6 +3545,71 @@ local function session_picker_lines(list)
 	return lines, line_ids
 end
 
+local function session_picker_preview(state)
+	if not state then
+		return nil
+	end
+
+	local lines = { "ACP Session Preview", "" }
+	table.insert(lines, ("Session: #%d %s"):format(state.id or 0, state.adapter or "?"))
+	table.insert(lines, ("Status: %s"):format(session_status(state)))
+	if state.model and state.model ~= "" then
+		table.insert(lines, ("Model: %s"):format(state.model))
+	end
+	if state.context_window then
+		table.insert(lines, ("Context window: %s"):format(format_count(state.context_window)))
+	end
+	local change_count = changes.count(state)
+	if change_count > 0 then
+		table.insert(lines, ("Changed files: %d"):format(change_count))
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Source")
+	if state.source and valid_buf(state.source.bufnr) then
+		local name = vim.api.nvim_buf_get_name(state.source.bufnr)
+		local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or "[No Name]"
+		table.insert(lines, ("File: %s"):format(path))
+		if state.source.range then
+			table.insert(lines, ("Selection: lines %d-%d"):format(state.source.range.line1, state.source.range.line2))
+		elseif state.source.cursor then
+			table.insert(lines, ("Cursor: %d:%d"):format(state.source.cursor[1] or 1, (state.source.cursor[2] or 0) + 1))
+		end
+	else
+		table.insert(lines, "No source buffer")
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Transcript")
+	if valid_buf(state.output_buf) then
+		local start_line = math.min(state.output_dashboard_lines or 0, vim.api.nvim_buf_line_count(state.output_buf))
+		local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, start_line, -1, false)
+		local tail = {}
+		for index = #output_lines, 1, -1 do
+			local line = output_lines[index]
+			if line and line ~= "" then
+				table.insert(tail, 1, line)
+				if #tail >= 12 then
+					break
+				end
+			end
+		end
+		if #tail > 0 then
+			vim.list_extend(lines, tail)
+		else
+			table.insert(lines, "No transcript output yet")
+		end
+	else
+		table.insert(lines, "No output buffer")
+	end
+
+	return {
+		lines = lines,
+		filetype = "acp",
+		title = (" ACP session #%s "):format(tostring(state.id or "?")),
+	}
+end
+
 local function open_session_picker()
 	local list = sorted_sessions()
 	if #list == 0 then
@@ -3560,6 +3625,9 @@ local function open_session_picker()
 		title = " ACP sessions ",
 		submit_desc = "Focus ACP session",
 		close_desc = "Close ACP sessions",
+		preview = function(row)
+			return session_picker_preview(sessions[line_ids[row]])
+		end,
 		on_submit = function(row, view)
 			local id = line_ids[row]
 			view.close()

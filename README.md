@@ -7,6 +7,7 @@ This plugin provides an editor-native ACP chat surface:
 - dedicated ACP tab by default
 - side panel for open ACP sessions
 - visual session sidebar with current-session highlighting and status badges
+- floating session picker with transcript, source, status, and change previews
 - command-style ACP action palette for discovering session and global workflows
 - searchable floating pickers for actions, sessions, output, history, diagnostics, LSP, and Tree-sitter workflows
 - source preview windows for diagnostics, symbols, references, code actions, and Tree-sitter pickers
@@ -122,7 +123,7 @@ vim.g.acp_nvim_config = {
 - `:AcpPromptPrev` recalls the previous sent prompt in the current ACP session
 - `:AcpPromptNext` steps forward through prompt history or restores the draft
 - `:AcpStop` stops the current agent process
-- `:AcpSessions` focuses the sessions side panel or opens a floating session picker
+- `:AcpSessions` focuses the sessions side panel or opens a floating session picker with previews
 - `:AcpActions` opens a picker of available ACP workflows
 - `:AcpPromptActions` opens composer-focused actions with source context preview
 - `:AcpSourceActions` opens actions for the source buffer linked to an ACP session
