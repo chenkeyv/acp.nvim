@@ -96,6 +96,7 @@ test("setup registers public user commands", function()
 		"AcpOutput",
 		"AcpOutputSearch",
 		"AcpOutputItems",
+		"AcpOutputItemsQuickfix",
 		"AcpOutputYank",
 		"AcpOutputDraft",
 		"AcpOutputOpen",
@@ -628,7 +629,13 @@ test("output dashboard and section helpers are rendered", function()
 	ok(item_text:find("PROBLEM", 1, true))
 	ok(item_text:find("CODE", 1, true))
 	ok(item_text:find("REFERENCE", 1, true))
+	ok(item_text:find("Q for quickfix", 1, true))
 	eq(line_items[3].kind, "problem")
+	local item_qf = acp_output.output_item_quickfix_items(output_items, 99)
+	eq(#item_qf, 3)
+	eq(item_qf[1].bufnr, 99)
+	eq(item_qf[1].lnum, 1)
+	ok(item_qf[1].text:find("PROBLEM", 1, true))
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 1).kind, "code")
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 6, -1).kind, "code")
 	local current_problem = acp_output.current_output_item({
@@ -1640,6 +1647,27 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(item_preview, "output item picker should preview code blocks")
+		keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local item_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(item_qflist.title:find("ACP output items", 1, true))
+		ok(#item_qflist.items >= 3)
+		eq(item_qflist.items[1].bufnr, output_buf)
+		ok(item_qflist.items[1].text:find("PROBLEM", 1, true))
+		vim.cmd("cclose")
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd("AcpOutputItems")
+		picker_buf = vim.api.nvim_get_current_buf()
+		item_picker_lines = vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false)
+		code_item_row = nil
+		for index, item_line in ipairs(item_picker_lines) do
+			if item_line:find("CODE", 1, true) then
+				code_item_row = index
+				break
+			end
+		end
+		ok(code_item_row, "output item picker should include code rows after quickfix export")
+		vim.api.nvim_win_set_cursor(0, { code_item_row, 0 })
 		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		eq(vim.api.nvim_get_current_win(), output_win)
@@ -1816,6 +1844,7 @@ test("actions command opens a session action palette", function()
 		local action_lines = vim.api.nvim_buf_get_lines(action_buf, 0, -1, false)
 		local output_outline_row
 		local output_items = false
+		local output_items_quickfix = false
 		local inspect_output = false
 		local output_actions = false
 		local yank_code_block = false
@@ -1826,6 +1855,9 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Output items", 1, true) then
 				output_items = true
+			end
+			if line:find("Output items quickfix", 1, true) then
+				output_items_quickfix = true
 			end
 			if line:find("Inspect output item", 1, true) then
 				inspect_output = true
@@ -1842,6 +1874,7 @@ test("actions command opens a session action palette", function()
 		end
 		ok(output_outline_row, "action palette should include output outline")
 		ok(output_items, "action palette should include output items")
+		ok(output_items_quickfix, "action palette should include output item quickfix")
 		ok(inspect_output, "action palette should include output inspect")
 		ok(output_actions, "action palette should include output actions")
 		ok(yank_code_block, "action palette should include code block yank")

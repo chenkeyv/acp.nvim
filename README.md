@@ -146,6 +146,7 @@ vim.g.acp_nvim_config = {
 - `:AcpOutput` opens a floating outline of the current output transcript
 - `:AcpOutputSearch` opens every non-empty output line with context previews
 - `:AcpOutputItems` opens references, code blocks, and problems from the current output
+- `:AcpOutputItemsQuickfix` sends output references, code blocks, and problems to quickfix
 - `:AcpOutputYank` yanks the current output section into the unnamed register
 - `:AcpOutputDraft` inserts the current output section as follow-up prompt context
 - `:AcpOutputOpen` opens the local file reference or code block under the output cursor
@@ -240,7 +241,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file and output-location pickers use `Q` to export rows to quickfix
+- changed-file, output-location, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 

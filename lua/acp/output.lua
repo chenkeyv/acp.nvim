@@ -1159,8 +1159,23 @@ function M.output_item_lines(items, opts)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Type / to filter, press <Enter> to jump, or q/<Esc> to close.")
+	table.insert(lines, "Type / to filter, press <Enter> to jump, Q for quickfix, or q/<Esc> to close.")
 	return lines, line_items
+end
+
+function M.output_item_quickfix_items(items, bufnr)
+	local qf_items = {}
+	for _, item in ipairs(items or {}) do
+		local kind = (item.kind or "item"):upper()
+		local label = clean(item.label) or "ACP output item"
+		table.insert(qf_items, {
+			bufnr = bufnr,
+			lnum = item.line or 1,
+			col = item.col or 1,
+			text = ("%s: %s"):format(kind, label),
+		})
+	end
+	return qf_items
 end
 
 function M.next_output_item(lines, current, direction, opts)

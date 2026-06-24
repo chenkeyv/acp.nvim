@@ -1776,6 +1776,26 @@ local function output_item_preview(state, lines, item)
 	return output_line_preview(lines, item)
 end
 
+local function open_output_item_quickfix(state, items)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	items = items or output.output_items(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), { cwd = state.cwd })
+	if #items == 0 then
+		notify("No ACP output items found", vim.log.levels.WARN)
+		return false
+	end
+
+	vim.fn.setqflist({}, " ", {
+		title = ("ACP output items #%s"):format(tostring(state.id or "?")),
+		items = output.output_item_quickfix_items(items, state.output_buf),
+	})
+	vim.cmd("copen")
+	return true
+end
+
 local function open_output_items(state)
 	if not state or not valid_buf(state.output_buf) then
 		notify("No ACP output buffer is available", vim.log.levels.WARN)
@@ -1790,7 +1810,8 @@ local function open_output_items(state)
 	end
 
 	local lines, line_items = output.output_item_lines(items, { total_lines = #output_lines })
-	picker.open({
+	local view
+	view = picker.open({
 		name = ("ACP://%s/%d/output-items"):format(state.adapter, state.id),
 		filetype = "acp-output-items",
 		lines = lines,
@@ -1810,6 +1831,10 @@ local function open_output_items(state)
 			jump_to_output_line(state, item.line, item.col)
 		end,
 	})
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		open_output_item_quickfix(state, items)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP output item quickfix" })
 	return true
 end
 
@@ -3125,6 +3150,10 @@ function M.setup(opts)
 		M.open_output_items()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpOutputItemsQuickfix", function()
+		M.open_output_items_quickfix()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpOutputYank", function()
 		M.yank_output_section()
 	end, {})
@@ -3554,6 +3583,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Output items", "Browse references, code blocks, and problems in one picker", "<leader>aO", "session", function()
 			M.open_output_items()
+		end)
+		add_action(items, "Output items quickfix", "Send references, code blocks, and problems to quickfix", ":AcpOutputItemsQuickfix", "session", function()
+			M.open_output_items_quickfix()
 		end)
 		add_action(items, "Yank output section", "Copy the current transcript section into the unnamed register", "<leader>ay", "session", function()
 			M.yank_output_section()
@@ -4608,6 +4640,15 @@ function M.open_output_items()
 	end
 
 	open_output_items(state)
+end
+
+function M.open_output_items_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_item_quickfix(state)
 end
 
 function M.yank_output_section()
