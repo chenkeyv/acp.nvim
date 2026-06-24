@@ -93,6 +93,7 @@ test("setup registers public user commands", function()
 		"AcpCodeBlocks",
 		"AcpOutputLocations",
 		"AcpOutputQuickfix",
+		"AcpOutputProblems",
 		"AcpDiagnostics",
 		"AcpCommands",
 		"AcpConfig",
@@ -461,6 +462,20 @@ test("output dashboard and section helpers are rendered", function()
 	eq(qf_items[1].filename, refs[1].path)
 	eq(qf_items[1].lnum, 2)
 	eq(qf_items[1].col, 7)
+	local problem_items = acp_output.problem_diagnostics({
+		"Status: error: failed to start session",
+		"",
+		"stderr:",
+		"permission denied",
+		"",
+		"Terminal output truncated to the configured byte limit.",
+	})
+	eq(#problem_items, 3)
+	eq(problem_items[1].lnum, 0)
+	eq(problem_items[1].severity, vim.diagnostic.severity.ERROR)
+	ok(problem_items[1].message:find("failed to start session", 1, true))
+	eq(problem_items[2].message, "stderr: permission denied")
+	eq(problem_items[3].severity, vim.diagnostic.severity.WARN)
 	local stats = acp_output.transcript_stats({
 		"ACP: test",
 		"```lua",
@@ -1023,6 +1038,18 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(user_summary, "output section summary should be rendered")
 		local updated_dashboard = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, 7, false), "\n")
 		ok(updated_dashboard:find("Transcript: 3 sections | 0 code | 0 locs | 0 changes", 1, true))
+		local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
+		local output_diagnostics = vim.diagnostic.get(output_buf, { namespace = output_diagnostic_ns })
+		eq(#output_diagnostics, 1)
+		eq(output_diagnostics[1].severity, vim.diagnostic.severity.ERROR)
+		ok(output_diagnostics[1].message:find("failed to start session", 1, true))
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd("AcpOutputProblems")
+		local loclist = vim.fn.getloclist(output_win, { title = 1, items = 1 })
+		ok(loclist.title:find("ACP output problems", 1, true))
+		eq(#loclist.items, 1)
+		ok(loclist.items[1].text:find("failed to start session", 1, true))
+		vim.cmd("lclose")
 
 		vim.api.nvim_set_current_win(output_win)
 		vim.api.nvim_win_set_cursor(output_win, { 1, 0 })

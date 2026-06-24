@@ -708,6 +708,39 @@ function M.file_reference_quickfix_items(references)
 	return items
 end
 
+function M.problem_diagnostics(lines)
+	local items = {}
+	for index, line in ipairs(lines or {}) do
+		local severity
+		local message
+
+		if line:match("^Status:%s+error") then
+			severity = vim.diagnostic.severity.ERROR
+			message = clean(line:gsub("^Status:%s*", "")) or "ACP status error"
+		elseif line:match("^stderr:") then
+			severity = vim.diagnostic.severity.ERROR
+			local preview = preview_after(lines, index)
+			message = preview and ("stderr: %s"):format(preview) or "stderr output"
+		elseif line:match("^Terminal output truncated") then
+			severity = vim.diagnostic.severity.WARN
+			message = clean(line) or "Terminal output truncated"
+		end
+
+		if severity then
+			table.insert(items, {
+				lnum = index - 1,
+				col = 0,
+				end_lnum = index - 1,
+				end_col = #line,
+				severity = severity,
+				source = "acp.nvim",
+				message = message,
+			})
+		end
+	end
+	return items
+end
+
 function M.transcript_stats(lines, opts)
 	opts = opts or {}
 	local body = {}

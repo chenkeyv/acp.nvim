@@ -58,6 +58,7 @@ local session_panel_lines = {}
 local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
 local output_current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_section")
 local output_pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
+local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
 local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 local session_panel_ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
 local source_ns = vim.api.nvim_create_namespace("acp.nvim.source")
@@ -79,6 +80,21 @@ local function define_highlights()
 	prompt_view.define_highlights()
 	session_view.define_highlights()
 	source_view.define_highlights()
+	pcall(vim.diagnostic.config, {
+		virtual_text = false,
+		signs = true,
+		underline = true,
+		severity_sort = true,
+	}, output_diagnostic_ns)
+end
+
+local function refresh_output_diagnostics(state, lines)
+	if not valid_buf(state.output_buf) then
+		return
+	end
+
+	lines = lines or vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	vim.diagnostic.set(output_diagnostic_ns, state.output_buf, output.problem_diagnostics(lines))
 end
 
 local function refresh_output_highlights(state)
@@ -88,6 +104,7 @@ local function refresh_output_highlights(state)
 
 	vim.api.nvim_buf_clear_namespace(state.output_buf, output_ns, 0, -1)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	refresh_output_diagnostics(state, lines)
 	local section_summaries = output.section_summaries(lines)
 	for index, line in ipairs(lines) do
 		local style = output.line_style(line)
@@ -749,6 +766,35 @@ local function open_output_locations(state)
 		view.close()
 		open_output_location_quickfix(state, references)
 	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP output locations quickfix" })
+	return true
+end
+
+local function open_output_problems(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local items = output.problem_diagnostics(lines)
+	refresh_output_diagnostics(state, lines)
+	if #items == 0 then
+		notify("No ACP output problems found", vim.log.levels.WARN)
+		return false
+	end
+
+	local winid = vim.fn.bufwinid(state.output_buf)
+	if not valid_win(winid) then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	vim.api.nvim_set_current_win(winid)
+	vim.diagnostic.setloclist({
+		namespace = output_diagnostic_ns,
+		open = true,
+		title = ("ACP output problems #%s"):format(tostring(state.id or "?")),
+	})
 	return true
 end
 
@@ -1810,6 +1856,9 @@ local function register_keymaps(state)
 	local open_locations = function()
 		open_output_locations(state)
 	end
+	local open_problems = function()
+		open_output_problems(state)
+	end
 	local open_diagnostics = function()
 		M.open_diagnostics()
 	end
@@ -1852,6 +1901,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ay", yank_section, { buffer = bufnr, desc = "Yank current ACP output section" })
 		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
 		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
+		vim.keymap.set("n", "<leader>ae", open_problems, { buffer = bufnr, desc = "Open ACP output problems" })
 		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
@@ -2033,6 +2083,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutputQuickfix", function()
 		M.open_output_quickfix()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputProblems", function()
+		M.open_output_problems()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpDiagnostics", function()
@@ -2409,6 +2463,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Output locations", "Preview and jump to file references in the transcript", "<leader>ag", "session", function()
 			M.open_output_locations()
+		end)
+		add_action(items, "Output problems", "Open transcript errors and stderr as native diagnostics", "<leader>ae", "session", function()
+			M.open_output_problems()
 		end)
 		add_action(items, "Output quickfix", "Send transcript file references to quickfix", ":AcpOutputQuickfix", "session", function()
 			M.open_output_quickfix()
@@ -3149,6 +3206,15 @@ function M.open_output_quickfix()
 	end
 
 	open_output_location_quickfix(state)
+end
+
+function M.open_output_problems()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_problems(state)
 end
 
 function M.open_diagnostics()

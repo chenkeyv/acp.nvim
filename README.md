@@ -25,6 +25,7 @@ This plugin provides an editor-native ACP chat surface:
 - Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
 - sign-column markers for transcript sections, run status, tools, files, and errors
 - per-section right-aligned summary badges for line, word, and code-block counts
+- native output diagnostics and location-list navigation for transcript errors and stderr
 - virtual section separators for scanning long output without changing transcript text
 - ghost-text output hints and lightweight animated busy status
 - optional Tree-sitter Markdown/code-fence language injection for agent responses
@@ -121,6 +122,7 @@ vim.g.acp_nvim_config = {
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
 - `:AcpOutputLocations` opens local file references from the current output with source previews
 - `:AcpOutputQuickfix` sends local file references from the current output to quickfix
+- `:AcpOutputProblems` opens transcript errors and stderr as native diagnostics in the location list
 - `:AcpDiagnostics` opens a picker for source-buffer diagnostics
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
@@ -156,6 +158,7 @@ In the prompt buffer:
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
 - `<leader>ag` opens output file references
+- `<leader>ae` opens output errors/stderr in the location list
 - `<leader>ad` opens source-buffer diagnostics
 - `<leader>af` opens the current session's changed files in quickfix
 - `<leader>a/` opens advertised ACP slash commands
@@ -179,6 +182,7 @@ In the output buffer:
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
 - `<leader>ag` opens output file references
+- `<leader>ae` opens output errors/stderr in the location list
 - `<leader>ak` opens the ACP action palette
 - `<leader>az` toggles the fold under the cursor
 
