@@ -122,6 +122,8 @@ test("setup registers public user commands", function()
 		"AcpDefinitionsQuickfix",
 		"AcpImplementations",
 		"AcpImplementationsQuickfix",
+		"AcpTypeDefinitions",
+		"AcpTypeDefinitionsQuickfix",
 		"AcpSymbols",
 		"AcpSymbolsQuickfix",
 		"AcpTreeSitter",
@@ -1202,6 +1204,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		ok(prompt_actions_text:find("References quickfix", 1, true))
 		ok(prompt_actions_text:find("Definitions quickfix", 1, true))
 		ok(prompt_actions_text:find("Implementations quickfix", 1, true))
+		ok(prompt_actions_text:find("Type definitions quickfix", 1, true))
 		ok(prompt_actions_text:find("Symbols quickfix", 1, true))
 		ok(prompt_actions_text:find("Search output", 1, true))
 		ok(prompt_actions_text:find("Output map", 1, true))
@@ -2009,6 +2012,7 @@ test("actions command opens a session action palette", function()
 		local references_quickfix = false
 		local definitions_quickfix = false
 		local implementations_quickfix = false
+		local type_definitions_quickfix = false
 		local symbols_quickfix = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
@@ -2045,6 +2049,9 @@ test("actions command opens a session action palette", function()
 			if line:find("Implementations quickfix", 1, true) then
 				implementations_quickfix = true
 			end
+			if line:find("Type definitions quickfix", 1, true) then
+				type_definitions_quickfix = true
+			end
 			if line:find("Symbols quickfix", 1, true) then
 				symbols_quickfix = true
 			end
@@ -2063,6 +2070,7 @@ test("actions command opens a session action palette", function()
 		ok(references_quickfix, "action palette should include references quickfix")
 		ok(definitions_quickfix, "action palette should include definitions quickfix")
 		ok(implementations_quickfix, "action palette should include implementations quickfix")
+		ok(type_definitions_quickfix, "action palette should include type definitions quickfix")
 		ok(symbols_quickfix, "action palette should include symbols quickfix")
 		ok(close_session, "action palette should include close session")
 
@@ -2136,6 +2144,7 @@ test("chat marks captured source ranges and clears them on close", function()
 		ok(actions_text:find("References quickfix", 1, true))
 		ok(actions_text:find("Definitions quickfix", 1, true))
 		ok(actions_text:find("Implementations quickfix", 1, true))
+		ok(actions_text:find("Type definitions quickfix", 1, true))
 		ok(actions_text:find("Symbols quickfix", 1, true))
 		ok(actions_text:find("Search output", 1, true))
 		ok(actions_text:find("Output map", 1, true))
@@ -2789,6 +2798,104 @@ test("implementations command drafts selected LSP implementation context", funct
 		ok(prompt:find("Implementation:", 1, true))
 		ok(prompt:find("Selection: lines 3-3", 1, true))
 		ok(prompt:find("function Impl:run()", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.fn.delete(path)
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("type definitions command drafts selected LSP type definition context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	local path = vim.fn.tempname() .. ".lua"
+	vim.api.nvim_buf_set_name(source_buf, path)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"---@class Person",
+		"---@field name string",
+		"local person = get_person()",
+		"print(person.name)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 3, 6 })
+
+	local uri = vim.uri_from_bufnr(source_buf)
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/typeDefinition")
+		eq(params.position.line, 2)
+		eq(params.position.character, 6)
+		callback({
+			[1] = {
+				result = {
+					uri = uri,
+					range = {
+						start = { line = 0, character = 10 },
+						["end"] = { line = 0, character = 16 },
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpTypeDefinitions")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-type-definitions")
+
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local type_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(type_qflist.title:find("ACP type definitions", 1, true))
+		eq(#type_qflist.items, 1)
+		eq(type_qflist.items[1].bufnr, source_buf)
+		eq(type_qflist.items[1].lnum, 1)
+		eq(type_qflist.items[1].col, 11)
+		ok(type_qflist.items[1].text:find("TYPE DEFINITION", 1, true))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after type definitions quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpTypeDefinitionsQuickfix")
+		type_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(type_qflist.title:find("ACP type definitions", 1, true))
+		eq(#type_qflist.items, 1)
+		eq(type_qflist.items[1].lnum, 1)
+		eq(type_qflist.items[1].col, 11)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible before type definition draft")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpTypeDefinitions")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-type-definitions")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP type definition as context.", 1, true))
+		ok(prompt:find("Type definition:", 1, true))
+		ok(prompt:find("Selection: lines 1-1", 1, true))
+		ok(prompt:find("---@class Person", 1, true))
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all

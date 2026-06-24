@@ -2342,6 +2342,12 @@ local function prompt_action_items()
 	add("Implementations quickfix", "Send source-buffer LSP implementations to quickfix", ":AcpImplementationsQuickfix", "LSP", function()
 		M.open_implementations_quickfix()
 	end)
+	add("Type definitions", "Pick LSP type definitions as focused context", "<leader>aT", "LSP", function()
+		M.open_type_definitions()
+	end)
+	add("Type definitions quickfix", "Send source-buffer LSP type definitions to quickfix", ":AcpTypeDefinitionsQuickfix", "LSP", function()
+		M.open_type_definitions_quickfix()
+	end)
 	add("Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 		M.open_symbols()
 	end)
@@ -2443,7 +2449,7 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "")
 	table.insert(lines, "Context Sources")
 	table.insert(lines, "- Source selection and cursor context")
-	table.insert(lines, "- LSP diagnostics, code actions, hover, references, definitions, implementations, symbols")
+	table.insert(lines, "- LSP diagnostics, code actions, hover, references, definitions, implementations, type definitions, symbols")
 	table.insert(lines, "- Tree-sitter nodes around the source cursor")
 	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
 
@@ -2748,6 +2754,20 @@ local lsp_location_specs = {
 		render_error = "Failed to render LSP implementation context",
 		unavailable = "Neovim LSP implementation requests are unavailable",
 		unsupported = "No attached LSP client supports implementations",
+	},
+	type_definition = {
+		method = "textDocument/typeDefinition",
+		plural = "type definitions",
+		noun = "Type definition",
+		label = "TYPE DEFINITION",
+		picker_title = "ACP Type Definitions",
+		filetype = "acp-type-definitions",
+		name_suffix = "type-definitions",
+		instruction = "Use this LSP type definition as context.",
+		range_error = "LSP type definition has no range",
+		render_error = "Failed to render LSP type definition context",
+		unavailable = "Neovim LSP type-definition requests are unavailable",
+		unsupported = "No attached LSP client supports type definitions",
 	},
 }
 
@@ -3240,6 +3260,9 @@ local function register_keymaps(state)
 	local open_implementations = function()
 		M.open_implementations()
 	end
+	local open_type_definitions = function()
+		M.open_type_definitions()
+	end
 	local open_symbols = function()
 		M.open_symbols()
 	end
@@ -3281,6 +3304,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aR", open_references_quickfix, { buffer = bufnr, desc = "Open ACP LSP references quickfix" })
 		vim.keymap.set("n", "<leader>aG", open_definitions, { buffer = bufnr, desc = "Open ACP LSP definitions" })
 		vim.keymap.set("n", "<leader>aI", open_implementations, { buffer = bufnr, desc = "Open ACP LSP implementations" })
+		vim.keymap.set("n", "<leader>aT", open_type_definitions, { buffer = bufnr, desc = "Open ACP LSP type definitions" })
 		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
 		vim.keymap.set("n", "<leader>aL", open_symbols_quickfix, { buffer = bufnr, desc = "Open ACP LSP symbols quickfix" })
 		vim.keymap.set("n", "<leader>at", open_treesitter, { buffer = bufnr, desc = "Open ACP Tree-sitter nodes" })
@@ -3582,6 +3606,14 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpImplementationsQuickfix", function()
 		M.open_implementations_quickfix()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpTypeDefinitions", function()
+		M.open_type_definitions()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpTypeDefinitionsQuickfix", function()
+		M.open_type_definitions_quickfix()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpSymbols", function()
@@ -4018,6 +4050,12 @@ local function action_palette_items(state)
 		add_action(items, "Implementations quickfix", "Send source-buffer LSP implementations to quickfix", ":AcpImplementationsQuickfix", "LSP", function()
 			M.open_implementations_quickfix()
 		end)
+		add_action(items, "Type definitions", "Pick LSP type definitions as focused context", "<leader>aT", "LSP", function()
+			M.open_type_definitions()
+		end)
+		add_action(items, "Type definitions quickfix", "Send source-buffer LSP type definitions to quickfix", ":AcpTypeDefinitionsQuickfix", "LSP", function()
+			M.open_type_definitions_quickfix()
+		end)
 		add_action(items, "Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 			M.open_symbols()
 		end)
@@ -4244,6 +4282,14 @@ local function source_action_items(state)
 	add("Implementations quickfix", "Send LSP implementations from the source cursor to quickfix", ":AcpImplementationsQuickfix", "LSP", function()
 		focus_session(state)
 		M.open_implementations_quickfix()
+	end)
+	add("Type definitions", "Pick LSP type definitions from the source cursor", "<leader>aT", "LSP", function()
+		focus_session(state)
+		M.open_type_definitions()
+	end)
+	add("Type definitions quickfix", "Send LSP type definitions from the source cursor to quickfix", ":AcpTypeDefinitionsQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_type_definitions_quickfix()
 	end)
 	add("Symbols", "Pick LSP document symbols from the source buffer", "<leader>al", "LSP", function()
 		focus_session(state)
@@ -5689,6 +5735,44 @@ function M.open_implementations_quickfix()
 	end
 
 	open_lsp_location_quickfix(state, lsp_location_specs.implementation)
+end
+
+function M.open_type_definitions()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading type definitions")
+	end
+	local spec = lsp_location_specs.type_definition
+	request_lsp_locations(state.source, spec.method, function(type_definition_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_lsp_location_picker(state, spec, type_definition_list)
+	end, {
+		unavailable = spec.unavailable,
+		unsupported = spec.unsupported,
+	})
+end
+
+function M.open_type_definitions_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_lsp_location_quickfix(state, lsp_location_specs.type_definition)
 end
 
 function M.open_symbols()
