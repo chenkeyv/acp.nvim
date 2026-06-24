@@ -605,6 +605,38 @@ test("output dashboard and section helpers are rendered", function()
 	eq(output_items[3].line, 6)
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 1).kind, "code")
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 6, -1).kind, "code")
+	local current_problem = acp_output.current_output_item({
+		"Status: error: failed",
+		"Agent",
+		"```lua",
+		"print(1)",
+		"```",
+		ref_line,
+	}, 1, 0, {})
+	eq(current_problem.kind, "problem")
+	eq(current_problem.index, 1)
+	eq(current_problem.total, 3)
+	local current_code = acp_output.current_output_item({
+		"Status: error: failed",
+		"Agent",
+		"```lua",
+		"print(1)",
+		"```",
+		ref_line,
+	}, 4, 0, {})
+	eq(current_code.kind, "code")
+	eq(current_code.index, 2)
+	local current_reference = acp_output.current_output_item({
+		"Status: error: failed",
+		"Agent",
+		"```lua",
+		"print(1)",
+		"```",
+		ref_line,
+	}, 6, ref_line:find(ref_file, 1, true) - 1, {})
+	eq(current_reference.kind, "reference")
+	eq(current_reference.index, 3)
+	ok(acp_output.window_title({ id = 7, adapter = "test" }, { current_item = current_code }):find("item 2/3 CODE", 1, true))
 	local problem_items = acp_output.problem_diagnostics({
 		"Status: error: failed to start session",
 		"",
@@ -1546,8 +1578,11 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.cmd("AcpOutputNextItem")
 		local item_line = vim.api.nvim_win_get_cursor(output_win)[1]
 		eq(vim.api.nvim_buf_get_lines(output_buf, item_line - 1, item_line, false)[1], "```lua")
+		ok(vim.wo[output_win].winbar:find("item 2/", 1, true))
+		ok(vim.wo[output_win].winbar:find("CODE", 1, true))
 		vim.cmd("AcpOutputNextItem")
 		eq(vim.api.nvim_win_get_cursor(output_win)[1], ref_line)
+		ok(vim.wo[output_win].winbar:find("REFERENCE", 1, true))
 		vim.cmd("AcpOutputPrevItem")
 		item_line = vim.api.nvim_win_get_cursor(output_win)[1]
 		eq(vim.api.nvim_buf_get_lines(output_buf, item_line - 1, item_line, false)[1], "```lua")

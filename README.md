@@ -17,7 +17,7 @@ This plugin provides an editor-native ACP chat surface:
 - animated dashboard activity badge with run status and live transcript counts
 - live transcript metrics for sections, code blocks, source locations, and changes
 - output-visible run status for active prompts, tools, and completion
-- live output winbar/title with status, model, context, and changed-file counts
+- live output winbar/title with status, model, context, item position, and changed-file counts
 - cursor-aware output breadcrumb showing the active transcript section
 - cursor-aware current-section highlighting in the output buffer
 - searchable output transcript picker with context previews and jump-to-line navigation

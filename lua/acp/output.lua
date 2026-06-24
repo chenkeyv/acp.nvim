@@ -174,6 +174,21 @@ local function title_parts(state, opts)
 	if opts.change_count and opts.change_count > 0 then
 		table.insert(parts, ("%d change(s)"):format(opts.change_count))
 	end
+	if opts.current_item then
+		local item_label = clean(opts.current_item.label) or opts.current_item.kind or "item"
+		if #item_label > 36 then
+			item_label = item_label:sub(1, 33) .. "..."
+		end
+		table.insert(
+			parts,
+			("item %d/%d %s: %s"):format(
+				opts.current_item.index or 1,
+				opts.current_item.total or 1,
+				(opts.current_item.kind or "item"):upper(),
+				item_label
+			)
+		)
+	end
 	if opts.current_section then
 		local section_title = clean(opts.current_section.title) or opts.current_section.kind or "section"
 		if #section_title > 36 then
@@ -937,6 +952,56 @@ function M.problem_diagnostic_at(lines, lnum)
 	for _, item in ipairs(M.problem_diagnostics(lines)) do
 		if item.lnum == target then
 			return item
+		end
+	end
+	return nil
+end
+
+function M.current_output_item(lines, lnum, col, opts)
+	opts = opts or {}
+	lines = lines or {}
+	local line_number = math.max(1, math.min(tonumber(lnum) or 1, #lines))
+	local target
+
+	local reference = M.file_reference_at(lines, line_number, col, { cwd = opts.cwd })
+	if reference then
+		target = {
+			kind = "reference",
+			line = reference.source_line or line_number,
+			col = reference.source_col or 1,
+		}
+	else
+		local block = M.code_block_at(lines, line_number)
+		if block then
+			target = {
+				kind = "code",
+				line = block.start_line or line_number,
+				col = 1,
+			}
+		elseif M.problem_diagnostic_at(lines, line_number) then
+			target = {
+				kind = "problem",
+				line = line_number,
+				col = 1,
+			}
+		end
+	end
+
+	if not target then
+		return nil
+	end
+
+	local items = M.output_items(lines, opts)
+	for index, item in ipairs(items) do
+		if item.kind == target.kind and item.line == target.line and item.col == target.col then
+			return {
+				index = index,
+				total = #items,
+				kind = item.kind,
+				line = item.line,
+				col = item.col,
+				label = item.label,
+			}
 		end
 	end
 	return nil
