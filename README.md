@@ -12,6 +12,7 @@ This plugin provides an editor-native ACP chat surface:
 - source preview windows for diagnostics, symbols, references, code actions, and Tree-sitter pickers
 - plain output buffer for streamed agent responses
 - visual output dashboard with source, model, context window, and key workflow hints
+- live transcript metrics for sections, code blocks, source locations, and changes
 - output-visible run status for active prompts, tools, and completion
 - live output winbar/title with status, model, context, and changed-file counts
 - cursor-aware output breadcrumb showing the active transcript section

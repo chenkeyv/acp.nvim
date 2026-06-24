@@ -171,6 +171,8 @@ local function enable_output_language_injection(state)
 	vim.b[state.output_buf].acp_language_injection = ok and "treesitter-markdown" or "fence-detection"
 end
 
+local refresh_output_dashboard
+
 local function set_output_lines(state, start, stop, lines)
 	if not valid_buf(state.output_buf) then
 		return
@@ -181,6 +183,9 @@ local function set_output_lines(state, start, stop, lines)
 	vim.bo[state.output_buf].modifiable = false
 	refresh_output_highlights(state)
 	save_output_history(state)
+	if refresh_output_dashboard and not state.refreshing_output_dashboard and start ~= 0 then
+		refresh_output_dashboard(state)
+	end
 end
 
 local function set_panel_lines(bufnr, lines)
@@ -242,15 +247,23 @@ local function refresh_source_marks(state)
 	end
 end
 
-local function refresh_output_dashboard(state)
+function refresh_output_dashboard(state)
 	if not valid_buf(state.output_buf) then
 		return
 	end
 
-	local lines = output.dashboard_lines(state)
-	local old_count = state.output_dashboard_lines or #lines
+	local old_count = state.output_dashboard_lines or #output.dashboard_lines(state)
+	local current_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local stats = output.transcript_stats(current_lines, {
+		start_line = old_count + 1,
+		cwd = state.cwd,
+		change_count = changes.count(state),
+	})
+	local lines = output.dashboard_lines(state, { stats = stats })
 	state.output_dashboard_lines = #lines
+	state.refreshing_output_dashboard = true
 	set_output_lines(state, 0, old_count, lines)
+	state.refreshing_output_dashboard = false
 end
 
 local function refresh_output_chrome(state)

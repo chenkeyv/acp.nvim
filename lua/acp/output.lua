@@ -151,12 +151,27 @@ function M.winbar(state, opts)
 	return M.window_title(state, opts):gsub("%%", "%%%%")
 end
 
-function M.dashboard_lines(state)
+local function summary_label(stats)
+	stats = stats or {}
+	return ("Transcript: %d section%s | %d code | %d loc%s | %d change%s"):format(
+		stats.sections or 0,
+		stats.sections == 1 and "" or "s",
+		stats.code_blocks or 0,
+		stats.locations or 0,
+		stats.locations == 1 and "" or "s",
+		stats.changes or 0,
+		stats.changes == 1 and "" or "s"
+	)
+end
+
+function M.dashboard_lines(state, opts)
+	opts = opts or {}
 	return {
 		("ACP: %s"):format(clean(state and state.adapter) or "?"),
 		("Session: #%s | Mode: %s"):format(tostring(state and state.id or "?"), clean(state and state.mode) or "?"),
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
+		summary_label(opts.stats),
 		"Keys: <leader>ax search | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>ak actions",
 		"",
 	}
@@ -197,7 +212,7 @@ function M.line_style(line)
 	if line:match("^ACP:") then
 		return { line_hl_group = "AcpOutputHeader", badge = " SESSION ", badge_hl = "AcpBadge" }
 	end
-	if line:match("^Session:") or line:match("^Model:") or line:match("^Source:") then
+	if line:match("^Session:") or line:match("^Model:") or line:match("^Source:") or line:match("^Transcript:") then
 		return { line_hl_group = "AcpOutputMeta" }
 	end
 	if line:match("^Keys:") then
@@ -488,6 +503,21 @@ function M.file_reference_lines(references)
 	table.insert(lines, "")
 	table.insert(lines, "Press <Enter> to jump, / to filter, or q/<Esc> to close.")
 	return lines, line_references
+end
+
+function M.transcript_stats(lines, opts)
+	opts = opts or {}
+	local body = {}
+	for index = opts.start_line or 1, #(lines or {}) do
+		table.insert(body, lines[index])
+	end
+
+	return {
+		sections = #M.sections(body),
+		code_blocks = #M.code_blocks(body),
+		locations = #M.file_references(body, { cwd = opts.cwd }),
+		changes = opts.change_count or 0,
+	}
 end
 
 function M.transcript_entries(lines, opts)
