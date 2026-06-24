@@ -478,6 +478,11 @@ test("output dashboard and section helpers are rendered", function()
 	eq(section_summaries[3].label, " 1L | 2w ")
 	eq(section_summaries[6].label, " 3L | 1 code ")
 	eq(section_summaries[10], nil)
+	local timeline = acp_output.section_timeline({ "ACP: test", "", "You", "hello", "Agent", "world" })
+	eq(timeline[3].index, 2)
+	eq(timeline[3].total, 3)
+	eq(timeline[3].progress, " 50%")
+	ok(timeline[3].label:find("2/3", 1, true))
 	local outline, line_sections = acp_output.outline_lines(sections)
 	local outline_text = table.concat(outline, "\n")
 	ok(outline_text:find("ACP Output Outline", 1, true))
@@ -1247,6 +1252,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local user_separator = false
 		local agent_separator = false
 		local user_summary = false
+		local user_timeline = false
 		for _, mark in ipairs(marks) do
 			user_sign = user_sign or (mark[4] and mark[4].sign_text == "U>")
 			agent_sign = agent_sign or (mark[4] and mark[4].sign_text == "A>")
@@ -1257,6 +1263,9 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 				if chunk[1] and chunk[1]:find("1L | 2w", 1, true) then
 					user_summary = true
 				end
+				if mark[4] and mark[4].sign_text == "U>" and chunk[1] and chunk[1]:find("2/4", 1, true) then
+					user_timeline = true
+				end
 			end
 		end
 		ok(user_sign, "output user sign should be rendered")
@@ -1265,6 +1274,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(user_separator, "output user separator should be rendered")
 		ok(agent_separator, "output agent separator should be rendered")
 		ok(user_summary, "output section summary should be rendered")
+		ok(user_timeline, "output section timeline should be rendered")
 		local updated_dashboard = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, 7, false), "\n")
 		ok(updated_dashboard:find("Transcript: 3 sections | 0 code | 0 locs | 0 changes", 1, true))
 		local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")

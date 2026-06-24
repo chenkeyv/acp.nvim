@@ -274,6 +274,7 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpOutputReference", { link = "Underlined", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputReferenceBadge", { fg = "#1a1b26", bg = "#2ac3de", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpSectionStats", { fg = "#1a1b26", bg = "#565f89", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputTimeline", { fg = "#c0caf5", bg = "#3b4261", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentItem", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputActivity", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
@@ -629,6 +630,26 @@ function M.section_summaries(lines)
 	end
 
 	return summaries
+end
+
+function M.section_timeline(lines)
+	local markers = {}
+	local sections = M.sections(lines)
+	local count = #sections
+
+	for index, section in ipairs(sections) do
+		local progress = position_percent(section.line, section.total_lines) or "   ?"
+		markers[section.line] = {
+			index = index,
+			total = count,
+			line = section.line,
+			kind = section.kind,
+			progress = progress,
+			label = (" %d/%d %s "):format(index, count, progress),
+		}
+	end
+
+	return markers
 end
 
 function M.outline_lines(sections, opts)

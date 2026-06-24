@@ -119,6 +119,7 @@ local function refresh_output_highlights(state)
 		state.output_animation_frame
 	)
 	local section_summaries = output.section_summaries(lines)
+	local section_timeline = output.section_timeline(lines)
 	for index, line in ipairs(lines) do
 		local style = output.line_style(line)
 		if style then
@@ -129,9 +130,13 @@ local function refresh_output_highlights(state)
 				opts.line_hl_group = style.line_hl_group
 			end
 			local summary = section_summaries[index]
+			local timeline = section_timeline[index]
 			local header_activity = index == 1 and line:match("^ACP:") and activity_badge
-			if style.badge or summary or header_activity then
+			if style.badge or summary or timeline or header_activity then
 				opts.virt_text = {}
+				if timeline then
+					table.insert(opts.virt_text, { timeline.label, "AcpOutputTimeline" })
+				end
 				if summary then
 					table.insert(opts.virt_text, { summary.label, "AcpSectionStats" })
 				end
