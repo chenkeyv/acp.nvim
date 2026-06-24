@@ -367,6 +367,10 @@ test("output dashboard and section helpers are rendered", function()
 	eq(current.title, "Prompt")
 	eq(current.line, 3)
 	ok(acp_output.window_title({ id = 7, adapter = "test" }, { current_section = current }):find("at USER: Prompt", 1, true))
+	local range = acp_output.section_range({ "ACP: test", "", "You", "hello", "", "Agent", "world" }, 4)
+	eq(range.kind, "USER")
+	eq(range.line1, 3)
+	eq(range.line2, 5)
 	local outline, line_sections = acp_output.outline_lines(sections)
 	local outline_text = table.concat(outline, "\n")
 	ok(outline_text:find("ACP Output Outline", 1, true))
@@ -995,6 +999,16 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local line = vim.api.nvim_win_get_cursor(output_win)[1]
 		eq(vim.api.nvim_buf_get_lines(output_buf, line - 1, line, false)[1], "You")
 		ok(vim.wo[output_win].winbar:find("at USER: Prompt", 1, true))
+		local current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_section")
+		local current_marks = vim.api.nvim_buf_get_extmarks(output_buf, current_ns, 0, -1, { details = true })
+		local current_section_highlight = false
+		for _, mark in ipairs(current_marks) do
+			if mark[2] == line - 1 and mark[4] and mark[4].line_hl_group == "AcpCurrentSection" then
+				current_section_highlight = true
+				break
+			end
+		end
+		ok(current_section_highlight, "current output section should be highlighted")
 
 		vim.cmd("AcpOutputSearch")
 		local picker_buf = vim.api.nvim_get_current_buf()

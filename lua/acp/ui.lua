@@ -56,6 +56,7 @@ local sessions = {}
 local next_session_id = 1
 local session_panel_lines = {}
 local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
+local output_current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_section")
 local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 local session_panel_ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
 local source_ns = vim.api.nvim_create_namespace("acp.nvim.source")
@@ -143,6 +144,31 @@ local function refresh_output_highlights(state)
 	end
 end
 
+local function refresh_current_output_section(state)
+	if not valid_buf(state.output_buf) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(state.output_buf, output_current_ns, 0, -1)
+	if not valid_win(state.output_win) or vim.api.nvim_win_get_buf(state.output_win) ~= state.output_buf then
+		return
+	end
+
+	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local range = output.section_range(lines, cursor[1])
+	if not range then
+		return
+	end
+
+	for line = range.line1, range.line2 do
+		pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_current_ns, line - 1, 0, {
+			line_hl_group = "AcpCurrentSection",
+			priority = 10,
+		})
+	end
+end
+
 local function save_output_history(state)
 	if not valid_buf(state.output_buf) then
 		return
@@ -190,6 +216,7 @@ local function set_output_lines(state, start, stop, lines)
 	vim.api.nvim_buf_set_lines(state.output_buf, start, stop, false, lines)
 	vim.bo[state.output_buf].modifiable = false
 	refresh_output_highlights(state)
+	refresh_current_output_section(state)
 	save_output_history(state)
 	if refresh_output_dashboard and not state.refreshing_output_dashboard and start ~= 0 then
 		refresh_output_dashboard(state)
@@ -285,6 +312,7 @@ local function refresh_output_chrome(state)
 		local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 		current_section = output.current_section(lines, cursor[1])
 	end
+	refresh_current_output_section(state)
 	local title = output.window_title(state, {
 		change_count = changes.count(state),
 		current_section = current_section,
@@ -476,6 +504,7 @@ local function open_output_search(state)
 			view.close()
 			vim.api.nvim_set_current_win(winid)
 			pcall(vim.api.nvim_win_set_cursor, winid, { entry.line, 0 })
+			refresh_output_chrome(state)
 		end,
 	})
 	return true

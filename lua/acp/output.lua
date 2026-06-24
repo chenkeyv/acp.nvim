@@ -200,6 +200,7 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpGhostText", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpCodeFence", { fg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpInjectedLanguage", { fg = "#1a1b26", bg = "#7aa2f7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
 end
 
 function M.line_style(line)
@@ -389,6 +390,30 @@ function M.current_section(lines, lnum)
 			}
 		end
 	end
+end
+
+function M.section_range(lines, lnum)
+	lines = lines or {}
+	local section = M.current_section(lines, lnum)
+	if not section then
+		return nil
+	end
+
+	local line2 = #lines
+	for index = section.line + 1, #lines do
+		if M.is_section(lines[index]) then
+			line2 = index - 1
+			break
+		end
+	end
+
+	return {
+		line1 = section.line,
+		line2 = math.max(section.line, line2),
+		kind = section.kind,
+		title = section.title,
+		preview = section.preview,
+	}
 end
 
 function M.outline_lines(sections)
