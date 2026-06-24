@@ -9,6 +9,7 @@ local file_review = require("acp.file_review")
 local history = require("acp.history")
 local permission = require("acp.permission")
 local symbols = require("acp.symbols")
+local treesitter = require("acp.treesitter")
 local Connection = require("acp.connection").Connection
 
 local tests = {}
@@ -80,6 +81,7 @@ test("setup registers public user commands", function()
 		"AcpConfig",
 		"AcpCodeActions",
 		"AcpSymbols",
+		"AcpTreeSitter",
 		"AcpHistory",
 		"AcpRestore",
 		"AcpHistoryDraft",
@@ -89,6 +91,56 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("Tree-sitter nodes are collected and rendered for picker", function()
+	local root = {}
+	function root:type()
+		return "chunk"
+	end
+	function root:range()
+		return 0, 0, 4, 0
+	end
+
+	local child = {}
+	function child:type()
+		return "function_declaration"
+	end
+	function child:range()
+		return 1, 2, 3, 5
+	end
+	function child:parent()
+		return root
+	end
+
+	local original_treesitter = vim.treesitter
+	local original_get_node = original_treesitter and original_treesitter.get_node
+	vim.treesitter = vim.treesitter or {}
+	vim.treesitter.get_node = function()
+		return child
+	end
+
+	local node_list, err = treesitter.nodes(1, { 2, 0 })
+	if original_treesitter then
+		vim.treesitter.get_node = original_get_node
+	else
+		vim.treesitter = nil
+	end
+
+	eq(err, nil)
+	eq(#node_list, 2)
+	eq(node_list[1].type, "function_declaration")
+	eq(node_list[2].type, "chunk")
+	local line1, line2 = treesitter.range_lines(node_list[1])
+	eq(line1, 2)
+	eq(line2, 4)
+
+	local lines, line_nodes = treesitter.picker_lines(node_list)
+	local text = table.concat(lines, "\n")
+	ok(text:find("function_declaration lines 2-4", 1, true))
+	ok(text:find("  chunk lines 1-5", 1, true))
+	eq(line_nodes[3].type, "function_declaration")
+	eq(line_nodes[4].type, "chunk")
 end)
 
 test("LSP code actions are flattened and rendered for picker", function()
@@ -533,6 +585,72 @@ test("code actions command drafts selected LSP action context", function()
 
 	vim.lsp.buf_request_all = original_buf_request_all
 	vim.diagnostic.reset(ns, source_buf)
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("tree-sitter command drafts selected node context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local function add(a, b)",
+		"  return a + b",
+		"end",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+	local node = {}
+	function node:type()
+		return "function_declaration"
+	end
+	function node:range()
+		return 0, 0, 2, 3
+	end
+	local original_treesitter = vim.treesitter
+	local original_get_node = original_treesitter and original_treesitter.get_node
+	local original_get_node_text = original_treesitter and original_treesitter.get_node_text
+	vim.treesitter = vim.treesitter or {}
+	vim.treesitter.get_node = function()
+		return node
+	end
+	vim.treesitter.get_node_text = function()
+		return "local function add(a, b)\n  return a + b\nend"
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpTreeSitter")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-treesitter")
+
+		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this Tree-sitter node as context: function_declaration.", 1, true))
+		ok(prompt:find("Selection: lines 1-3", 1, true))
+		ok(prompt:find("Tree-sitter text:", 1, true))
+		ok(prompt:find("local function add", 1, true))
+	end)
+
+	if original_treesitter then
+		vim.treesitter.get_node = original_get_node
+		vim.treesitter.get_node_text = original_get_node_text
+	else
+		vim.treesitter = nil
+	end
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
 	end

@@ -8,6 +8,7 @@ local diagnostics = require("acp.diagnostics")
 local history = require("acp.history")
 local metadata = require("acp.metadata")
 local symbols = require("acp.symbols")
+local treesitter = require("acp.treesitter")
 
 local M = {}
 
@@ -574,6 +575,31 @@ local function code_action_prompt(source, action)
 	return table.concat(lines, "\n")
 end
 
+local function treesitter_prompt(source, item)
+	local line1, line2 = treesitter.range_lines(item)
+	if not line1 then
+		return nil
+	end
+
+	local node_source = context.capture(source.bufnr, source.winid, {
+		line1 = line1,
+		line2 = line2,
+	})
+	local rendered_context = context.render(node_source, {
+		treesitter_text_lines = 40,
+		selection_limit = 120,
+	})
+	if not rendered_context then
+		return nil
+	end
+
+	return table.concat({
+		("Use this Tree-sitter node as context: %s."):format(item.type or "node"),
+		"",
+		rendered_context,
+	}, "\n")
+end
+
 local function escape_tabline(text)
 	return tostring(text):gsub("%%", "%%%%")
 end
@@ -940,6 +966,9 @@ local function register_keymaps(state)
 	local open_symbols = function()
 		M.open_symbols()
 	end
+	local open_treesitter = function()
+		M.open_treesitter()
+	end
 	local previous_prompt = function()
 		M.prompt_previous()
 	end
@@ -955,6 +984,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
 		vim.keymap.set("n", "<leader>aa", open_code_actions, { buffer = bufnr, desc = "Open ACP LSP code actions" })
 		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
+		vim.keymap.set("n", "<leader>at", open_treesitter, { buffer = bufnr, desc = "Open ACP Tree-sitter nodes" })
 		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
 		vim.keymap.set("n", "<leader>an", next_prompt, { buffer = bufnr, desc = "Next ACP prompt" })
 	end
@@ -1107,6 +1137,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpSymbols", function()
 		M.open_symbols()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpTreeSitter", function()
+		M.open_treesitter()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpHistory", function()
@@ -1860,6 +1894,58 @@ local function open_symbol_picker(state, symbol_list)
 	return true
 end
 
+local function open_treesitter_picker(state, node_list)
+	if not node_list or #node_list == 0 then
+		notify("No Tree-sitter nodes found for the source cursor", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_nodes = treesitter.picker_lines(node_list)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/treesitter"):format(state.adapter, state.id))
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-treesitter",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+
+	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
+	vim.wo[winid].cursorline = true
+	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
+
+	vim.keymap.set("n", "<CR>", function()
+		local item = line_nodes[vim.api.nvim_win_get_cursor(winid)[1]]
+		if not item then
+			return
+		end
+		local prompt = treesitter_prompt(state.source, item)
+		if not prompt then
+			notify("Failed to render Tree-sitter node context", vim.log.levels.ERROR)
+			return
+		end
+		close_picker(winid, bufnr)
+		append_input_text(state, prompt)
+		if not state.busy then
+			set_run_status(state, ("tree-sitter context: %s"):format(item.type or "node"))
+		end
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
+	end, { buffer = bufnr, nowait = true, desc = "Add ACP Tree-sitter context" })
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			close_picker(winid, bufnr)
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP Tree-sitter nodes" })
+	end
+
+	return true
+end
+
 function M.select_session()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local line = vim.api.nvim_win_get_cursor(0)[1]
@@ -2013,6 +2099,24 @@ function M.open_symbols()
 		end
 		open_symbol_picker(state, symbol_list)
 	end)
+end
+
+function M.open_treesitter()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local node_list, err = treesitter.nodes(state.source.bufnr, state.source.cursor or { 1, 0 })
+	if err then
+		notify(err, vim.log.levels.WARN)
+		return
+	end
+	open_treesitter_picker(state, node_list)
 end
 
 function M.completefunc(findstart, base)
