@@ -13,11 +13,67 @@ local filetype_aliases = {
 	zsh = "sh",
 }
 
+local reference_token_pattern = "[^%s%[%]%(%){}<>,;]+:%d+:?%d*"
+
 local function clean(value)
 	if value == nil or value == "" or value == vim.NIL then
 		return nil
 	end
 	return tostring(value):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function normalize_path(path)
+	if not path or path == "" then
+		return nil
+	end
+	local expanded = vim.fn.expand(path)
+	local absolute = vim.fn.fnamemodify(expanded, ":p")
+	return absolute ~= "" and absolute or nil
+end
+
+local function resolve_reference_path(raw_path, cwd)
+	if not raw_path or raw_path == "" or raw_path:match("^%d+$") or raw_path:match("^%a[%w+.-]*://") then
+		return nil
+	end
+
+	local path = raw_path
+	if not path:match("^/") and not path:match("^~") then
+		path = vim.fs.joinpath(cwd or vim.fn.getcwd(), path)
+	end
+
+	local absolute = normalize_path(path)
+	if not absolute or vim.fn.filereadable(absolute) ~= 1 then
+		return nil
+	end
+	return absolute
+end
+
+local function display_path(path, cwd)
+	local normalized_cwd = normalize_path(cwd or vim.fn.getcwd())
+	if normalized_cwd and path:sub(1, #normalized_cwd) == normalized_cwd then
+		local relative = path:sub(#normalized_cwd + 1):gsub("^/", "")
+		if relative ~= "" then
+			return relative
+		end
+	end
+	return vim.fn.fnamemodify(path, ":~:.")
+end
+
+local function parse_reference_token(token)
+	token = token and token:gsub("^[`'\"%(%)%[%]{},;]+", ""):gsub("[`'\"%(%)%[%]{},;%.]+$", "")
+	if not token or token == "" or token:find("://", 1, true) then
+		return nil
+	end
+
+	local raw_path, line, column = token:match("^(.-):(%d+):(%d+)$")
+	if not raw_path then
+		raw_path, line = token:match("^(.-):(%d+)$")
+	end
+	if not raw_path or raw_path == "" then
+		return nil
+	end
+
+	return raw_path, tonumber(line), tonumber(column) or 1
 end
 
 local function format_count(value)
@@ -94,7 +150,7 @@ function M.dashboard_lines(state)
 		("Session: #%s | Mode: %s"):format(tostring(state and state.id or "?"), clean(state and state.mode) or "?"),
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
-		"Keys: [[/]] sections | za folds | <leader>av outline | <leader>ab code | <leader>af changes | <leader>ad diagnostics",
+		"Keys: [[/]] sections | za folds | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>af changes | <leader>ad diagnostics",
 		"",
 	}
 end
@@ -272,7 +328,7 @@ function M.ghost_text(state, lines, frame)
 		return "Ready - draft in the prompt buffer"
 	end
 
-	return "Idle - [[/]] sections, za folds, <leader>av outline, <leader>ab code"
+	return "Idle - [[/]] sections, za folds, <leader>av outline, <leader>ag locs, <leader>ab code"
 end
 
 function M.filetype_for_language(language)
@@ -356,6 +412,59 @@ function M.code_block_lines(blocks)
 	table.insert(lines, "")
 	table.insert(lines, "Press <Enter> to open a scratch buffer, / to filter, or q/<Esc> to close.")
 	return lines, line_blocks
+end
+
+function M.file_references(lines, opts)
+	opts = opts or {}
+	local cwd = opts.cwd or vim.fn.getcwd()
+	local limit = opts.limit or 120
+	local references = {}
+	local seen = {}
+
+	for source_line, line in ipairs(lines or {}) do
+		for token in tostring(line):gmatch(reference_token_pattern) do
+			local raw_path, target_line, column = parse_reference_token(token)
+			local path = resolve_reference_path(raw_path, cwd)
+			if path and target_line then
+				local key = ("%s:%d:%d"):format(path, target_line, column)
+				if not seen[key] then
+					seen[key] = true
+					table.insert(references, {
+						path = path,
+						display_path = display_path(path, cwd),
+						line = target_line,
+						column = column,
+						source_line = source_line,
+						source_text = clean(line),
+					})
+					if #references >= limit then
+						return references
+					end
+				end
+			end
+		end
+	end
+
+	return references
+end
+
+function M.file_reference_lines(references)
+	local lines = { "ACP Output Locations", "" }
+	local line_references = {}
+
+	for _, reference in ipairs(references or {}) do
+		local location = ("%s:%d:%d"):format(reference.display_path or reference.path or "?", reference.line or 1, reference.column or 1)
+		table.insert(lines, ("%4d  %s"):format(reference.source_line or 1, location))
+		line_references[#lines] = reference
+		if reference.source_text then
+			table.insert(lines, ("      %s"):format(reference.source_text:sub(1, 96)))
+			line_references[#lines] = reference
+		end
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Press <Enter> to jump, / to filter, or q/<Esc> to close.")
+	return lines, line_references
 end
 
 function M.fold_level(lines, lnum)

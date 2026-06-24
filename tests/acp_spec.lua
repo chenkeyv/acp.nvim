@@ -89,6 +89,7 @@ test("setup registers public user commands", function()
 		"AcpChanges",
 		"AcpOutput",
 		"AcpCodeBlocks",
+		"AcpOutputLocations",
 		"AcpDiagnostics",
 		"AcpCommands",
 		"AcpConfig",
@@ -337,6 +338,7 @@ test("output dashboard and section helpers are rendered", function()
 	ok(text:find("Model: test-model | Context: 1k", 1, true))
 	ok(text:find("Keys: [[/]] sections", 1, true))
 	ok(text:find("<leader>ab code", 1, true))
+	ok(text:find("<leader>ag locs", 1, true))
 
 	eq(acp_output.line_style("You").line_hl_group, "AcpUserHeader")
 	eq(acp_output.line_style("Status: error: failed").line_hl_group, "AcpStatusError")
@@ -383,6 +385,23 @@ test("output dashboard and section helpers are rendered", function()
 	ok(block_text:find("ACP Output Code Blocks", 1, true))
 	ok(block_text:find("lua", 1, true))
 	eq(line_blocks[3].language, "lua")
+
+	local ref_file = vim.fn.tempname() .. ".lua"
+	vim.fn.writefile({ "local one = 1", "local two = 2" }, ref_file)
+	local refs = acp_output.file_references({
+		("Check %s:2:7 for details."):format(ref_file),
+		"Ignore https://example.com:443 and missing-file.lua:3",
+	})
+	eq(#refs, 1)
+	eq(refs[1].path, vim.fn.fnamemodify(ref_file, ":p"))
+	eq(refs[1].line, 2)
+	eq(refs[1].column, 7)
+	local ref_picker, line_refs = acp_output.file_reference_lines(refs)
+	local ref_text = table.concat(ref_picker, "\n")
+	ok(ref_text:find("ACP Output Locations", 1, true))
+	ok(ref_text:find(":2:7", 1, true))
+	eq(line_refs[3].line, 2)
+	vim.fn.delete(ref_file)
 end)
 
 test("LSP references are flattened and rendered for picker", function()
@@ -826,6 +845,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 	local input_buf
 	local output_buf
 	local output_win
+	local location_buf
 	local original_notify = vim.notify
 	vim.notify = function() end
 	local passed, err = pcall(function()
@@ -937,11 +957,45 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(vim.bo[code_buf].filetype, "lua")
 		eq(table.concat(vim.api.nvim_buf_get_lines(code_buf, 0, -1, false), "\n"), "print('from acp')")
 		pcall(vim.cmd, "tabclose!")
+
+		vim.bo[output_buf].modifiable = true
+		vim.api.nvim_buf_set_lines(output_buf, -1, -1, false, {
+			"",
+			"See lua/acp/output.lua:1:1 for the output helpers.",
+		})
+		vim.bo[output_buf].modifiable = false
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd("AcpOutputLocations")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-output-locations")
+		local locations = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+		ok(locations:find("ACP Output Locations", 1, true))
+		ok(locations:find("lua/acp/output.lua:1:1", 1, true))
+		local location_preview = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local preview_bufnr = vim.api.nvim_win_get_buf(winid)
+			if preview_bufnr ~= picker_buf and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "lua" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
+				if preview:find("local M = {}", 1, true) then
+					location_preview = true
+					break
+				end
+			end
+		end
+		ok(location_preview, "output location picker should show source preview")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		location_buf = vim.api.nvim_get_current_buf()
+		ok(vim.api.nvim_buf_get_name(location_buf):find("lua/acp/output.lua", 1, true))
+		eq(vim.api.nvim_win_get_cursor(0)[1], 1)
 	end)
 
 	vim.notify = original_notify
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if location_buf and vim.api.nvim_buf_is_valid(location_buf) then
+		pcall(vim.api.nvim_buf_delete, location_buf, { force = true })
 	end
 	if vim.api.nvim_buf_is_valid(source_buf) then
 		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })

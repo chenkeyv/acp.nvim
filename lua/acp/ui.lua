@@ -381,6 +381,9 @@ local function open_output_outline(state)
 	return true
 end
 
+local file_reference_preview
+local jump_to_file_reference
+
 local function code_block_title(block)
 	return (" %s lines %d-%d "):format(block.language or "code", block.start_line or 1, block.end_line or 1)
 end
@@ -456,6 +459,44 @@ local function open_output_code_blocks(state)
 
 			view.close()
 			open_output_code_block_buffer(state, block)
+		end,
+	})
+	return true
+end
+
+local function open_output_locations(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local references = output.file_references(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), {
+		cwd = state.cwd,
+	})
+	if #references == 0 then
+		notify("No local file references found in the ACP output", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_references = output.file_reference_lines(references)
+	picker.open({
+		name = ("ACP://%s/%d/output-locations"):format(state.adapter, state.id),
+		filetype = "acp-output-locations",
+		lines = lines,
+		title = " ACP output locations ",
+		submit_desc = "Jump to ACP output location",
+		close_desc = "Close ACP output locations",
+		preview = function(row)
+			return file_reference_preview(line_references[row])
+		end,
+		on_submit = function(row, view)
+			local reference = line_references[row]
+			if not reference then
+				return
+			end
+
+			view.close()
+			jump_to_file_reference(reference)
 		end,
 	})
 	return true
@@ -839,6 +880,65 @@ local function source_preview(bufnr, range, title)
 		title = title or (" %s:%d "):format(path, line1),
 		cursor_line = line1 - start_line + 1,
 	}
+end
+
+function file_reference_preview(reference)
+	if not reference or not reference.path then
+		return nil
+	end
+
+	local bufnr = vim.fn.bufadd(reference.path)
+	if bufnr == 0 then
+		return nil
+	end
+	pcall(function()
+		vim.bo[bufnr].swapfile = false
+	end)
+	local loaded = pcall(vim.fn.bufload, bufnr)
+	if vim.bo[bufnr].filetype == "" and vim.filetype and vim.filetype.match then
+		local filetype = vim.filetype.match({ filename = reference.path })
+		if filetype then
+			vim.bo[bufnr].filetype = filetype
+		end
+	end
+	if loaded then
+		return source_preview(
+			bufnr,
+			{ line1 = reference.line or 1, line2 = reference.line or 1 },
+			(" %s:%d "):format(reference.display_path or reference.path, reference.line or 1)
+		)
+	end
+
+	local ok, lines = pcall(vim.fn.readfile, reference.path)
+	if not ok or #lines == 0 then
+		return nil
+	end
+	local line = math.max(1, math.min(reference.line or 1, #lines))
+	local start_line = math.max(1, line - 4)
+	local end_line = math.min(#lines, line + 4)
+	local preview = {}
+	for index = start_line, end_line do
+		table.insert(preview, lines[index])
+	end
+	return {
+		lines = preview,
+		filetype = (vim.filetype and vim.filetype.match and vim.filetype.match({ filename = reference.path })) or "text",
+		title = (" %s:%d "):format(reference.display_path or reference.path, reference.line or 1),
+		cursor_line = line - start_line + 1,
+	}
+end
+
+function jump_to_file_reference(reference)
+	if not reference or not reference.path then
+		return false
+	end
+
+	vim.cmd("noswapfile edit " .. vim.fn.fnameescape(reference.path))
+	local line_count = vim.api.nvim_buf_line_count(0)
+	local line = math.max(1, math.min(reference.line or 1, line_count))
+	local column = math.max(0, (reference.column or 1) - 1)
+	pcall(vim.api.nvim_win_set_cursor, 0, { line, column })
+	return true
 end
 
 local function source_range(source)
@@ -1442,6 +1542,9 @@ local function register_keymaps(state)
 	local open_code_blocks = function()
 		open_output_code_blocks(state)
 	end
+	local open_locations = function()
+		open_output_locations(state)
+	end
 	local open_diagnostics = function()
 		M.open_diagnostics()
 	end
@@ -1481,6 +1584,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 		vim.keymap.set("n", "<leader>av", open_output, { buffer = bufnr, desc = "Open ACP output outline" })
 		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
+		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
 		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
@@ -1646,6 +1750,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
 		M.open_code_blocks()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputLocations", function()
+		M.open_output_locations()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpDiagnostics", function()
@@ -1923,17 +2031,19 @@ function M.open(adapter_name, opts)
 	next_session_id = next_session_id + 1
 	local resolved_metadata = metadata.resolve_adapter(adapter)
 	local source = context.capture(vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win(), opts.source_range)
+	local cwd = vim.fn.getcwd()
 
 	local state = {
 		id = id,
 		adapter = adapter_name,
 		mode = opts.mode or config.default_mode,
 		title = ("ACP %s #%d"):format(adapter_name, id),
+		cwd = cwd,
 		model = resolved_metadata.model,
 		context_window = resolved_metadata.context_window,
 		connection = opts.connection or Connection.new({
 			adapter = adapter,
-			cwd = vim.fn.getcwd(),
+			cwd = cwd,
 		}),
 		source = source,
 		busy = false,
@@ -2011,6 +2121,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
 			M.open_code_blocks()
+		end)
+		add_action(items, "Output locations", "Preview and jump to file references in the transcript", "<leader>ag", "session", function()
+			M.open_output_locations()
 		end)
 		add_action(items, "Changed files", "Open files changed by this session in quickfix", "<leader>af", "session", function()
 			M.open_changes()
@@ -2712,6 +2825,15 @@ function M.open_code_blocks()
 	end
 
 	open_output_code_blocks(state)
+end
+
+function M.open_output_locations()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_locations(state)
 end
 
 function M.open_diagnostics()
