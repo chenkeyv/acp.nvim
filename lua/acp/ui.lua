@@ -15,6 +15,7 @@ local picker = require("acp.picker")
 local prompt_view = require("acp.prompt_view")
 local references = require("acp.references")
 local session_view = require("acp.session_view")
+local source_view = require("acp.source_view")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
 
@@ -57,6 +58,7 @@ local session_panel_lines = {}
 local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
 local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 local session_panel_ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
+local source_ns = vim.api.nvim_create_namespace("acp.nvim.source")
 
 local function notify(message, level)
 	vim.notify(message, level or vim.log.levels.INFO, { title = "ACP" })
@@ -74,6 +76,7 @@ local function define_highlights()
 	output.define_highlights()
 	prompt_view.define_highlights()
 	session_view.define_highlights()
+	source_view.define_highlights()
 end
 
 local function refresh_output_highlights(state)
@@ -208,6 +211,34 @@ local function refresh_session_panel_highlights(bufnr, styles)
 			opts.virt_text_pos = "right_align"
 		end
 		pcall(vim.api.nvim_buf_set_extmark, bufnr, session_panel_ns, line_number - 1, 0, opts)
+	end
+end
+
+local function clear_source_marks(state)
+	if not (state and state.source and valid_buf(state.source.bufnr)) then
+		return
+	end
+
+	for _, mark_id in ipairs(state.source_mark_ids or {}) do
+		pcall(vim.api.nvim_buf_del_extmark, state.source.bufnr, source_ns, mark_id)
+	end
+	state.source_mark_ids = {}
+end
+
+local function refresh_source_marks(state)
+	clear_source_marks(state)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		return
+	end
+
+	local line_count = vim.api.nvim_buf_line_count(state.source.bufnr)
+	state.source_mark_ids = {}
+	for _, mark in ipairs(source_view.marks(state)) do
+		local line = math.max(1, math.min(mark.line or 1, line_count))
+		local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, state.source.bufnr, source_ns, line - 1, 0, mark.opts or {})
+		if ok then
+			table.insert(state.source_mark_ids, mark_id)
+		end
 	end
 end
 
@@ -1256,6 +1287,7 @@ local function unregister(state)
 	state.closed = true
 	state.connection:stop()
 	stop_output_animation(state)
+	clear_source_marks(state)
 	session_panel_lines[state.session_panel_buf] = nil
 	states[state.session_panel_buf] = nil
 	states[state.output_buf] = nil
@@ -1839,6 +1871,7 @@ function M.open(adapter_name, opts)
 	register_keymaps(state)
 	register_autocmds(state)
 	apply_layout(state)
+	refresh_source_marks(state)
 	refresh_session_panels()
 
 	if opts.restore_session then

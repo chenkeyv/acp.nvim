@@ -35,6 +35,7 @@ This plugin provides an editor-native ACP chat surface:
 - Tree-sitter node picker for adding syntax-aware focused context
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
 - visual/range context capture for selected code
+- source-buffer virtual marks showing the code linked to an open ACP session
 - context and review draft commands for source/Visual-mode workflows
 - LSP diagnostic fix drafts from the current buffer or visual range
 - floating permission chooser with numbered actions

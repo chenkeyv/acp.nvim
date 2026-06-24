@@ -16,6 +16,7 @@ local picker = require("acp.picker")
 local prompt_view = require("acp.prompt_view")
 local references = require("acp.references")
 local session_view = require("acp.session_view")
+local source_view = require("acp.source_view")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
 local Connection = require("acp.connection").Connection
@@ -234,6 +235,27 @@ test("session panel view renders status and badges", function()
 	eq(styles[3].line_hl_group, "AcpSessionCurrent")
 	eq(styles[4].line_hl_group, "AcpSessionBusy")
 	eq(styles[6].line_hl_group, "AcpSessionError")
+end)
+
+test("source view renders context range marks", function()
+	local marks = source_view.marks({
+		id = 9,
+		source = {
+			bufnr = 1,
+			cursor = { 4, 0 },
+			range = {
+				line1 = 2,
+				line2 = 4,
+			},
+		},
+	})
+
+	eq(#marks, 3)
+	eq(marks[1].line, 2)
+	eq(marks[3].line, 4)
+	eq(marks[1].opts.line_hl_group, "AcpSourceContext")
+	eq(marks[1].opts.virt_text[1][1], " ACP #9 context ")
+	eq(marks[2].opts.virt_text, nil)
 end)
 
 test("health report checks adapter commands and metadata", function()
@@ -965,6 +987,52 @@ test("actions command opens a session action palette", function()
 		local outline = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
 		ok(outline:find("ACP Output Outline", 1, true))
 		pcall(vim.api.nvim_buf_delete, vim.api.nvim_get_current_buf(), { force = true })
+	end)
+
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("chat marks captured source ranges and clears them on close", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = 1",
+		"local other = 2",
+		"print(value + other)",
+	})
+	vim.api.nvim_set_current_buf(source_buf)
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("1,2AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+
+		local ns = vim.api.nvim_create_namespace("acp.nvim.source")
+		local marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
+		eq(#marks, 2)
+		local label_found = false
+		for _, mark in ipairs(marks) do
+			eq(mark[4].line_hl_group, "AcpSourceContext")
+			for _, chunk in ipairs(mark[4].virt_text or {}) do
+				if chunk[1] and chunk[1]:find("ACP #", 1, true) then
+					label_found = true
+				end
+			end
+		end
+		ok(label_found, "source range should include an ACP context label")
+
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+		input_buf = nil
+		marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
+		eq(#marks, 0)
 	end)
 
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
