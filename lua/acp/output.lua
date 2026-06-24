@@ -1,5 +1,7 @@
 local M = {}
 
+local animation_frames = { "|", "/", "-", "\\" }
+
 local function clean(value)
 	if value == nil or value == "" or value == vim.NIL then
 		return nil
@@ -81,7 +83,7 @@ function M.dashboard_lines(state)
 		("Session: #%s | Mode: %s"):format(tostring(state and state.id or "?"), clean(state and state.mode) or "?"),
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
-		"Keys: [[/]] sections | <leader>av outline | <leader>af changes | <leader>ad diagnostics",
+		"Keys: [[/]] sections | za folds | <leader>av outline | <leader>af changes | <leader>ad diagnostics",
 		"",
 	}
 end
@@ -106,6 +108,9 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpBadgeStatus", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpBadgeError", { link = "DiagnosticError", default = true })
 	vim.api.nvim_set_hl(0, "AcpBadgeTool", { fg = "#1a1b26", bg = "#bb9af7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpGhostText", { link = "Comment", default = true })
+	vim.api.nvim_set_hl(0, "AcpCodeFence", { fg = "#e0af68", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpInjectedLanguage", { fg = "#1a1b26", bg = "#7aa2f7", bold = true, default = true })
 end
 
 function M.line_style(line)
@@ -239,6 +244,88 @@ function M.outline_lines(sections)
 	table.insert(lines, "")
 	table.insert(lines, "Press <Enter> to jump, or q/<Esc> to close.")
 	return lines, line_sections
+end
+
+function M.animation_frame(index)
+	local number = tonumber(index) or 1
+	return animation_frames[((number - 1) % #animation_frames) + 1]
+end
+
+function M.ghost_text(state, lines, frame)
+	lines = lines or {}
+	if state and state.busy then
+		return ("%s %s"):format(M.animation_frame(frame), clean(state.run_status) or "working")
+	end
+
+	if #M.sections(lines) <= 1 then
+		return "Ready - draft in the prompt buffer"
+	end
+
+	return "Idle - [[/]] sections, za folds, <leader>av outline"
+end
+
+function M.code_blocks(lines)
+	local blocks = {}
+	local current
+
+	for index, line in ipairs(lines or {}) do
+		local language = line:match("^%s*```%s*([^%s`]*)")
+		if language then
+			if current then
+				current.end_line = index
+				table.insert(blocks, current)
+				current = nil
+			else
+				current = {
+					start_line = index,
+					language = clean(language) or "text",
+				}
+			end
+		end
+	end
+
+	if current then
+		current.end_line = #lines
+		table.insert(blocks, current)
+	end
+
+	return blocks
+end
+
+function M.fold_level(lines, lnum)
+	lines = lines or {}
+	local line = lines[lnum]
+	if not line then
+		return "0"
+	end
+
+	if M.is_section(line) then
+		return ">1"
+	end
+
+	for index = lnum - 1, 1, -1 do
+		if M.is_section(lines[index]) then
+			return "1"
+		end
+	end
+
+	return "0"
+end
+
+function M.fold_text(lines, foldstart, foldend)
+	lines = lines or {}
+	local line = lines[foldstart] or ""
+	local kind, title = section_label(line)
+	title = clean(title) or kind
+	local count = math.max(1, (tonumber(foldend) or foldstart) - foldstart + 1)
+	local preview = preview_after(lines, foldstart)
+	local suffix = preview and ("  " .. preview) or ""
+	local text = ("[%s] %s  (%d line%s)%s"):format(kind, title, count, count == 1 and "" or "s", suffix)
+
+	if #text > 120 then
+		return text:sub(1, 117) .. "..."
+	end
+	return text
 end
 
 function M.next_section(lines, current, direction)

@@ -193,6 +193,27 @@ test("output dashboard and section helpers are rendered", function()
 	ok(outline_text:find("ACP Output Outline", 1, true))
 	ok(outline_text:find("USER", 1, true))
 	eq(line_sections[3].kind, "SESSION")
+
+	local fold_lines = { "ACP: test", "Session: #7 | Mode: window", "You", "hello", "Agent", "world" }
+	eq(acp_output.fold_level(fold_lines, 1), ">1")
+	eq(acp_output.fold_level(fold_lines, 2), "1")
+	eq(acp_output.fold_level(fold_lines, 3), ">1")
+	local fold_text = acp_output.fold_text(fold_lines, 3, 4)
+	ok(fold_text:find("USER", 1, true))
+	ok(fold_text:find("2 lines", 1, true))
+	ok(fold_text:find("hello", 1, true))
+
+	eq(acp_output.animation_frame(1), "|")
+	eq(acp_output.animation_frame(5), "|")
+	ok(acp_output.ghost_text({ busy = true, run_status = "streaming" }, {}, 2):find("streaming", 1, true))
+	ok(acp_output.ghost_text({ busy = false }, { "ACP: test", "" }):find("Ready", 1, true))
+	local blocks = acp_output.code_blocks({ "Agent", "```lua", "print(1)", "```", "```", "plain" })
+	eq(#blocks, 2)
+	eq(blocks[1].start_line, 2)
+	eq(blocks[1].end_line, 4)
+	eq(blocks[1].language, "lua")
+	eq(blocks[2].language, "text")
+	eq(blocks[2].end_line, 6)
 end)
 
 test("LSP references are flattened and rendered for picker", function()
@@ -636,17 +657,32 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(dashboard:find("Source:", 1, true))
 		ok(dashboard:find("Keys: [[/]] sections", 1, true))
 		ok(vim.wo[output_win].winbar:find("ACP test #", 1, true))
+		eq(vim.wo[output_win].foldmethod, "expr")
+		ok(vim.wo[output_win].foldexpr:find("acp_nvim_output_foldexpr", 1, true))
+		ok(vim.wo[output_win].foldtext:find("acp_nvim_output_foldtext", 1, true))
+		eq(vim.wo[output_win].foldlevel, 99)
+		eq(vim.wo[output_win].foldcolumn, "1")
+		ok(
+			vim.b[output_buf].acp_language_injection == "treesitter-markdown"
+				or vim.b[output_buf].acp_language_injection == "fence-detection"
+		)
 
 		local ns = vim.api.nvim_create_namespace("acp.nvim.output")
 		local marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
 		local highlighted_header = false
+		local ghost_text = false
 		for _, mark in ipairs(marks) do
 			if mark[4] and mark[4].line_hl_group == "AcpOutputHeader" then
 				highlighted_header = true
-				break
+			end
+			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
+				if chunk[1] and chunk[1]:find("Ready", 1, true) then
+					ghost_text = true
+				end
 			end
 		end
 		ok(highlighted_header, "output header should be highlighted")
+		ok(ghost_text, "output ghost text should be rendered")
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "hello output" })
 		vim.cmd("AcpSend")

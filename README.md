@@ -12,7 +12,10 @@ This plugin provides an editor-native ACP chat surface:
 - output-visible run status for active prompts, tools, and completion
 - live output winbar/title with status, model, context, and changed-file counts
 - Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
+- ghost-text output hints and lightweight animated busy status
+- optional Tree-sitter Markdown/code-fence language injection for agent responses
 - floating output outline for jumping across long transcripts
+- native folds for collapsing transcript sections
 - non-blocking adapter startup and session creation
 - floating slash-command picker for adapter-advertised commands
 - native slash-command completion in the prompt buffer
@@ -139,7 +142,11 @@ In the output buffer:
 
 - `]]` jumps to the next transcript section
 - `[[` jumps to the previous transcript section
+- `za` toggles the fold under the cursor
+- `zM` closes all transcript folds
+- `zR` opens all transcript folds
 - `<leader>av` opens the output outline
+- `<leader>az` toggles the fold under the cursor
 
 The chat-opening and draft commands accept a line range, so opening ACP from
 Visual mode preserves the selected lines for `:AcpAddContext`,

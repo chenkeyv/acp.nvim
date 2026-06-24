@@ -16,6 +16,7 @@ local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
 
 local M = {}
+local uv = vim.uv or vim.loop
 
 local defaults = {
 	default_adapter = "codex",
@@ -91,6 +92,37 @@ local function refresh_output_highlights(state)
 			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, index - 1, 0, opts)
 		end
 	end
+
+	for _, block in ipairs(output.code_blocks(lines)) do
+		for _, line_number in ipairs({ block.start_line, block.end_line }) do
+			local line = lines[line_number]
+			if line then
+				local opts = {
+					end_col = #line,
+					hl_group = "AcpCodeFence",
+					priority = 70,
+				}
+				if line_number == block.start_line then
+					local prefix = state.output_language_injection and " inject:" or " lang:"
+					opts.virt_text = { { ("%s%s "):format(prefix, block.language), "AcpInjectedLanguage" } }
+					opts.virt_text_pos = "right_align"
+				end
+				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, line_number - 1, 0, opts)
+			end
+		end
+	end
+
+	local ghost = output.ghost_text(state, lines, state.output_animation_frame)
+	if ghost and #lines > 0 then
+		local row = #lines - 1
+		local col = #(lines[#lines] or "")
+		pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, row, col, {
+			virt_text = { { ghost, "AcpGhostText" } },
+			virt_text_pos = "eol",
+			hl_mode = "combine",
+			priority = 90,
+		})
+	end
 end
 
 local function save_output_history(state)
@@ -110,6 +142,23 @@ local function set_buf_options(bufnr, opts)
 	for key, value in pairs(opts) do
 		vim.bo[bufnr][key] = value
 	end
+end
+
+local function enable_output_language_injection(state)
+	if state.output_language_injection_tried or not valid_buf(state.output_buf) then
+		return
+	end
+
+	state.output_language_injection_tried = true
+	state.output_language_injection = false
+	if not (vim.treesitter and vim.treesitter.start) then
+		vim.b[state.output_buf].acp_language_injection = "fence-detection"
+		return
+	end
+
+	local ok = pcall(vim.treesitter.start, state.output_buf, "markdown")
+	state.output_language_injection = ok
+	vim.b[state.output_buf].acp_language_injection = ok and "treesitter-markdown" or "fence-detection"
 end
 
 local function set_output_lines(state, start, stop, lines)
@@ -162,6 +211,54 @@ local function refresh_output_chrome(state)
 			change_count = changes.count(state),
 		})
 	end
+end
+
+local function stop_output_animation(state)
+	local timer = state and state.output_animation_timer
+	if not timer then
+		return
+	end
+
+	state.output_animation_timer = nil
+	state.output_animation_frame = 1
+	local ok, closing = pcall(function()
+		return timer:is_closing()
+	end)
+	if ok and closing then
+		return
+	end
+	pcall(function()
+		timer:stop()
+	end)
+	pcall(function()
+		timer:close()
+	end)
+end
+
+local function start_output_animation(state)
+	if state.output_animation_timer or not (uv and uv.new_timer) then
+		return
+	end
+
+	local timer = uv.new_timer()
+	if not timer then
+		return
+	end
+
+	state.output_animation_timer = timer
+	state.output_animation_frame = state.output_animation_frame or 1
+	timer:start(0, 160, vim.schedule_wrap(function()
+		if state.closed or not state.busy or not valid_buf(state.output_buf) then
+			stop_output_animation(state)
+			if valid_buf(state.output_buf) then
+				refresh_output_highlights(state)
+			end
+			return
+		end
+
+		state.output_animation_frame = (state.output_animation_frame or 0) + 1
+		refresh_output_highlights(state)
+	end))
 end
 
 local function jump_output_section(state, direction)
@@ -359,6 +456,12 @@ local function set_run_status(state, status)
 	end
 
 	state.run_status = status
+	if state.busy then
+		start_output_animation(state)
+	else
+		stop_output_animation(state)
+	end
+	refresh_output_highlights(state)
 	refresh_output_chrome(state)
 	follow_output(state)
 	refresh_session_panels()
@@ -858,6 +961,11 @@ local function apply_window_options(state)
 
 	if valid_win(state.output_win) then
 		vim.wo[state.output_win].cursorline = true
+		vim.wo[state.output_win].foldmethod = "expr"
+		vim.wo[state.output_win].foldexpr = "v:lua.acp_nvim_output_foldexpr()"
+		vim.wo[state.output_win].foldtext = "v:lua.acp_nvim_output_foldtext()"
+		vim.wo[state.output_win].foldlevel = 99
+		vim.wo[state.output_win].foldcolumn = "1"
 		refresh_output_chrome(state)
 	end
 
@@ -1023,6 +1131,7 @@ local function create_buffers(state)
 		modifiable = true,
 		swapfile = false,
 	})
+	enable_output_language_injection(state)
 	set_buf_options(state.input_buf, {
 		bufhidden = "wipe",
 		buftype = "nofile",
@@ -1045,6 +1154,7 @@ local function unregister(state)
 
 	state.closed = true
 	state.connection:stop()
+	stop_output_animation(state)
 	session_panel_lines[state.session_panel_buf] = nil
 	states[state.session_panel_buf] = nil
 	states[state.output_buf] = nil
@@ -1163,6 +1273,7 @@ local function register_keymaps(state)
 	vim.keymap.set("n", "]]", function()
 		jump_output_section(state, 1)
 	end, { buffer = state.output_buf, desc = "Next ACP output section" })
+	vim.keymap.set("n", "<leader>az", "za", { buffer = state.output_buf, desc = "Toggle ACP output fold" })
 	vim.keymap.set({ "n", "i" }, "<M-p>", previous_prompt, { buffer = state.input_buf, desc = "Previous ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<M-n>", next_prompt, { buffer = state.input_buf, desc = "Next ACP prompt" })
 	vim.keymap.set("i", "<CR>", "<CR>", { buffer = state.input_buf, desc = "Insert newline" })
@@ -2443,6 +2554,22 @@ end
 
 function _G.acp_nvim_completefunc(findstart, base)
 	return require("acp.ui").completefunc(findstart, base)
+end
+
+function _G.acp_nvim_output_foldexpr()
+	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, 0, -1, false)
+	if not ok then
+		return "0"
+	end
+	return require("acp.output").fold_level(lines, vim.v.lnum)
+end
+
+function _G.acp_nvim_output_foldtext()
+	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, 0, -1, false)
+	if not ok then
+		return ""
+	end
+	return require("acp.output").fold_text(lines, vim.v.foldstart, vim.v.foldend)
 end
 
 return M
