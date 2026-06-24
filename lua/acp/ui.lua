@@ -406,6 +406,23 @@ local function diagnostics_prompt(source)
 	return table.concat(lines, "\n")
 end
 
+local function context_prompt(source, instruction)
+	if not source or not source.bufnr then
+		return nil
+	end
+
+	local rendered_context = context.render(source)
+	if not rendered_context then
+		return nil
+	end
+
+	return table.concat({
+		instruction,
+		"",
+		rendered_context,
+	}, "\n")
+end
+
 local function escape_tabline(text)
 	return tostring(text):gsub("%%", "%%%%")
 end
@@ -792,6 +809,34 @@ function M.setup(opts)
 		end,
 	})
 
+	vim.api.nvim_create_user_command("AcpChatContext", function(command)
+		M.open(command.args ~= "" and command.args or nil, {
+			mode = config.default_mode,
+			source_range = command_source_range(command),
+			draft = "context",
+		})
+	end, {
+		nargs = "?",
+		range = true,
+		complete = function()
+			return adapter_names()
+		end,
+	})
+
+	vim.api.nvim_create_user_command("AcpReview", function(command)
+		M.open(command.args ~= "" and command.args or nil, {
+			mode = config.default_mode,
+			source_range = command_source_range(command),
+			draft = "review",
+		})
+	end, {
+		nargs = "?",
+		range = true,
+		complete = function()
+			return adapter_names()
+		end,
+	})
+
 	vim.api.nvim_create_user_command("AcpChatFloat", function(command)
 		M.open(command.args ~= "" and command.args or nil, {
 			mode = "float",
@@ -935,6 +980,13 @@ function M.open(adapter_name, opts)
 	states[state.input_buf] = state
 	if opts.draft == "diagnostics" then
 		append_input_text(state, diagnostics_prompt(state.source))
+	elseif opts.draft == "context" then
+		append_input_text(state, context_prompt(state.source, "Use this editor context for the next request."))
+	elseif opts.draft == "review" then
+		append_input_text(state, context_prompt(
+			state.source,
+			"Review this code. Prioritize correctness, edge cases, and maintainability."
+		))
 	elseif opts.initial_prompt then
 		append_input_text(state, opts.initial_prompt)
 	end

@@ -60,6 +60,8 @@ test("setup registers public user commands", function()
 
 	for _, command in ipairs({
 		"AcpChat",
+		"AcpChatContext",
+		"AcpReview",
 		"AcpChatTab",
 		"AcpChatFloat",
 		"AcpChatWindow",
@@ -538,6 +540,34 @@ test("fix diagnostics command opens a prefilled prompt", function()
 	ok(prompt:find("ERROR [lua_ls]: undefined global missing", 1, true))
 
 	vim.diagnostic.reset(ns, bufnr)
+	vim.api.nvim_set_current_buf(previous_buf)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
+test("review command opens a range-aware draft prompt", function()
+	local previous_buf = vim.api.nvim_get_current_buf()
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"local function add(a, b)",
+		"  return a + b",
+		"end",
+	})
+	vim.bo[bufnr].filetype = "lua"
+	vim.api.nvim_set_current_buf(bufnr)
+	vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+	vim.cmd("1,2AcpReview test")
+	local input_buf = vim.api.nvim_get_current_buf()
+	eq(vim.bo[input_buf].filetype, "markdown")
+	local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+	ok(prompt:find("Review this code. Prioritize correctness, edge cases, and maintainability.", 1, true))
+	ok(prompt:find("Context", 1, true))
+	ok(prompt:find("Filetype: lua", 1, true))
+	ok(prompt:find("Selection: lines 1-2 (2 line(s))", 1, true))
+	ok(prompt:find("local function add(a, b)", 1, true))
+	ok(prompt:find("  return a + b", 1, true))
+	ok(not prompt:find("\nend", 1, true))
+
 	vim.api.nvim_set_current_buf(previous_buf)
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
