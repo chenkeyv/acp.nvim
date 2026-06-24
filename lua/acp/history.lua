@@ -65,6 +65,44 @@ local function header_value(lines, key)
 	end
 end
 
+local function transcript_lines(lines)
+	local start = 1
+	for index, line in ipairs(lines) do
+		if line == "" then
+			start = index + 1
+			break
+		end
+	end
+
+	local transcript = {}
+	for index = start, #lines do
+		table.insert(transcript, lines[index])
+	end
+	return transcript
+end
+
+local function bounded_lines(lines, opts)
+	local max_lines = opts.max_lines or 240
+	local max_chars = opts.max_chars or 24000
+	local out = {}
+	local chars = 0
+	local truncated = false
+
+	for _, line in ipairs(lines) do
+		if #out >= max_lines or chars + #line > max_chars then
+			truncated = true
+			break
+		end
+		table.insert(out, line)
+		chars = chars + #line + 1
+	end
+
+	if truncated then
+		table.insert(out, "... transcript truncated ...")
+	end
+	return out
+end
+
 local function entry_for(path)
 	local ok, lines = pcall(vim.fn.readfile, path, "", 12)
 	if not ok then
@@ -103,6 +141,29 @@ function M.entries()
 	return entries
 end
 
+function M.replay_prompt(entry, opts)
+	opts = opts or {}
+	if not entry or not entry.path then
+		return nil
+	end
+
+	local ok, lines = pcall(vim.fn.readfile, entry.path)
+	if not ok then
+		return nil
+	end
+
+	local prompt = {
+		"Use this saved ACP transcript as context for the next request.",
+		"",
+		("Transcript: %s"):format(entry.title or header_value(lines, "Title") or vim.fs.basename(entry.path)),
+		("Adapter: %s"):format(entry.adapter or header_value(lines, "Adapter") or "?"),
+		("Updated: %s"):format(entry.updated or header_value(lines, "Updated") or "?"),
+		"",
+	}
+	vim.list_extend(prompt, bounded_lines(transcript_lines(lines), opts))
+	return table.concat(prompt, "\n")
+end
+
 local function close_window(winid, bufnr)
 	if winid and vim.api.nvim_win_is_valid(winid) then
 		pcall(vim.api.nvim_win_close, winid, true)
@@ -138,14 +199,18 @@ function M.open_entry(entry)
 	return true
 end
 
-local function browser_lines(entries)
+local function browser_lines(entries, opts)
 	local lines = { "ACP History", "" }
 	for index, entry in ipairs(entries) do
 		table.insert(lines, ("%d. %s"):format(index, entry.title))
 		table.insert(lines, ("   %s  %s  %s"):format(entry.updated, entry.adapter, entry.model))
 	end
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to open, or q/<Esc> to close.")
+	if opts.open_chat then
+		table.insert(lines, "Press <Enter> to draft a chat, o to open read-only, or q/<Esc> to close.")
+	else
+		table.insert(lines, "Press <Enter> to open, or q/<Esc> to close.")
+	end
 	return lines
 end
 
@@ -171,14 +236,15 @@ local function window_config(lines)
 	}
 end
 
-function M.open_browser()
+function M.open_browser(opts)
+	opts = opts or {}
 	local entries = M.entries()
 	if #entries == 0 then
 		vim.notify("No ACP history found", vim.log.levels.INFO, { title = "ACP" })
 		return false
 	end
 
-	local lines = browser_lines(entries)
+	local lines = browser_lines(entries, opts)
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_name(bufnr, "ACP://history")
 	vim.bo[bufnr].buftype = "nofile"
@@ -199,11 +265,27 @@ function M.open_browser()
 		return entries[index]
 	end
 
-	vim.keymap.set("n", "<CR>", function()
+	local function open_readonly()
 		local entry = selected_entry()
 		close_window(winid, bufnr)
 		M.open_entry(entry)
-	end, { buffer = bufnr, nowait = true, desc = "Open ACP history entry" })
+	end
+
+	local function open_chat()
+		local entry = selected_entry()
+		close_window(winid, bufnr)
+		opts.open_chat(entry)
+	end
+
+	vim.keymap.set("n", "<CR>", opts.open_chat and open_chat or open_readonly, {
+		buffer = bufnr,
+		nowait = true,
+		desc = opts.open_chat and "Draft ACP chat from history" or "Open ACP history entry",
+	})
+
+	if opts.open_chat then
+		vim.keymap.set("n", "o", open_readonly, { buffer = bufnr, nowait = true, desc = "Open ACP history entry" })
+	end
 
 	for _, key in ipairs({ "q", "<Esc>" }) do
 		vim.keymap.set("n", key, function()

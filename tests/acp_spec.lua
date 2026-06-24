@@ -73,6 +73,7 @@ test("setup registers public user commands", function()
 		"AcpSessions",
 		"AcpChanges",
 		"AcpHistory",
+		"AcpHistoryDraft",
 		"AcpAddContext",
 		"AcpFixDiagnostics",
 		"AcpHealth",
@@ -222,6 +223,42 @@ test("history saves transcript metadata and lists entries", function()
 	vim.fn.delete(path)
 end)
 
+test("history replay prompt is bounded and includes metadata", function()
+	local state = {
+		id = 424244,
+		adapter = "test-adapter",
+		title = "History Replay Test",
+		model = "test-model",
+	}
+	local path = history.save(state, {
+		"ACP: test-adapter",
+		"",
+		"You",
+		"",
+		"first line",
+		"second line",
+		"third line",
+	})
+	local entry = {
+		path = path,
+		title = "History Replay Test",
+		adapter = "test-adapter",
+		updated = "now",
+	}
+
+	local prompt = history.replay_prompt(entry, { max_lines = 5 })
+	ok(prompt:find("Use this saved ACP transcript as context", 1, true))
+	ok(prompt:find("Transcript: History Replay Test", 1, true))
+	ok(prompt:find("Adapter: test-adapter", 1, true))
+	ok(prompt:find("Updated: now", 1, true))
+	ok(prompt:find("ACP: test-adapter", 1, true))
+	ok(prompt:find("first line", 1, true))
+	ok(prompt:find("... transcript truncated ...", 1, true))
+	ok(not prompt:find("second line", 1, true))
+
+	vim.fn.delete(path)
+end)
+
 test("history browser opens when entries exist", function()
 	local state = {
 		id = 424243,
@@ -242,6 +279,33 @@ test("history browser opens when entries exist", function()
 	ok(vim.api.nvim_buf_get_name(entry_bufnr):find("ACP History://", 1, true))
 
 	pcall(vim.cmd, "tabclose!")
+	vim.fn.delete(path)
+end)
+
+test("history browser can draft a chat from an entry", function()
+	local state = {
+		id = 424245,
+		adapter = "test-adapter",
+		title = "History Draft Test",
+		model = "test-model",
+	}
+	local path = history.save(state, { "ACP: test-adapter", "", "hello from history" })
+	local selected
+
+	ok(history.open_browser({
+		open_chat = function(entry)
+			selected = entry
+		end,
+	}), "history browser should open")
+	local bufnr = vim.api.nvim_get_current_buf()
+	eq(vim.bo[bufnr].filetype, "acp-history")
+	local text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+	ok(text:find("draft a chat", 1, true))
+
+	local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+	vim.api.nvim_feedkeys(keys, "xt", false)
+	ok(selected and selected.path == path, "selected entry should be passed to callback")
+
 	vim.fn.delete(path)
 end)
 

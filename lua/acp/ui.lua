@@ -985,6 +985,28 @@ function M.setup(opts)
 		history.open_browser()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpHistoryDraft", function(command)
+		local adapter_name = command.args ~= "" and command.args or nil
+		history.open_browser({
+			open_chat = function(entry)
+				local prompt = history.replay_prompt(entry)
+				if not prompt then
+					notify("Failed to read ACP history entry", vim.log.levels.ERROR)
+					return
+				end
+				M.open(adapter_name, {
+					mode = config.default_mode,
+					initial_prompt = prompt,
+				})
+			end,
+		})
+	end, {
+		nargs = "?",
+		complete = function()
+			return adapter_names()
+		end,
+	})
+
 	vim.api.nvim_create_user_command("AcpAddContext", function()
 		M.add_context()
 	end, {})
