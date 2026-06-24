@@ -18,6 +18,7 @@ This plugin provides an editor-native ACP chat surface:
 - plain-text transcript history under Neovim state
 - saved transcript replay into a new chat draft
 - adapter-backed session listing and restoration
+- async LSP document-symbol picker for adding focused symbol context
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
 - visual/range context capture for selected code
 - context and review draft commands for source/Visual-mode workflows
@@ -87,6 +88,7 @@ vim.g.acp_nvim_config = {
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
+- `:AcpSymbols` opens an LSP document-symbol picker for the source buffer
 - `:AcpHistory` opens saved transcript history
 - `:AcpRestore [adapter]` lists adapter-backed sessions and restores the selected session
 - `:AcpHistoryDraft [adapter]` opens saved transcript history and drafts a new chat from the selected transcript
@@ -109,6 +111,7 @@ In the prompt buffer:
 - `<leader>af` opens the current session's changed files in quickfix
 - `<leader>a/` opens advertised ACP slash commands
 - `<leader>ao` opens advertised ACP config options
+- `<leader>al` opens source-buffer LSP symbols
 
 The chat-opening and draft commands accept a line range, so opening ACP from
 Visual mode preserves the selected lines for `:AcpAddContext`,

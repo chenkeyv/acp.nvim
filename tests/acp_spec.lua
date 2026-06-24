@@ -7,6 +7,7 @@ local acp_diagnostics = require("acp.diagnostics")
 local file_review = require("acp.file_review")
 local history = require("acp.history")
 local permission = require("acp.permission")
+local symbols = require("acp.symbols")
 local Connection = require("acp.connection").Connection
 
 local tests = {}
@@ -76,6 +77,7 @@ test("setup registers public user commands", function()
 		"AcpChanges",
 		"AcpCommands",
 		"AcpConfig",
+		"AcpSymbols",
 		"AcpHistory",
 		"AcpRestore",
 		"AcpHistoryDraft",
@@ -85,6 +87,57 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("LSP symbols are flattened and rendered for picker", function()
+	local flattened = symbols.flatten({
+		{
+			name = "Example",
+			kind = 5,
+			detail = "class detail",
+			range = {
+				start = { line = 0, character = 0 },
+				["end"] = { line = 4, character = 3 },
+			},
+			children = {
+				{
+					name = "run",
+					kind = 12,
+					range = {
+						start = { line = 1, character = 1 },
+						["end"] = { line = 3, character = 2 },
+					},
+				},
+			},
+		},
+		{
+			name = "from-location",
+			kind = 13,
+			location = {
+				range = {
+					start = { line = 7, character = 0 },
+					["end"] = { line = 7, character = 9 },
+				},
+			},
+		},
+	})
+
+	eq(#flattened, 3)
+	eq(flattened[1].name, "Example")
+	eq(flattened[2].depth, 1)
+	eq(symbols.kind_name(flattened[1].kind), "Class")
+	local line1, line2 = symbols.range_lines(flattened[3])
+	eq(line1, 8)
+	eq(line2, 8)
+
+	local lines, line_symbols = symbols.picker_lines(flattened)
+	local text = table.concat(lines, "\n")
+	ok(text:find("Example  Class lines 1-5", 1, true))
+	ok(text:find("class detail", 1, true))
+	ok(text:find("  run  Function lines 2-4", 1, true))
+	ok(text:find("from-location  Variable lines 8-8", 1, true))
+	eq(line_symbols[3].name, "Example")
+	eq(line_symbols[5].name, "run")
 end)
 
 test("config option picker lines render selectable options", function()
@@ -301,6 +354,71 @@ test("sessions command opens a picker from source buffers", function()
 		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 	end
 	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+end)
+
+test("symbols command drafts selected LSP symbol context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local function add(a, b)",
+		"  return a + b",
+		"end",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/documentSymbol")
+		ok(params.textDocument.uri:find("file://", 1, true), "symbol request should include buffer uri")
+		callback({
+			[1] = {
+				result = {
+					{
+						name = "add",
+						kind = 12,
+						range = {
+							start = { line = 0, character = 0 },
+							["end"] = { line = 2, character = 3 },
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpSymbols")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-symbols")
+
+		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP symbol as context: add (Function).", 1, true))
+		ok(prompt:find("Selection: lines 1-3", 1, true))
+		ok(prompt:find("local function add", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
 end)
 
 test("changes module records unique written files for quickfix", function()
