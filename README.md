@@ -6,6 +6,7 @@ This plugin provides an editor-native ACP chat surface:
 
 - dedicated ACP tab by default
 - side panel for open ACP sessions
+- floating session picker from any buffer
 - plain output buffer for streamed agent responses
 - output-visible run status for active prompts, tools, and completion
 - Neovim highlight groups for readable transcript sections
@@ -76,7 +77,7 @@ vim.g.acp_nvim_config = {
 - `:AcpPromptPrev` recalls the previous sent prompt in the current ACP session
 - `:AcpPromptNext` steps forward through prompt history or restores the draft
 - `:AcpStop` stops the current agent process
-- `:AcpSessions` focuses the sessions side panel
+- `:AcpSessions` focuses the sessions side panel or opens a floating session picker
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
 - `:AcpHistory` opens saved transcript history
 - `:AcpAddContext` inserts source-buffer context into the current prompt

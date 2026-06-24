@@ -119,6 +119,35 @@ test("prompt history recalls sent prompts and restores draft", function()
 	end
 end)
 
+test("sessions command opens a picker from source buffers", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_set_current_buf(source_buf)
+	local source_win = vim.api.nvim_get_current_win()
+	vim.cmd("AcpChatWindow test")
+	local input_buf = vim.api.nvim_get_current_buf()
+	ok(vim.api.nvim_buf_get_name(input_buf):find("/input", 1, true))
+
+	vim.api.nvim_set_current_win(source_win)
+	vim.cmd("AcpSessions")
+	local picker_buf = vim.api.nvim_get_current_buf()
+	eq(vim.bo[picker_buf].filetype, "acp-sessions")
+	local text = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+	ok(text:find("ACP Sessions", 1, true))
+	ok(text:find("test", 1, true))
+
+	local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+	vim.api.nvim_feedkeys(keys, "xt", false)
+	local focused_buf = vim.api.nvim_get_current_buf()
+	ok(vim.api.nvim_buf_get_name(focused_buf):find("/input", 1, true))
+
+	pcall(vim.api.nvim_set_current_win, source_win)
+	pcall(vim.api.nvim_buf_delete, focused_buf, { force = true })
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+end)
+
 test("changes module records unique written files for quickfix", function()
 	local root = vim.fn.tempname()
 	vim.fn.mkdir(vim.fs.joinpath(root, "nested"), "p")

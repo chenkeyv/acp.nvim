@@ -1105,6 +1105,92 @@ local function focus_session(state)
 	refresh_session_panels()
 end
 
+local function session_picker_lines(list)
+	local lines = { "ACP Sessions", "" }
+	local line_ids = {}
+	for index, session in ipairs(list) do
+		local model = session.model and session.model ~= "" and (" " .. session.model) or ""
+		table.insert(lines, ("%d. #%d %s%s"):format(index, session.id, session.adapter, model))
+		line_ids[#lines] = session.id
+		table.insert(lines, ("   %s"):format(session_status(session)))
+		line_ids[#lines] = session.id
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Press <Enter> to focus, or q/<Esc> to close.")
+	return lines, line_ids
+end
+
+local function session_picker_config(lines)
+	local width = 0
+	for _, line in ipairs(lines) do
+		width = math.max(width, #line)
+	end
+	width = math.max(50, math.min(width + 4, vim.o.columns - 4))
+	local height = math.max(8, math.min(#lines, vim.o.lines - 6))
+
+	return {
+		relative = "editor",
+		row = math.max(1, math.floor((vim.o.lines - height) / 2) - 1),
+		col = math.max(0, math.floor((vim.o.columns - width) / 2)),
+		width = width,
+		height = height,
+		style = "minimal",
+		border = "rounded",
+		title = " ACP sessions ",
+		title_pos = "left",
+		zindex = 65,
+	}
+end
+
+local function close_picker(winid, bufnr)
+	if valid_win(winid) then
+		pcall(vim.api.nvim_win_close, winid, true)
+	end
+	if valid_buf(bufnr) then
+		pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+	end
+end
+
+local function open_session_picker()
+	local list = sorted_sessions()
+	if #list == 0 then
+		notify("No ACP sessions open", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_ids = session_picker_lines(list)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(bufnr, "ACP://sessions")
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-sessions",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+
+	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
+	vim.wo[winid].cursorline = true
+	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
+
+	vim.keymap.set("n", "<CR>", function()
+		local id = line_ids[vim.api.nvim_win_get_cursor(winid)[1]]
+		close_picker(winid, bufnr)
+		focus_session(sessions[id])
+	end, { buffer = bufnr, nowait = true, desc = "Focus ACP session" })
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			close_picker(winid, bufnr)
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP sessions" })
+	end
+
+	return true
+end
+
 function M.select_session()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local line = vim.api.nvim_win_get_cursor(0)[1]
@@ -1117,23 +1203,20 @@ function M.select_session()
 end
 
 function M.focus_sessions()
-	local state = current_state()
-	if not state then
-		return
-	end
+	local state = states[vim.api.nvim_get_current_buf()]
 
-	if state.mode ~= "tab" or not valid_win(state.session_panel_win) then
+	if state and (state.mode ~= "tab" or not valid_win(state.session_panel_win)) then
 		if state.mode == "tab" then
 			apply_layout(state)
 		end
 	end
 
-	if state.mode ~= "tab" or not valid_win(state.session_panel_win) then
-		notify("This ACP session does not have a sessions panel", vim.log.levels.WARN)
+	if state and state.mode == "tab" and valid_win(state.session_panel_win) then
+		vim.api.nvim_set_current_win(state.session_panel_win)
 		return
 	end
 
-	vim.api.nvim_set_current_win(state.session_panel_win)
+	open_session_picker()
 end
 
 function M.add_context()
