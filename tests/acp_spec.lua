@@ -26,6 +26,7 @@ local smart_context = require("acp.smart_context")
 local source_view = require("acp.source_view")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
+local type_hierarchy = require("acp.type_hierarchy")
 local workspace_symbols = require("acp.workspace_symbols")
 local Connection = require("acp.connection").Connection
 
@@ -132,6 +133,10 @@ test("setup registers public user commands", function()
 		"AcpCallersQuickfix",
 		"AcpCallees",
 		"AcpCalleesQuickfix",
+		"AcpSupertypes",
+		"AcpSupertypesQuickfix",
+		"AcpSubtypes",
+		"AcpSubtypesQuickfix",
 		"AcpHighlights",
 		"AcpClearHighlights",
 		"AcpReferences",
@@ -1411,6 +1416,68 @@ test("LSP call hierarchy entries are rendered for picker and quickfix", function
 	ok(prompt:find("local function caller", 1, true))
 end)
 
+test("LSP type hierarchy entries are rendered for picker and quickfix", function()
+	local path = vim.fn.tempname() .. ".lua"
+	vim.fn.writefile({
+		"local Base = {}",
+		"local Child = setmetatable({}, Base)",
+	}, path)
+	local uri = vim.uri_from_fname(path)
+	local supertypes = type_hierarchy.normalize({
+		{
+			name = "Base",
+			kind = 5,
+			detail = "base type",
+			uri = uri,
+			range = {
+				start = { line = 0, character = 0 },
+				["end"] = { line = 0, character = 15 },
+			},
+			selectionRange = {
+				start = { line = 0, character = 6 },
+				["end"] = { line = 0, character = 10 },
+			},
+		},
+	}, "supertypes")
+	local subtypes = type_hierarchy.normalize({
+		{
+			name = "Child",
+			kind = 5,
+			uri = uri,
+			range = {
+				start = { line = 1, character = 0 },
+				["end"] = { line = 1, character = 35 },
+			},
+		},
+	}, "subtypes")
+
+	eq(#supertypes, 1)
+	eq(supertypes[1].name, "Base")
+	eq(type_hierarchy.range(supertypes[1]).line1, 1)
+	eq(type_hierarchy.range(supertypes[1]).col1, 7)
+	eq(subtypes[1].name, "Child")
+	eq(type_hierarchy.range(subtypes[1]).line1, 2)
+
+	local lines, line_items = type_hierarchy.picker_lines(supertypes, { direction = "supertypes" })
+	local text = table.concat(lines, "\n")
+	ok(text:find("ACP Supertypes", 1, true))
+	ok(text:find("Base  Class", 1, true))
+	ok(text:find("base type", 1, true))
+	ok(text:find("Q for quickfix", 1, true))
+	eq(line_items[3].name, "Base")
+
+	local qf_items = type_hierarchy.quickfix_items(supertypes, { direction = "supertypes" })
+	eq(#qf_items, 1)
+	eq(qf_items[1].lnum, 1)
+	eq(qf_items[1].col, 7)
+	ok(qf_items[1].text:find("SUPERTYPE", 1, true))
+
+	local prompt = type_hierarchy.prompt(supertypes[1], "supertypes")
+	ok(prompt:find("Use this LSP supertype as context: Base %(Class%)."))
+	ok(prompt:find("Supertype:", 1, true))
+	ok(prompt:find("local Base", 1, true))
+end)
+
 test("config option picker lines render selectable options", function()
 	local lines, line_options = acp_config.picker_lines({
 		{
@@ -1536,6 +1603,12 @@ test("slash command completion items are rendered for completefunc", function()
 	local callee_item = prompt_completion.items(commands, "@callee")[1]
 	eq(callee_item.word, "@callees")
 	eq(prompt_completion.action_id(callee_item), "callees")
+	local supertype_item = prompt_completion.items(commands, "@super")[1]
+	eq(supertype_item.word, "@supertypes")
+	eq(prompt_completion.action_id(supertype_item), "supertypes")
+	local subtype_item = prompt_completion.items(commands, "@sub")[1]
+	eq(subtype_item.word, "@subtypes")
+	eq(prompt_completion.action_id(subtype_item), "subtypes")
 
 	local completion_buf = vim.api.nvim_create_buf(true, true)
 	vim.api.nvim_set_current_buf(completion_buf)
@@ -2490,6 +2563,8 @@ test("actions command opens a session action palette", function()
 		local lsp_highlight_action = false
 		local callers_quickfix = false
 		local callees_quickfix = false
+		local supertypes_quickfix = false
+		local subtypes_quickfix = false
 		local references_quickfix = false
 		local declarations_quickfix = false
 		local definitions_quickfix = false
@@ -2544,6 +2619,12 @@ test("actions command opens a session action palette", function()
 			if line:find("Callees quickfix", 1, true) then
 				callees_quickfix = true
 			end
+			if line:find("Supertypes quickfix", 1, true) then
+				supertypes_quickfix = true
+			end
+			if line:find("Subtypes quickfix", 1, true) then
+				subtypes_quickfix = true
+			end
 			if line:find("References quickfix", 1, true) then
 				references_quickfix = true
 			end
@@ -2584,6 +2665,8 @@ test("actions command opens a session action palette", function()
 		ok(lsp_highlight_action, "action palette should include LSP highlights")
 		ok(callers_quickfix, "action palette should include callers quickfix")
 		ok(callees_quickfix, "action palette should include callees quickfix")
+		ok(supertypes_quickfix, "action palette should include supertypes quickfix")
+		ok(subtypes_quickfix, "action palette should include subtypes quickfix")
 		ok(references_quickfix, "action palette should include references quickfix")
 		ok(declarations_quickfix, "action palette should include declarations quickfix")
 		ok(definitions_quickfix, "action palette should include definitions quickfix")
@@ -4205,6 +4288,154 @@ test("call hierarchy commands draft selected LSP caller and callee context", fun
 		ok(prompt:find("Call callee:", 1, true))
 		ok(prompt:find("Selection: lines 4-4", 1, true))
 		ok(prompt:find("local function callee", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.fn.delete(path)
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("type hierarchy commands draft selected LSP supertype and subtype context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	local path = vim.fn.tempname() .. ".lua"
+	vim.api.nvim_buf_set_name(source_buf, path)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local Base = {}",
+		"local Child = setmetatable({}, Base)",
+		"local Grandchild = setmetatable({}, Child)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 2, 6 })
+
+	local uri = vim.uri_from_bufnr(source_buf)
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		if method == "textDocument/prepareTypeHierarchy" then
+			eq(params.position.line, 1)
+			eq(params.position.character, 6)
+			callback({
+				[1] = {
+					result = {
+						{
+							name = "Child",
+							kind = 5,
+							uri = uri,
+							range = {
+								start = { line = 1, character = 0 },
+								["end"] = { line = 1, character = 35 },
+							},
+							selectionRange = {
+								start = { line = 1, character = 6 },
+								["end"] = { line = 1, character = 11 },
+							},
+						},
+					},
+				},
+			})
+		elseif method == "typeHierarchy/supertypes" then
+			eq(params.item.name, "Child")
+			callback({
+				[1] = {
+					result = {
+						{
+							name = "Base",
+							kind = 5,
+							uri = uri,
+							range = {
+								start = { line = 0, character = 0 },
+								["end"] = { line = 0, character = 15 },
+							},
+							selectionRange = {
+								start = { line = 0, character = 6 },
+								["end"] = { line = 0, character = 10 },
+							},
+						},
+					},
+				},
+			})
+		elseif method == "typeHierarchy/subtypes" then
+			eq(params.item.name, "Child")
+			callback({
+				[1] = {
+					result = {
+						{
+							name = "Grandchild",
+							kind = 5,
+							uri = uri,
+							range = {
+								start = { line = 2, character = 0 },
+								["end"] = { line = 2, character = 43 },
+							},
+							selectionRange = {
+								start = { line = 2, character = 6 },
+								["end"] = { line = 2, character = 16 },
+							},
+						},
+					},
+				},
+			})
+		else
+			error("unexpected LSP method: " .. method)
+		end
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpSupertypes")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-supertypes")
+
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local super_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(super_qflist.title:find("ACP supertypes", 1, true))
+		eq(#super_qflist.items, 1)
+		eq(super_qflist.items[1].bufnr, source_buf)
+		eq(super_qflist.items[1].lnum, 1)
+		eq(super_qflist.items[1].col, 7)
+		ok(super_qflist.items[1].text:find("SUPERTYPE", 1, true))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after supertypes quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpSupertypesQuickfix")
+		super_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(super_qflist.title:find("ACP supertypes", 1, true))
+		eq(#super_qflist.items, 1)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible before subtype draft")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpSubtypes")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-subtypes")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP subtype as context: Grandchild %(Class%)."))
+		ok(prompt:find("Subtype:", 1, true))
+		ok(prompt:find("Selection: lines 3-3", 1, true))
+		ok(prompt:find("local Grandchild", 1, true))
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all

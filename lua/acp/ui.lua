@@ -2372,6 +2372,18 @@ local function prompt_action_items()
 	add("Callees quickfix", "Send outgoing LSP call hierarchy entries to quickfix", ":AcpCalleesQuickfix", "LSP", function()
 		M.open_callees_quickfix()
 	end)
+	add("Supertypes", "Pick LSP type hierarchy supertypes as focused context", ":AcpSupertypes", "LSP", function()
+		M.open_supertypes()
+	end)
+	add("Supertypes quickfix", "Send LSP type hierarchy supertypes to quickfix", ":AcpSupertypesQuickfix", "LSP", function()
+		M.open_supertypes_quickfix()
+	end)
+	add("Subtypes", "Pick LSP type hierarchy subtypes as focused context", ":AcpSubtypes", "LSP", function()
+		M.open_subtypes()
+	end)
+	add("Subtypes quickfix", "Send LSP type hierarchy subtypes to quickfix", ":AcpSubtypesQuickfix", "LSP", function()
+		M.open_subtypes_quickfix()
+	end)
 	add("LSP highlights", "Show source-buffer LSP read/write highlights", "<leader>aH", "LSP", function()
 		M.open_highlights()
 	end)
@@ -2518,7 +2530,7 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "- Smart context combines source, Tree-sitter, diagnostics, hover, signature help, inlay hints, and semantic ranges")
 	table.insert(
 		lines,
-		"- LSP diagnostics, code actions, hover, signature help, inlay hints, selection ranges, call hierarchy, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
+		"- LSP diagnostics, code actions, hover, signature help, inlay hints, selection ranges, call hierarchy, type hierarchy, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
 	)
 	table.insert(lines, "- Tree-sitter nodes around the source cursor")
 	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
@@ -3726,6 +3738,22 @@ function M.setup(opts)
 		M.open_callees_quickfix()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpSupertypes", function()
+		M.open_supertypes()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpSupertypesQuickfix", function()
+		M.open_supertypes_quickfix()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpSubtypes", function()
+		M.open_subtypes()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpSubtypesQuickfix", function()
+		M.open_subtypes_quickfix()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpHighlights", function()
 		M.open_highlights()
 	end, {})
@@ -4226,6 +4254,18 @@ local function action_palette_items(state)
 		add_action(items, "Callees quickfix", "Send outgoing LSP call hierarchy entries to quickfix", ":AcpCalleesQuickfix", "LSP", function()
 			M.open_callees_quickfix()
 		end)
+		add_action(items, "Supertypes", "Pick LSP type hierarchy supertypes as focused context", ":AcpSupertypes", "LSP", function()
+			M.open_supertypes()
+		end)
+		add_action(items, "Supertypes quickfix", "Send LSP type hierarchy supertypes to quickfix", ":AcpSupertypesQuickfix", "LSP", function()
+			M.open_supertypes_quickfix()
+		end)
+		add_action(items, "Subtypes", "Pick LSP type hierarchy subtypes as focused context", ":AcpSubtypes", "LSP", function()
+			M.open_subtypes()
+		end)
+		add_action(items, "Subtypes quickfix", "Send LSP type hierarchy subtypes to quickfix", ":AcpSubtypesQuickfix", "LSP", function()
+			M.open_subtypes_quickfix()
+		end)
 		add_action(items, "LSP highlights", "Show source-buffer LSP read/write highlights", "<leader>aH", "LSP", function()
 			M.open_highlights()
 		end)
@@ -4503,6 +4543,22 @@ local function source_action_items(state)
 	add("Callees quickfix", "Send outgoing LSP call hierarchy entries to quickfix", ":AcpCalleesQuickfix", "LSP", function()
 		focus_session(state)
 		M.open_callees_quickfix()
+	end)
+	add("Supertypes", "Pick LSP type hierarchy supertypes from the source cursor", ":AcpSupertypes", "LSP", function()
+		focus_session(state)
+		M.open_supertypes()
+	end)
+	add("Supertypes quickfix", "Send LSP type hierarchy supertypes to quickfix", ":AcpSupertypesQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_supertypes_quickfix()
+	end)
+	add("Subtypes", "Pick LSP type hierarchy subtypes from the source cursor", ":AcpSubtypes", "LSP", function()
+		focus_session(state)
+		M.open_subtypes()
+	end)
+	add("Subtypes quickfix", "Send LSP type hierarchy subtypes to quickfix", ":AcpSubtypesQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_subtypes_quickfix()
 	end)
 	add("LSP highlights", "Show LSP read/write highlights from the source cursor", "<leader>aH", "LSP", function()
 		focus_session(state)
@@ -6289,6 +6345,176 @@ function M.open_callees_quickfix()
 	M.open_call_hierarchy_quickfix("outgoing")
 end
 
+function M.open_type_hierarchy(direction)
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local type_hierarchy = require("acp.type_hierarchy")
+	local spec = direction == "subtypes" and {
+		status = "subtypes",
+		title = " ACP subtypes ",
+		filetype = "acp-subtypes",
+		suffix = "subtypes",
+		submit = "Add ACP subtype context",
+		close = "Close ACP subtypes",
+		preview = "Subtype",
+	} or {
+		status = "supertypes",
+		title = " ACP supertypes ",
+		filetype = "acp-supertypes",
+		suffix = "supertypes",
+		submit = "Add ACP supertype context",
+		close = "Close ACP supertypes",
+		preview = "Supertype",
+	}
+
+	if not state.busy then
+		set_run_status(state, ("loading %s"):format(spec.status))
+	end
+	type_hierarchy.request(state.source, direction, function(type_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		if not type_list or #type_list == 0 then
+			notify(("No LSP %s found for the source cursor"):format(spec.status), vim.log.levels.WARN)
+			return
+		end
+
+		local lines, line_types = type_hierarchy.picker_lines(type_list, {
+			direction = direction,
+		})
+		local view = picker.open({
+			name = ("ACP://%s/%d/%s"):format(state.adapter, state.id, spec.suffix),
+			filetype = spec.filetype,
+			lines = lines,
+			title = spec.title,
+			submit_desc = spec.submit,
+			close_desc = spec.close,
+			preview = function(row)
+				local item = line_types[row]
+				if not item then
+					return nil
+				end
+				return source_preview(
+					type_hierarchy.bufnr(item),
+					type_hierarchy.range(item),
+					(" %s %s "):format(spec.preview, item.name)
+				)
+			end,
+			on_submit = function(row, view)
+				local item = line_types[row]
+				if not item then
+					return
+				end
+				local prompt, prompt_err = type_hierarchy.prompt(item, direction)
+				if not prompt then
+					notify(prompt_err or "Failed to render LSP type hierarchy context", vim.log.levels.ERROR)
+					return
+				end
+				view.close()
+				append_input_text(state, prompt)
+				if not state.busy then
+					set_run_status(state, ("%s: %s"):format(spec.status, item.name))
+				end
+				if valid_win(state.input_win) then
+					vim.api.nvim_set_current_win(state.input_win)
+				end
+			end,
+		})
+
+		vim.keymap.set("n", "Q", function()
+			view.close()
+			M.open_type_hierarchy_quickfix(direction, type_list, state)
+		end, { buffer = view.bufnr, nowait = true, desc = ("Open ACP %s quickfix"):format(spec.status) })
+	end)
+end
+
+function M.open_type_hierarchy_quickfix(direction, type_list, state_override)
+	local state = state_override or current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local type_hierarchy = require("acp.type_hierarchy")
+	local label = direction == "subtypes" and "SUBTYPE" or "SUPERTYPE"
+	local title = direction == "subtypes" and "ACP subtypes" or "ACP supertypes"
+
+	local function open_items(items)
+		if not items or #items == 0 then
+			notify(("No LSP %s found for the source cursor"):format(title:lower()), vim.log.levels.WARN)
+			return false
+		end
+
+		local qf_items = type_hierarchy.quickfix_items(items, {
+			direction = direction,
+			label = label,
+		})
+		if #qf_items == 0 then
+			notify(("No quickfix-ready LSP %s found"):format(title:lower()), vim.log.levels.WARN)
+			return false
+		end
+
+		vim.fn.setqflist({}, " ", {
+			title = ("%s #%s"):format(title, tostring(state.id or "?")),
+			items = qf_items,
+		})
+		vim.cmd("copen")
+		if not state.busy then
+			set_run_status(state, ("%s quickfix"):format(title:gsub("^ACP%s+", "")))
+		end
+		return true
+	end
+
+	if type_list then
+		open_items(type_list)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, ("loading %s quickfix"):format(title:lower()))
+	end
+	type_hierarchy.request(state.source, direction, function(items, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_items(items)
+	end)
+end
+
+function M.open_supertypes()
+	M.open_type_hierarchy("supertypes")
+end
+
+function M.open_supertypes_quickfix()
+	M.open_type_hierarchy_quickfix("supertypes")
+end
+
+function M.open_subtypes()
+	M.open_type_hierarchy("subtypes")
+end
+
+function M.open_subtypes_quickfix()
+	M.open_type_hierarchy_quickfix("subtypes")
+end
+
 function M.open_highlights()
 	local state = current_source_action_state()
 	if not state then
@@ -6770,6 +6996,12 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		callees = function()
 			M.open_callees()
+		end,
+		supertypes = function()
+			M.open_supertypes()
+		end,
+		subtypes = function()
+			M.open_subtypes()
 		end,
 		symbols = function()
 			M.open_symbols()

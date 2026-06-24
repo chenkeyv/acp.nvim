@@ -70,6 +70,18 @@ local workflows = {
 		info = "Open outgoing LSP call hierarchy entries as focused context.",
 	},
 	{
+		id = "supertypes",
+		trigger = "@supertypes",
+		menu = "LSP",
+		info = "Open LSP type hierarchy supertypes as focused context.",
+	},
+	{
+		id = "subtypes",
+		trigger = "@subtypes",
+		menu = "LSP",
+		info = "Open LSP type hierarchy subtypes as focused context.",
+	},
+	{
 		id = "symbols",
 		trigger = "@symbols",
 		menu = "LSP",

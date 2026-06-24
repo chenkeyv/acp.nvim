@@ -68,6 +68,7 @@ This plugin provides an editor-native ACP chat surface:
 - async LSP inlay-hint picker for hidden type and parameter context
 - async LSP selection-range picker for semantic source context
 - async LSP incoming/outgoing call-hierarchy pickers with quickfix export
+- async LSP supertype/subtype hierarchy pickers with quickfix export
 - async LSP document-highlight marks for read/write source occurrences
 - async LSP references picker with quickfix export for focused usage context
 - async LSP declaration picker with quickfix export for API declaration context
@@ -187,6 +188,10 @@ vim.g.acp_nvim_config = {
 - `:AcpCallersQuickfix` sends incoming LSP calls for the source cursor to quickfix
 - `:AcpCallees` opens an LSP outgoing-call picker for the source cursor
 - `:AcpCalleesQuickfix` sends outgoing LSP calls for the source cursor to quickfix
+- `:AcpSupertypes` opens an LSP supertype picker for the source cursor
+- `:AcpSupertypesQuickfix` sends LSP supertypes for the source cursor to quickfix
+- `:AcpSubtypes` opens an LSP subtype picker for the source cursor
+- `:AcpSubtypesQuickfix` sends LSP subtypes for the source cursor to quickfix
 - `:AcpHighlights` shows LSP read/write highlights in the linked source buffer
 - `:AcpClearHighlights` clears source-buffer LSP highlight marks
 - `:AcpReferences` opens an LSP references picker for the source cursor
@@ -227,7 +232,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
-- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@output` workflows
+- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@supertypes`/`@subtypes`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>am` opens a persistent output map with progress rails and item counts
