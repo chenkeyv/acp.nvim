@@ -1094,6 +1094,47 @@ local function append_input_text(state, text)
 	refresh_prompt_hints(state)
 end
 
+local function draft_output_section(state)
+	if not state or not valid_buf(state.output_buf) or not valid_buf(state.input_buf) then
+		notify("No ACP output section is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local text, range, section_lines = output.section_text(lines, output_cursor_line(state))
+	if not text or text == "" then
+		notify("No ACP output section found", vim.log.levels.WARN)
+		return false
+	end
+
+	local title = ("%s: %s"):format(range.kind or "SECTION", range.title or "section")
+	append_input_text(
+		state,
+		table.concat({
+			"Use this ACP output section as context for a follow-up.",
+			"",
+			("ACP output section (%s):"):format(title),
+			"",
+			text,
+			"",
+			"Request:",
+		}, "\n")
+	)
+	pulse_output_section(state, range)
+	if valid_win(state.input_win) then
+		vim.api.nvim_set_current_win(state.input_win)
+	end
+	notify(
+		("Drafted ACP %s section into prompt (%d line%s)"):format(
+			range.kind or "output",
+			#section_lines,
+			#section_lines == 1 and "" or "s"
+		),
+		vim.log.levels.INFO
+	)
+	return true
+end
+
 local function record_prompt(state, prompt)
 	if not prompt or prompt == "" then
 		return
@@ -1946,6 +1987,9 @@ local function register_keymaps(state)
 	local yank_section = function()
 		yank_output_section(state)
 	end
+	local draft_section = function()
+		draft_output_section(state)
+	end
 	local open_code_blocks = function()
 		open_output_code_blocks(state)
 	end
@@ -2001,6 +2045,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>av", open_output, { buffer = bufnr, desc = "Open ACP output outline" })
 		vim.keymap.set("n", "<leader>ax", open_search, { buffer = bufnr, desc = "Search ACP output" })
 		vim.keymap.set("n", "<leader>ay", yank_section, { buffer = bufnr, desc = "Yank current ACP output section" })
+		vim.keymap.set("n", "<leader>ai", draft_section, { buffer = bufnr, desc = "Draft from current ACP output section" })
 		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
 		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
 		vim.keymap.set("n", "<leader>ae", open_problems, { buffer = bufnr, desc = "Open ACP output problems" })
@@ -2175,6 +2220,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutputYank", function()
 		M.yank_output_section()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputDraft", function()
+		M.draft_output_section()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpOutputOpen", function()
@@ -2565,6 +2614,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Yank output section", "Copy the current transcript section into the unnamed register", "<leader>ay", "session", function()
 			M.yank_output_section()
+		end)
+		add_action(items, "Draft from output", "Insert the current transcript section as follow-up prompt context", "<leader>ai", "session", function()
+			M.draft_output_section()
 		end)
 		add_action(items, "Open output item", "Open a transcript file reference or code block under the cursor", "<CR>", "session", function()
 			M.open_output_context()
@@ -3290,6 +3342,15 @@ function M.yank_output_section()
 	end
 
 	yank_output_section(state)
+end
+
+function M.draft_output_section()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	draft_output_section(state)
 end
 
 function M.open_output_reference()

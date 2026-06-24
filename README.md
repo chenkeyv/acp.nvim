@@ -19,6 +19,7 @@ This plugin provides an editor-native ACP chat surface:
 - cursor-aware current-section highlighting in the output buffer
 - searchable output transcript picker with context previews and jump-to-line navigation
 - current-section yank action with a short visual pulse in the output buffer
+- follow-up prompt drafting from the current output section
 - direct `gf` navigation from transcript file references into source
 - context-aware `<Enter>` action for opening transcript references and code blocks
 - searchable output code-block picker with language-aware previews and scratch buffers
@@ -121,6 +122,7 @@ vim.g.acp_nvim_config = {
 - `:AcpOutput` opens a floating outline of the current output transcript
 - `:AcpOutputSearch` opens every non-empty output line with context previews
 - `:AcpOutputYank` yanks the current output section into the unnamed register
+- `:AcpOutputDraft` inserts the current output section as follow-up prompt context
 - `:AcpOutputOpen` opens the local file reference or code block under the output cursor
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
 - `:AcpOutputLocations` opens local file references from the current output with source previews
@@ -158,6 +160,7 @@ In the prompt buffer:
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>ay` yanks the current output section
+- `<leader>ai` inserts the current output section as follow-up prompt context
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
 - `<leader>ag` opens output file references
@@ -184,6 +187,7 @@ In the output buffer:
 - `gf` opens the local file reference under the cursor
 - `<leader>ax` searches output transcript lines
 - `<leader>ay` yanks the current output section
+- `<leader>ai` inserts the current output section as follow-up prompt context
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
 - `<leader>ag` opens output file references

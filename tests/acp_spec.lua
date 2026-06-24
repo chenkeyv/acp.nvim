@@ -90,6 +90,7 @@ test("setup registers public user commands", function()
 		"AcpOutput",
 		"AcpOutputSearch",
 		"AcpOutputYank",
+		"AcpOutputDraft",
 		"AcpOutputOpen",
 		"AcpCodeBlocks",
 		"AcpOutputLocations",
@@ -1078,6 +1079,16 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(current_section_highlight, "current output section should be highlighted")
+
+		vim.cmd("AcpOutputDraft")
+		local draft = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(draft:find("Use this ACP output section as context for a follow-up.", 1, true))
+		ok(draft:find("ACP output section (USER: Prompt):", 1, true))
+		ok(draft:find("hello output", 1, true))
+		ok(draft:find("Request:", 1, true))
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "" })
+		vim.api.nvim_set_current_win(output_win)
 
 		unnamed_register = vim.fn.getreg('"')
 		unnamed_register_type = vim.fn.getregtype('"')
