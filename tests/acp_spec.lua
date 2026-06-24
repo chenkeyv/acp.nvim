@@ -157,6 +157,39 @@ test("floating picker filters rows while preserving source row mapping", functio
 	view.close()
 end)
 
+test("floating picker renders preview windows for mapped source rows", function()
+	local view = picker.open({
+		name = "ACP://test-preview-picker",
+		filetype = "acp-test-picker",
+		lines = {
+			"ACP Test Picker",
+			"",
+			"alpha action",
+			"beta action",
+		},
+		title = " ACP test picker ",
+		preview = function(row)
+			if not row then
+				return nil
+			end
+			return {
+				lines = { ("preview row %d"):format(row) },
+				filetype = "lua",
+				title = " Preview ",
+			}
+		end,
+	})
+
+	ok(view.preview_winid and vim.api.nvim_win_is_valid(view.preview_winid), "preview window should open")
+	eq(vim.bo[view.preview_bufnr].filetype, "lua")
+	eq(vim.api.nvim_buf_get_lines(view.preview_bufnr, 0, -1, false)[1], "preview row 3")
+
+	view.filter("beta")
+	eq(vim.api.nvim_buf_get_lines(view.preview_bufnr, 0, -1, false)[1], "preview row 4")
+	view.close()
+	ok(not vim.api.nvim_win_is_valid(view.preview_winid), "preview window should close with picker")
+end)
+
 test("session panel view renders status and badges", function()
 	local lines, line_ids, styles = session_view.panel({
 		{
@@ -936,6 +969,18 @@ test("diagnostics command drafts selected diagnostic context", function()
 		vim.cmd("AcpDiagnostics")
 		local picker_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[picker_buf].filetype, "acp-diagnostics")
+		local preview_found = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local bufnr = vim.api.nvim_win_get_buf(winid)
+			if bufnr ~= picker_buf and vim.bo[bufnr].buftype == "nofile" and vim.bo[bufnr].filetype == "lua" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+				if preview:find("local value = missing", 1, true) then
+					preview_found = true
+					break
+				end
+			end
+		end
+		ok(preview_found, "diagnostics picker should show a source preview")
 
 		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)

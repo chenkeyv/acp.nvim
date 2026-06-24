@@ -28,6 +28,28 @@ local function matches_query(line, query)
 	return true
 end
 
+local function normalize_preview(value)
+	if type(value) == "string" then
+		return {
+			lines = vim.split(value, "\n", { plain = true }),
+		}
+	end
+	if type(value) ~= "table" then
+		return nil
+	end
+	if value.lines then
+		return {
+			lines = value.lines,
+			filetype = value.filetype,
+			title = value.title,
+			cursor_line = value.cursor_line,
+		}
+	end
+	return {
+		lines = value,
+	}
+end
+
 function M.window_config(lines, opts)
 	opts = opts or {}
 
@@ -73,6 +95,8 @@ function M.open(opts)
 	local source_lines = vim.deepcopy(lines)
 	local query = ""
 	local display_rows = {}
+	local preview_bufnr
+	local preview_winid
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	if opts.name then
 		vim.api.nvim_buf_set_name(bufnr, opts.name)
@@ -146,6 +170,12 @@ function M.open(opts)
 	}
 
 	function view.close()
+		if valid_win(preview_winid) then
+			pcall(vim.api.nvim_win_close, preview_winid, true)
+		end
+		if valid_buf(preview_bufnr) then
+			pcall(vim.api.nvim_buf_delete, preview_bufnr, { force = true })
+		end
 		M.close(winid, bufnr)
 	end
 
@@ -167,6 +197,80 @@ function M.open(opts)
 		return display_rows[row]
 	end
 
+	local function preview_window_config(preview)
+		local picker_config = vim.api.nvim_win_get_config(winid)
+		local picker_width = picker_config.width or 1
+		local picker_height = picker_config.height or 1
+		local picker_row = tonumber(picker_config.row) or 1
+		local picker_col = tonumber(picker_config.col) or 0
+		local width = 0
+		for _, line in ipairs(preview.lines or {}) do
+			width = math.max(width, #line)
+		end
+		width = math.min(math.max(40, width + 4), math.max(20, vim.o.columns - 4))
+		local height = math.min(math.max(8, #(preview.lines or {})), math.max(1, vim.o.lines - 6))
+		local right_col = picker_col + picker_width + 2
+		local col = right_col + width + 1 < vim.o.columns and right_col or math.max(0, picker_col - width - 2)
+
+		return {
+			relative = "editor",
+			row = picker_row,
+			col = col,
+			width = width,
+			height = math.min(height, picker_height),
+			style = "minimal",
+			border = "rounded",
+			title = preview.title or " ACP preview ",
+			title_pos = "left",
+			zindex = (config_opts.zindex or 65) + 1,
+		}
+	end
+
+	function view.update_preview()
+		if not opts.preview then
+			return
+		end
+
+		local preview = normalize_preview(opts.preview(view.source_row(), view))
+		if not preview or not preview.lines or #preview.lines == 0 then
+			if valid_win(preview_winid) then
+				pcall(vim.api.nvim_win_close, preview_winid, true)
+			end
+			preview_winid = nil
+			return
+		end
+
+		if not valid_buf(preview_bufnr) then
+			preview_bufnr = vim.api.nvim_create_buf(false, true)
+			view.preview_bufnr = preview_bufnr
+			set_buf_options(preview_bufnr, {
+				bufhidden = "wipe",
+				buftype = "nofile",
+				filetype = preview.filetype or "text",
+				modifiable = true,
+				swapfile = false,
+			})
+		end
+
+		vim.bo[preview_bufnr].modifiable = true
+		vim.api.nvim_buf_set_lines(preview_bufnr, 0, -1, false, preview.lines)
+		vim.bo[preview_bufnr].filetype = preview.filetype or "text"
+		vim.bo[preview_bufnr].modifiable = false
+
+		local preview_config = preview_window_config(preview)
+		if valid_win(preview_winid) then
+			pcall(vim.api.nvim_win_set_config, preview_winid, preview_config)
+		else
+			preview_winid = vim.api.nvim_open_win(preview_bufnr, false, preview_config)
+			view.preview_winid = preview_winid
+			vim.wo[preview_winid].cursorline = true
+			vim.wo[preview_winid].number = true
+			vim.wo[preview_winid].relativenumber = false
+			vim.wo[preview_winid].wrap = false
+		end
+		pcall(vim.api.nvim_win_set_cursor, preview_winid, { math.max(1, preview.cursor_line or 1), 0 })
+	end
+
 	function view.filter(next_query)
 		query = next_query or ""
 		render()
@@ -184,6 +288,7 @@ function M.open(opts)
 			end
 			pcall(vim.api.nvim_win_set_cursor, winid, { target, 0 })
 		end
+		view.update_preview()
 	end
 
 	if opts.on_submit then
@@ -200,6 +305,16 @@ function M.open(opts)
 	vim.keymap.set("n", "<C-l>", function()
 		view.filter("")
 	end, { buffer = bufnr, nowait = true, desc = "Clear ACP picker filter" })
+
+	if opts.preview then
+		vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+			buffer = bufnr,
+			callback = function()
+				view.update_preview()
+			end,
+		})
+		view.update_preview()
+	end
 
 	for _, key in ipairs(opts.close_keys or { "q", "<Esc>" }) do
 		vim.keymap.set("n", key, function()

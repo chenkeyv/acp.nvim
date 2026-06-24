@@ -662,6 +662,49 @@ local function command_source_range(command)
 	}
 end
 
+local function source_preview(bufnr, range, title)
+	if not valid_buf(bufnr) then
+		return nil
+	end
+
+	local line_count = vim.api.nvim_buf_line_count(bufnr)
+	if line_count == 0 then
+		return nil
+	end
+	local line1 = range and range.line1 or 1
+	local line2 = range and range.line2 or line1
+	line1 = math.max(1, math.min(line1, line_count))
+	line2 = math.max(1, math.min(line2, line_count))
+	if line2 < line1 then
+		line1, line2 = line2, line1
+	end
+	local start_line = math.max(1, line1 - 4)
+	local end_line = math.min(line_count, line2 + 4)
+	local lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
+	local name = vim.api.nvim_buf_get_name(bufnr)
+	local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or "[No Name]"
+
+	return {
+		lines = #lines > 0 and lines or { "" },
+		filetype = vim.bo[bufnr].filetype ~= "" and vim.bo[bufnr].filetype or "text",
+		title = title or (" %s:%d "):format(path, line1),
+		cursor_line = line1 - start_line + 1,
+	}
+end
+
+local function source_range(source)
+	if source and source.range then
+		return source.range
+	end
+	if source and source.cursor then
+		return {
+			line1 = source.cursor[1] or 1,
+			line2 = source.cursor[1] or 1,
+		}
+	end
+	return nil
+end
+
 local function diagnostics_prompt(source)
 	if not source or not source.bufnr then
 		return nil
@@ -2033,6 +2076,17 @@ local function open_diagnostic_picker(state)
 		title = " ACP diagnostics ",
 		submit_desc = "Draft ACP diagnostic fix",
 		close_desc = "Close ACP diagnostics",
+		preview = function(row)
+			local item = line_items[row]
+			if not item then
+				return nil
+			end
+			return source_preview(
+				state.source.bufnr,
+				diagnostics.range(item),
+				(" Diagnostic %s "):format(diagnostics.severity_name(item.severity))
+			)
+		end,
 		on_submit = function(row, view)
 			local item = line_items[row]
 			if not item then
@@ -2157,6 +2211,17 @@ local function open_code_action_picker(state, action_list)
 		title = " ACP code actions ",
 		submit_desc = "Draft ACP code action",
 		close_desc = "Close ACP code actions",
+		preview = function(row)
+			local action = line_actions[row]
+			if not action then
+				return nil
+			end
+			return source_preview(
+				state.source.bufnr,
+				source_range(state.source),
+				(" Code action %s "):format(action.title)
+			)
+		end,
 		on_submit = function(row, view)
 			local action = line_actions[row]
 			if not action then
@@ -2227,6 +2292,21 @@ local function open_symbol_picker(state, symbol_list)
 		title = " ACP symbols ",
 		submit_desc = "Add ACP symbol context",
 		close_desc = "Close ACP symbols",
+		preview = function(row)
+			local symbol = line_symbols[row]
+			if not symbol then
+				return nil
+			end
+			local line1, line2 = symbols.range_lines(symbol)
+			if not line1 then
+				return nil
+			end
+			return source_preview(
+				state.source.bufnr,
+				{ line1 = line1, line2 = line2 },
+				(" Symbol %s "):format(symbol.name)
+			)
+		end,
 		on_submit = function(row, view)
 			local symbol = line_symbols[row]
 			if not symbol then
@@ -2265,6 +2345,21 @@ local function open_treesitter_picker(state, node_list)
 		title = " ACP Tree-sitter ",
 		submit_desc = "Add ACP Tree-sitter context",
 		close_desc = "Close ACP Tree-sitter nodes",
+		preview = function(row)
+			local item = line_nodes[row]
+			if not item then
+				return nil
+			end
+			local line1, line2 = treesitter.range_lines(item)
+			if not line1 then
+				return nil
+			end
+			return source_preview(
+				state.source.bufnr,
+				{ line1 = line1, line2 = line2 },
+				(" Tree-sitter %s "):format(item.type or "node")
+			)
+		end,
 		on_submit = function(row, view)
 			local item = line_nodes[row]
 			if not item then
@@ -2303,6 +2398,18 @@ local function open_reference_picker(state, reference_list)
 		title = " ACP references ",
 		submit_desc = "Add ACP reference context",
 		close_desc = "Close ACP references",
+		preview = function(row)
+			local reference = line_references[row]
+			if not reference then
+				return nil
+			end
+			local bufnr = references.bufnr(reference)
+			return source_preview(
+				bufnr,
+				references.range(reference),
+				(" Reference %s "):format(references.display_path(reference))
+			)
+		end,
 		on_submit = function(row, view)
 			local reference = line_references[row]
 			if not reference then

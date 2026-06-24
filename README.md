@@ -9,6 +9,7 @@ This plugin provides an editor-native ACP chat surface:
 - visual session sidebar with current-session highlighting and status badges
 - command-style ACP action palette for discovering session and global workflows
 - searchable floating pickers for actions, sessions, output, diagnostics, LSP, and Tree-sitter workflows
+- source preview windows for diagnostics, symbols, references, code actions, and Tree-sitter pickers
 - plain output buffer for streamed agent responses
 - visual output dashboard with source, model, context window, and key workflow hints
 - output-visible run status for active prompts, tools, and completion
@@ -158,6 +159,7 @@ In floating ACP pickers:
 
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
+- source-backed pickers show a live preview beside the picker
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 
