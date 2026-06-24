@@ -52,6 +52,12 @@ local workflows = {
 		info = "Open LSP document links as visual source context.",
 	},
 	{
+		id = "folding_ranges",
+		trigger = "@folds",
+		menu = "LSP",
+		info = "Open LSP folding ranges as structural source context.",
+	},
+	{
 		id = "rename",
 		trigger = "@rename",
 		menu = "LSP",

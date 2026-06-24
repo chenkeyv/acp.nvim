@@ -1,5 +1,6 @@
 local document_colors = require("acp.document_colors")
 local document_links = require("acp.document_links")
+local folding_ranges = require("acp.folding_ranges")
 
 local M = {}
 
@@ -195,6 +196,47 @@ local function link_marks(source, links)
 	return marks
 end
 
+local function fold_marks(source, folds)
+	if not (source and valid_buf(source.bufnr)) then
+		return {}
+	end
+
+	local line_count = vim.api.nvim_buf_line_count(source.bufnr)
+	local marks = {}
+	for _, item in ipairs(folds or {}) do
+		local range = folding_ranges.range(item)
+		if range and range.line1 and range.line2 then
+			local line1 = math.max(1, math.min(range.line1, line_count))
+			local line2 = math.max(1, math.min(range.line2, line_count))
+			if line2 < line1 then
+				line1, line2 = line2, line1
+			end
+			for line = line1, line2 do
+				table.insert(marks, {
+					line = line,
+					col = 0,
+					opts = {
+						line_hl_group = "AcpSourceFoldRange",
+						priority = 7,
+					},
+				})
+			end
+			table.insert(marks, {
+				line = line1,
+				col = 0,
+				opts = {
+					virt_text = { { (" FOLD %s "):format(folding_ranges.label(item)), "AcpSourceFoldBadge" } },
+					virt_text_pos = "right_align",
+					sign_text = "F>",
+					sign_hl_group = "AcpSourceFoldBadge",
+					priority = 85,
+				},
+			})
+		end
+	end
+	return marks
+end
+
 function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpSourceContext", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpSourceLabel", { link = "Comment", default = true })
@@ -206,6 +248,8 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpSourceColorRange", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpSourceLinkRange", { link = "Underlined", default = true })
 	vim.api.nvim_set_hl(0, "AcpSourceLinkBadge", { fg = "#1a1b26", bg = "#2ac3de", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpSourceFoldRange", { link = "CursorLine", default = true })
+	vim.api.nvim_set_hl(0, "AcpSourceFoldBadge", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
 end
 
 function M.marks(state)
@@ -234,9 +278,11 @@ function M.marks(state)
 	local lens_colors = color_count > 0 and ("colors " .. color_count .. "  ") or ""
 	local link_count = #(state.source_document_links or {})
 	local lens_links = link_count > 0 and ("links " .. link_count .. "  ") or ""
+	local fold_count = #(state.source_folding_ranges or {})
+	local lens_folds = fold_count > 0 and ("folds " .. fold_count .. "  ") or ""
 	local lens = (" ACP #%s source context  %s:AcpSourceActions focus/add/refresh/LSP/Tree-sitter "):format(
 		tostring(state.id or "?"),
-		lens_diagnostics .. lens_highlights .. lens_colors .. lens_links
+		lens_diagnostics .. lens_highlights .. lens_colors .. lens_links .. lens_folds
 	)
 	local marks = {}
 	for line = start_line, end_line do
@@ -266,6 +312,9 @@ function M.marks(state)
 		table.insert(marks, mark)
 	end
 	for _, mark in ipairs(link_marks(source, state.source_document_links)) do
+		table.insert(marks, mark)
+	end
+	for _, mark in ipairs(fold_marks(source, state.source_folding_ranges)) do
 		table.insert(marks, mark)
 	end
 	return marks

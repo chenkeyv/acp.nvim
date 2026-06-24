@@ -6,6 +6,7 @@ local code_actions = require("acp.code_actions")
 local code_lens = require("acp.code_lens")
 local document_colors = require("acp.document_colors")
 local document_links = require("acp.document_links")
+local folding_ranges = require("acp.folding_ranges")
 local acp_commands = require("acp.commands")
 local acp_config = require("acp.config")
 local acp_context = require("acp.context")
@@ -137,6 +138,9 @@ test("setup registers public user commands", function()
 		"AcpDocumentLinks",
 		"AcpDocumentLinksQuickfix",
 		"AcpClearDocumentLinks",
+		"AcpFoldingRanges",
+		"AcpFoldingRangesQuickfix",
+		"AcpClearFoldingRanges",
 		"AcpRename",
 		"AcpSmartContext",
 		"AcpHover",
@@ -438,17 +442,31 @@ test("source view renders LSP document highlights", function()
 				},
 			},
 		},
+		source_folding_ranges = {
+			{
+				kind = "region",
+				collapsedText = "local setup",
+				range = {
+					line1 = 1,
+					line2 = 3,
+					col1 = 1,
+				},
+			},
+		},
 	})
 
 	local lens = marks[1].opts.virt_lines[1][1][1]
 	ok(lens:find("highlights 1", 1, true))
 	ok(lens:find("colors 1", 1, true))
 	ok(lens:find("links 1", 1, true))
+	ok(lens:find("folds 1", 1, true))
 	local highlight_mark
 	local color_range_mark
 	local color_badge_mark
 	local link_range_mark
 	local link_badge_mark
+	local fold_range_marks = 0
+	local fold_badge_mark
 	for _, mark in ipairs(marks) do
 		if mark.opts.hl_group == "AcpSourceHighlightWrite" then
 			highlight_mark = mark
@@ -459,12 +477,18 @@ test("source view renders LSP document highlights", function()
 		if mark.opts.hl_group == "AcpSourceLinkRange" then
 			link_range_mark = mark
 		end
+		if mark.opts.line_hl_group == "AcpSourceFoldRange" then
+			fold_range_marks = fold_range_marks + 1
+		end
 		for _, chunk in ipairs(mark.opts.virt_text or {}) do
 			if chunk[1] and chunk[1]:find("COLOR #FF8000", 1, true) then
 				color_badge_mark = mark
 			end
 			if chunk[1] and chunk[1]:find("LINK https://example.com/docs", 1, true) then
 				link_badge_mark = mark
+			end
+			if chunk[1] and chunk[1]:find("FOLD region lines 1%-3: local setup") then
+				fold_badge_mark = mark
 			end
 		end
 	end
@@ -482,6 +506,9 @@ test("source view renders LSP document highlights", function()
 	eq(link_range_mark.opts.end_col, 38)
 	ok(link_badge_mark, "source document links should render a link badge")
 	eq(link_badge_mark.opts.sign_text, "L>")
+	eq(fold_range_marks, 3)
+	ok(fold_badge_mark, "source folding ranges should render a fold badge")
+	eq(fold_badge_mark.opts.sign_text, "F>")
 
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
@@ -1420,6 +1447,66 @@ test("LSP document links are normalized and rendered", function()
 	pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
 end)
 
+test("LSP folding ranges are normalized and rendered", function()
+	local items = folding_ranges.normalize({
+		{
+			startLine = 4,
+			endLine = 8,
+			startCharacter = 2,
+			endCharacter = 12,
+			kind = "region",
+			collapsedText = "setup block",
+		},
+		{
+			startLine = 0,
+			endLine = 2,
+			kind = "comment",
+		},
+	})
+
+	eq(#items, 2)
+	eq(folding_ranges.kind(items[1]), "comment")
+	eq(folding_ranges.label(items[2]), "region lines 5-9: setup block")
+	eq(folding_ranges.range(items[2]).line1, 5)
+	eq(folding_ranges.range(items[2]).col1, 3)
+
+	local lines, line_items = folding_ranges.picker_lines(items)
+	local text = table.concat(lines, "\n")
+	ok(text:find("ACP Folding Ranges", 1, true))
+	ok(text:find("comment", 1, true))
+	ok(text:find("setup block", 1, true))
+	ok(text:find("Q for quickfix", 1, true))
+	eq(line_items[3], items[1])
+
+	local qf_items = folding_ranges.quickfix_items(42, items)
+	eq(qf_items[1].bufnr, 42)
+	eq(qf_items[1].lnum, 1)
+	ok(qf_items[2].text:find("FOLDING RANGE: region lines 5%-9: setup block"))
+
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_name(bufnr, vim.fn.tempname() .. ".lua")
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"local function setup()",
+		"  local value = 1",
+		"  return value",
+		"end",
+		"local function run()",
+		"  setup()",
+		"end",
+		"return run",
+		"",
+	})
+	vim.bo[bufnr].filetype = "lua"
+	local prompt = folding_ranges.prompt({ bufnr = bufnr }, items[2])
+	ok(prompt:find("Use this LSP folding range as context: region lines 5%-9: setup block."))
+	ok(prompt:find("Folding range:", 1, true))
+	ok(prompt:find("Kind: region", 1, true))
+	ok(prompt:find("Collapsed text: setup block", 1, true))
+	ok(prompt:find("Selection: lines 5-9", 1, true))
+	ok(prompt:find("local function run", 1, true))
+	pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+end)
+
 test("Tree-sitter nodes are collected and rendered for picker", function()
 	local root = {}
 	function root:type()
@@ -1968,6 +2055,9 @@ test("slash command completion items are rendered for completefunc", function()
 	local links_item = prompt_completion.items(commands, "@lin")[1]
 	eq(links_item.word, "@links")
 	eq(prompt_completion.action_id(links_item), "document_links")
+	local folds_item = prompt_completion.items(commands, "@fold")[1]
+	eq(folds_item.word, "@folds")
+	eq(prompt_completion.action_id(folds_item), "folding_ranges")
 	local rename_item = prompt_completion.items(commands, "@ren")[1]
 	eq(rename_item.word, "@rename")
 	eq(prompt_completion.action_id(rename_item), "rename")
@@ -3007,6 +3097,9 @@ test("actions command opens a session action palette", function()
 		local document_links_action = false
 		local document_links_quickfix = false
 		local clear_document_links = false
+		local folding_ranges_action = false
+		local folding_ranges_quickfix = false
+		local clear_folding_ranges = false
 		local rename_action = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
@@ -3066,6 +3159,15 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Clear document links", 1, true) then
 				clear_document_links = true
+			end
+			if line:find("Folding ranges", 1, true) then
+				folding_ranges_action = true
+			end
+			if line:find("Folding ranges quickfix", 1, true) then
+				folding_ranges_quickfix = true
+			end
+			if line:find("Clear folding ranges", 1, true) then
+				clear_folding_ranges = true
 			end
 			if line:find("Rename symbol", 1, true) then
 				rename_action = true
@@ -3138,6 +3240,9 @@ test("actions command opens a session action palette", function()
 		ok(document_links_action, "action palette should include document links")
 		ok(document_links_quickfix, "action palette should include document links quickfix")
 		ok(clear_document_links, "action palette should include clear document links")
+		ok(folding_ranges_action, "action palette should include folding ranges")
+		ok(folding_ranges_quickfix, "action palette should include folding ranges quickfix")
+		ok(clear_folding_ranges, "action palette should include clear folding ranges")
 		ok(rename_action, "action palette should include rename")
 		ok(signature_help, "action palette should include signature help")
 		ok(inlay_hints_action, "action palette should include inlay hints")
@@ -4587,6 +4692,139 @@ test("document links command renders badges, quickfix, and prompt context", func
 		for _, mark in ipairs(marks) do
 			local details = mark[4] or {}
 			ok(details.hl_group ~= "AcpSourceLinkRange", "AcpClearDocumentLinks should clear link marks")
+		end
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("folding ranges command renders overlays, quickfix, and prompt context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local function setup()",
+		"  local value = 1",
+		"  return value",
+		"end",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+	local uri = vim.uri_from_bufnr(source_buf)
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/foldingRange")
+		eq(params.textDocument.uri, uri)
+		callback({
+			[1] = {
+				result = {
+					{
+						startLine = 0,
+						endLine = 3,
+						startCharacter = 0,
+						endCharacter = 3,
+						kind = "region",
+						collapsedText = "setup()",
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local input_win
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		input_win = vim.api.nvim_get_current_win()
+		vim.cmd("AcpFoldingRanges")
+
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-folding-ranges")
+		local picker_text = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+		ok(picker_text:find("ACP Folding Ranges", 1, true))
+		ok(picker_text:find("region", 1, true))
+		ok(picker_text:find("setup()", 1, true))
+
+		local ns = vim.api.nvim_create_namespace("acp.nvim.source")
+		local marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
+		local fold_line_marks = 0
+		local fold_badge_found = false
+		local lens_found = false
+		for _, mark in ipairs(marks) do
+			local details = mark[4] or {}
+			if details.line_hl_group == "AcpSourceFoldRange" then
+				fold_line_marks = fold_line_marks + 1
+			end
+			for _, chunk in ipairs(details.virt_text or {}) do
+				if chunk[1] and chunk[1]:find("FOLD region lines 1%-4: setup%(%)") then
+					fold_badge_found = true
+					eq(details.sign_text, "F>")
+				end
+			end
+			for _, line in ipairs(details.virt_lines or {}) do
+				for _, chunk in ipairs(line) do
+					if chunk[1] and chunk[1]:find("folds 1", 1, true) then
+						lens_found = true
+					end
+				end
+			end
+		end
+		eq(fold_line_marks, 4)
+		ok(fold_badge_found, "AcpFoldingRanges should render a fold badge")
+		ok(lens_found, "source lens should include folding range count")
+
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local qf = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qf.title:find("ACP folding ranges", 1, true))
+		eq(#qf.items, 1)
+		ok(qf.items[1].text:find("FOLDING RANGE: region lines 1%-4: setup%(%)"))
+		vim.cmd("cclose")
+
+		if input_win and vim.api.nvim_win_is_valid(input_win) then
+			vim.api.nvim_set_current_win(input_win)
+		end
+		vim.cmd("AcpFoldingRangesQuickfix")
+		qf = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qf.title:find("ACP folding ranges", 1, true))
+		eq(#qf.items, 1)
+		vim.cmd("cclose")
+
+		if input_win and vim.api.nvim_win_is_valid(input_win) then
+			vim.api.nvim_set_current_win(input_win)
+		end
+		vim.cmd("AcpFoldingRanges")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP folding range as context: region lines 1%-4: setup%(%)%."))
+		ok(prompt:find("Folding range:", 1, true))
+		ok(prompt:find("Kind: region", 1, true))
+		ok(prompt:find("Collapsed text: setup()", 1, true))
+		ok(prompt:find("Selection: lines 1-4", 1, true))
+		ok(prompt:find("local function setup", 1, true))
+
+		vim.cmd("AcpClearFoldingRanges")
+		marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
+		for _, mark in ipairs(marks) do
+			local details = mark[4] or {}
+			ok(details.line_hl_group ~= "AcpSourceFoldRange", "AcpClearFoldingRanges should clear fold marks")
 		end
 	end)
 

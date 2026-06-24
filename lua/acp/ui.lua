@@ -2398,6 +2398,15 @@ local function prompt_action_items()
 	add("Clear document links", "Clear source-buffer LSP document-link badges", ":AcpClearDocumentLinks", "LSP", function()
 		M.clear_document_links()
 	end)
+	add("Folding ranges", "Pick source-buffer LSP folding ranges as focused context", ":AcpFoldingRanges", "LSP", function()
+		M.open_folding_ranges()
+	end)
+	add("Folding ranges quickfix", "Send source-buffer LSP folding ranges to quickfix", ":AcpFoldingRangesQuickfix", "LSP", function()
+		M.open_folding_ranges_quickfix()
+	end)
+	add("Clear folding ranges", "Clear source-buffer LSP folding-range overlays", ":AcpClearFoldingRanges", "LSP", function()
+		M.clear_folding_ranges()
+	end)
 	add("Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
 		M.rename_symbol()
 	end)
@@ -3795,6 +3804,18 @@ function M.setup(opts)
 		M.clear_document_links()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpFoldingRanges", function()
+		M.open_folding_ranges()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpFoldingRangesQuickfix", function()
+		M.open_folding_ranges_quickfix()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpClearFoldingRanges", function()
+		M.clear_folding_ranges()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpRename", function()
 		M.rename_symbol()
 	end, {})
@@ -4357,6 +4378,15 @@ local function action_palette_items(state)
 		add_action(items, "Clear document links", "Clear source-buffer LSP document-link badges", ":AcpClearDocumentLinks", "LSP", function()
 			M.clear_document_links()
 		end)
+		add_action(items, "Folding ranges", "Pick source-buffer LSP folding ranges as focused context", ":AcpFoldingRanges", "LSP", function()
+			M.open_folding_ranges()
+		end)
+		add_action(items, "Folding ranges quickfix", "Send source-buffer LSP folding ranges to quickfix", ":AcpFoldingRangesQuickfix", "LSP", function()
+			M.open_folding_ranges_quickfix()
+		end)
+		add_action(items, "Clear folding ranges", "Clear source-buffer LSP folding-range overlays", ":AcpClearFoldingRanges", "LSP", function()
+			M.clear_folding_ranges()
+		end)
 		add_action(items, "Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
 			M.rename_symbol()
 		end)
@@ -4717,6 +4747,18 @@ local function source_action_items(state)
 	add("Clear document links", "Clear LSP document-link badges", ":AcpClearDocumentLinks", "LSP", function()
 		focus_session(state)
 		M.clear_document_links()
+	end)
+	add("Folding ranges", "Pick LSP folding ranges from the source buffer", ":AcpFoldingRanges", "LSP", function()
+		focus_session(state)
+		M.open_folding_ranges()
+	end)
+	add("Folding ranges quickfix", "Send LSP folding ranges to quickfix", ":AcpFoldingRangesQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_folding_ranges_quickfix()
+	end)
+	add("Clear folding ranges", "Clear LSP folding-range overlays", ":AcpClearFoldingRanges", "LSP", function()
+		focus_session(state)
+		M.clear_folding_ranges()
 	end)
 	add("Clear highlights", "Clear LSP highlight marks in the source buffer", ":AcpClearHighlights", "LSP", function()
 		focus_session(state)
@@ -6636,6 +6678,159 @@ function M.clear_document_links()
 	end
 end
 
+function M._open_folding_range_picker(state, fold_list)
+	local folding_ranges = require("acp.folding_ranges")
+	if not fold_list or #fold_list == 0 then
+		notify("No LSP folding ranges found for the source buffer", vim.log.levels.WARN)
+		return false
+	end
+
+	state.source_folding_ranges = fold_list
+	refresh_source_marks(state)
+
+	local lines, line_folds = folding_ranges.picker_lines(fold_list)
+	local view
+	view = picker.open({
+		name = ("ACP://%s/%d/folding-ranges"):format(state.adapter, state.id),
+		filetype = "acp-folding-ranges",
+		lines = lines,
+		title = " ACP folding ranges ",
+		submit_desc = "Add ACP folding-range context",
+		close_desc = "Close ACP folding ranges",
+		preview = function(row)
+			local item = line_folds[row]
+			if not item then
+				return nil
+			end
+			return source_preview(
+				state.source.bufnr,
+				folding_ranges.range(item),
+				(" Folding range %s "):format(folding_ranges.label(item))
+			)
+		end,
+		on_submit = function(row, view)
+			local item = line_folds[row]
+			if not item then
+				return
+			end
+			local prompt, err = folding_ranges.prompt(state.source, item)
+			if not prompt then
+				notify(err or "Failed to render LSP folding-range context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("folding range: %s"):format(folding_ranges.label(item)))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
+	})
+
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		M._open_folding_ranges_quickfix(state, fold_list)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP folding ranges quickfix" })
+
+	return true
+end
+
+function M._open_folding_ranges_quickfix(state, fold_list)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	local folding_ranges = require("acp.folding_ranges")
+	local function open_items(items)
+		if not items or #items == 0 then
+			notify("No LSP folding ranges found for the source buffer", vim.log.levels.WARN)
+			return false
+		end
+
+		state.source_folding_ranges = items
+		refresh_source_marks(state)
+		vim.fn.setqflist({}, " ", {
+			title = ("ACP folding ranges #%s"):format(tostring(state.id or "?")),
+			items = folding_ranges.quickfix_items(state.source.bufnr, items),
+		})
+		vim.cmd("copen")
+		if not state.busy then
+			set_run_status(state, "folding ranges quickfix")
+		end
+		return true
+	end
+
+	if fold_list then
+		return open_items(fold_list)
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading folding ranges quickfix")
+	end
+	folding_ranges.request(state.source, function(items, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_items(items)
+	end)
+	return true
+end
+
+function M.open_folding_ranges()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local folding_ranges = require("acp.folding_ranges")
+	if not state.busy then
+		set_run_status(state, "loading folding ranges")
+	end
+	folding_ranges.request(state.source, function(fold_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		M._open_folding_range_picker(state, fold_list)
+	end)
+end
+
+function M.open_folding_ranges_quickfix()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	M._open_folding_ranges_quickfix(state)
+end
+
+function M.clear_folding_ranges()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	state.source_folding_ranges = nil
+	refresh_source_marks(state)
+	if not state.busy then
+		set_run_status(state, "folding ranges cleared")
+	end
+end
+
 function M.rename_symbol()
 	local state = current_state()
 	if not state then
@@ -7729,6 +7924,9 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		document_links = function()
 			M.open_document_links()
+		end,
+		folding_ranges = function()
+			M.open_folding_ranges()
 		end,
 		rename = function()
 			M.rename_symbol()
