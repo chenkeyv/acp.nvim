@@ -2351,6 +2351,9 @@ local function prompt_action_items()
 	add("Signature help", "Insert LSP signature help for the source cursor", ":AcpSignature", "LSP", function()
 		M.add_signature()
 	end)
+	add("Inlay hints", "Pick LSP inlay hints as source context", ":AcpInlayHints", "LSP", function()
+		M.open_inlay_hints()
+	end)
 	add("Selection ranges", "Pick LSP semantic ranges around the source cursor", ":AcpSelectionRanges", "LSP", function()
 		M.open_selection_ranges()
 	end)
@@ -2511,7 +2514,7 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "- Source selection and cursor context")
 	table.insert(
 		lines,
-		"- LSP diagnostics, code actions, hover, signature help, selection ranges, call hierarchy, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
+		"- LSP diagnostics, code actions, hover, signature help, inlay hints, selection ranges, call hierarchy, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
 	)
 	table.insert(lines, "- Tree-sitter nodes around the source cursor")
 	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
@@ -3691,6 +3694,10 @@ function M.setup(opts)
 		M.add_signature()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpInlayHints", function()
+		M.open_inlay_hints()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpSelectionRanges", function()
 		M.open_selection_ranges()
 	end, {})
@@ -4190,6 +4197,9 @@ local function action_palette_items(state)
 		add_action(items, "Signature help", "Insert LSP signature help into the prompt", ":AcpSignature", "LSP", function()
 			M.add_signature()
 		end)
+		add_action(items, "Inlay hints", "Pick LSP inlay hints as focused source context", ":AcpInlayHints", "LSP", function()
+			M.open_inlay_hints()
+		end)
 		add_action(items, "Selection ranges", "Pick LSP semantic ranges around the source cursor", ":AcpSelectionRanges", "LSP", function()
 			M.open_selection_ranges()
 		end)
@@ -4454,6 +4464,10 @@ local function source_action_items(state)
 	add("Signature help", "Insert LSP signature help from the source cursor", ":AcpSignature", "LSP", function()
 		focus_session(state)
 		M.add_signature()
+	end)
+	add("Inlay hints", "Pick LSP inlay hints from the source cursor", ":AcpInlayHints", "LSP", function()
+		focus_session(state)
+		M.open_inlay_hints()
 	end)
 	add("Selection ranges", "Pick LSP semantic ranges from the source cursor", ":AcpSelectionRanges", "LSP", function()
 		focus_session(state)
@@ -5909,6 +5923,78 @@ function M.add_signature()
 	end)
 end
 
+function M.open_inlay_hints()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local inlay_hints = require("acp.inlay_hints")
+	if not state.busy then
+		set_run_status(state, "loading inlay hints")
+	end
+	inlay_hints.request(state.source, function(items, err, range)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		if not items or #items == 0 then
+			notify("No LSP inlay hints found for the source range", vim.log.levels.WARN)
+			return
+		end
+
+		local lines, line_items = inlay_hints.picker_lines(items, {
+			bufnr = state.source.bufnr,
+			range = range,
+		})
+		picker.open({
+			name = ("ACP://%s/%d/inlay-hints"):format(state.adapter, state.id),
+			filetype = "acp-inlay-hints",
+			lines = lines,
+			title = " ACP inlay hints ",
+			submit_desc = "Add ACP inlay-hint context",
+			close_desc = "Close ACP inlay hints",
+			preview = function(row)
+				local item = line_items[row]
+				if not item then
+					return nil
+				end
+				return source_preview(
+					state.source.bufnr,
+					inlay_hints.range(item) or range,
+					item.all and " All inlay hints " or (" Inlay hint %s "):format(item.label or "hint")
+				)
+			end,
+			on_submit = function(row, view)
+				local item = line_items[row]
+				if not item then
+					return
+				end
+				local prompt = inlay_hints.prompt(state.source, item)
+				if not prompt then
+					notify("Failed to render LSP inlay-hint context", vim.log.levels.ERROR)
+					return
+				end
+				view.close()
+				append_input_text(state, prompt)
+				if not state.busy then
+					set_run_status(state, item.all and "inlay hints added" or ("inlay hint: %s"):format(item.label or "context"))
+				end
+				if valid_win(state.input_win) then
+					vim.api.nvim_set_current_win(state.input_win)
+				end
+			end,
+		})
+	end)
+end
+
 function M.open_selection_ranges()
 	local state = current_state()
 	if not state then
@@ -6613,6 +6699,9 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		signature = function()
 			M.add_signature()
+		end,
+		inlay_hints = function()
+			M.open_inlay_hints()
 		end,
 		selection = function()
 			M.open_selection_ranges()

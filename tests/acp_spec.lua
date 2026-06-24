@@ -8,6 +8,7 @@ local acp_config = require("acp.config")
 local acp_context = require("acp.context")
 local acp_diagnostics = require("acp.diagnostics")
 local acp_health = require("acp.health")
+local inlay_hints = require("acp.inlay_hints")
 local lsp_highlights = require("acp.highlights")
 local file_review = require("acp.file_review")
 local hover = require("acp.hover")
@@ -123,6 +124,7 @@ test("setup registers public user commands", function()
 		"AcpCodeActions",
 		"AcpHover",
 		"AcpSignature",
+		"AcpInlayHints",
 		"AcpSelectionRanges",
 		"AcpCallers",
 		"AcpCallersQuickfix",
@@ -983,6 +985,53 @@ test("LSP signature help is normalized", function()
 	eq(signature.text({ signatures = {} }), nil)
 end)
 
+test("LSP inlay hints are flattened for picker rows", function()
+	local items = inlay_hints.flatten({
+		[1] = {
+			result = {
+				{
+					position = { line = 0, character = 19 },
+					kind = 2,
+					label = "left:",
+				},
+				{
+					position = { line = 0, character = 26 },
+					kind = 1,
+					label = {
+						{ value = ": number" },
+					},
+				},
+			},
+		},
+	})
+
+	eq(#items, 2)
+	eq(items[1].kind, "PARAM")
+	eq(items[1].label, "left:")
+	eq(items[1].line, 1)
+	eq(items[1].col, 20)
+	eq(items[2].kind, "TYPE")
+	eq(items[2].label, ": number")
+
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local result = add(a, b)",
+	})
+	local lines, line_items = inlay_hints.picker_lines(items, {
+		bufnr = source_buf,
+		range = { line1 = 1, line2 = 1 },
+	})
+	local text = table.concat(lines, "\n")
+	ok(text:find("ACP Inlay Hints", 1, true))
+	ok(text:find("All inlay hints %(2%) lines 1%-1"))
+	ok(text:find("PARAM", 1, true))
+	ok(text:find("left:", 1, true))
+	ok(text:find(": number", 1, true))
+	eq(line_items[3].all, true)
+	eq(line_items[4], items[1])
+	pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+end)
+
 test("LSP selection ranges are flattened for picker rows", function()
 	local items = selection_ranges.flatten({
 		[1] = {
@@ -1440,6 +1489,9 @@ test("slash command completion items are rendered for completefunc", function()
 	local signature_item = prompt_completion.items(commands, "@sig")[1]
 	eq(signature_item.word, "@signature")
 	eq(prompt_completion.action_id(signature_item), "signature")
+	local inlay_item = prompt_completion.items(commands, "@inlay")[1]
+	eq(inlay_item.word, "@inlay-hints")
+	eq(prompt_completion.action_id(inlay_item), "inlay_hints")
 	local selection_item = prompt_completion.items(commands, "@sel")[1]
 	eq(selection_item.word, "@selection")
 	eq(prompt_completion.action_id(selection_item), "selection")
@@ -2397,6 +2449,7 @@ test("actions command opens a session action palette", function()
 		local yank_code_block = false
 		local diagnostics_quickfix = false
 		local signature_help = false
+		local inlay_hints_action = false
 		local selection_ranges_action = false
 		local lsp_highlight_action = false
 		local callers_quickfix = false
@@ -2436,6 +2489,9 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Signature help", 1, true) then
 				signature_help = true
+			end
+			if line:find("Inlay hints", 1, true) then
+				inlay_hints_action = true
 			end
 			if line:find("Selection ranges", 1, true) then
 				selection_ranges_action = true
@@ -2483,6 +2539,7 @@ test("actions command opens a session action palette", function()
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
 		ok(signature_help, "action palette should include signature help")
+		ok(inlay_hints_action, "action palette should include inlay hints")
 		ok(selection_ranges_action, "action palette should include selection ranges")
 		ok(lsp_highlight_action, "action palette should include LSP highlights")
 		ok(callers_quickfix, "action palette should include callers quickfix")
@@ -2997,6 +3054,85 @@ test("signature command drafts LSP signature help context", function()
 		ok(prompt:find("* right", 1, true))
 		ok(prompt:find("Right value.", 1, true))
 		ok(prompt:find("Line: local result = join%(left, right%)"))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("inlay hints command drafts selected LSP inlay-hint context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	local source_line = "local result = add(a, b)"
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		source_line,
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 19 })
+
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/inlayHint")
+		eq(params.range.start.line, 0)
+		eq(params.range.start.character, 0)
+		eq(params.range["end"].line, 0)
+		eq(params.range["end"].character, #source_line)
+		callback({
+			[1] = {
+				result = {
+					{
+						position = { line = 0, character = 19 },
+						kind = 2,
+						label = "left:",
+					},
+					{
+						position = { line = 0, character = 22 },
+						kind = 1,
+						label = {
+							{ value = ": number" },
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpInlayHints")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-inlay-hints")
+		local picker_text = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+		ok(picker_text:find("All inlay hints", 1, true))
+		ok(picker_text:find("left:", 1, true))
+		ok(picker_text:find(": number", 1, true))
+
+		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use these LSP inlay hints as context.", 1, true))
+		ok(prompt:find("Inlay hints:", 1, true))
+		ok(prompt:find("- 1:20 PARAM left:", 1, true))
+		ok(prompt:find("- 1:23 TYPE : number", 1, true))
+		ok(prompt:find("Selection: lines 1%-1", 1, false))
+		ok(prompt:find("Line: local result = add%(a, b%)"))
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all

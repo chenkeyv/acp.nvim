@@ -34,6 +34,12 @@ local workflows = {
 		info = "Insert LSP signature help for the source cursor.",
 	},
 	{
+		id = "inlay_hints",
+		trigger = "@inlay-hints",
+		menu = "LSP",
+		info = "Open LSP inlay hints as focused source context.",
+	},
+	{
 		id = "selection",
 		trigger = "@selection",
 		menu = "LSP",
