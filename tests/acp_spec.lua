@@ -118,6 +118,8 @@ test("setup registers public user commands", function()
 		"AcpHover",
 		"AcpReferences",
 		"AcpReferencesQuickfix",
+		"AcpDefinitions",
+		"AcpDefinitionsQuickfix",
 		"AcpSymbols",
 		"AcpSymbolsQuickfix",
 		"AcpTreeSitter",
@@ -788,6 +790,20 @@ test("LSP references are flattened and rendered for picker", function()
 	eq(qf_items[1].lnum, 2)
 	eq(qf_items[1].col, 1)
 	ok(qf_items[1].text:find("REFERENCE", 1, true))
+
+	local single = references.flatten({
+		uri = uri,
+		range = {
+			start = { line = 5, character = 2 },
+			["end"] = { line = 5, character = 7 },
+		},
+	})
+	eq(#single, 1)
+
+	local definition_lines = references.picker_lines(flattened, { title = "ACP Definitions" })
+	ok(table.concat(definition_lines, "\n"):find("ACP Definitions", 1, true))
+	local definition_qf = references.quickfix_items(flattened, { label = "DEFINITION" })
+	ok(definition_qf[1].text:find("DEFINITION", 1, true))
 end)
 
 test("diagnostic picker lines render source and code", function()
@@ -1182,6 +1198,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		ok(prompt_actions_text:find("Source diagnostics", 1, true))
 		ok(prompt_actions_text:find("Tree-sitter nodes", 1, true))
 		ok(prompt_actions_text:find("References quickfix", 1, true))
+		ok(prompt_actions_text:find("Definitions quickfix", 1, true))
 		ok(prompt_actions_text:find("Symbols quickfix", 1, true))
 		ok(prompt_actions_text:find("Search output", 1, true))
 		ok(prompt_actions_text:find("Output map", 1, true))
@@ -1987,6 +2004,7 @@ test("actions command opens a session action palette", function()
 		local yank_code_block = false
 		local diagnostics_quickfix = false
 		local references_quickfix = false
+		local definitions_quickfix = false
 		local symbols_quickfix = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
@@ -2017,6 +2035,9 @@ test("actions command opens a session action palette", function()
 			if line:find("References quickfix", 1, true) then
 				references_quickfix = true
 			end
+			if line:find("Definitions quickfix", 1, true) then
+				definitions_quickfix = true
+			end
 			if line:find("Symbols quickfix", 1, true) then
 				symbols_quickfix = true
 			end
@@ -2033,6 +2054,7 @@ test("actions command opens a session action palette", function()
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
 		ok(references_quickfix, "action palette should include references quickfix")
+		ok(definitions_quickfix, "action palette should include definitions quickfix")
 		ok(symbols_quickfix, "action palette should include symbols quickfix")
 		ok(close_session, "action palette should include close session")
 
@@ -2104,6 +2126,7 @@ test("chat marks captured source ranges and clears them on close", function()
 		ok(actions_text:find("Refresh source", 1, true))
 		ok(actions_text:find("Tree-sitter nodes", 1, true))
 		ok(actions_text:find("References quickfix", 1, true))
+		ok(actions_text:find("Definitions quickfix", 1, true))
 		ok(actions_text:find("Symbols quickfix", 1, true))
 		ok(actions_text:find("Search output", 1, true))
 		ok(actions_text:find("Output map", 1, true))
@@ -2570,6 +2593,102 @@ test("references command drafts selected LSP reference context", function()
 	if vim.api.nvim_buf_is_valid(source_buf) then
 		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("definitions command drafts selected LSP definition context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	local path = vim.fn.tempname() .. ".lua"
+	vim.api.nvim_buf_set_name(source_buf, path)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = 1",
+		"print(value)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 2, 6 })
+
+	local uri = vim.uri_from_bufnr(source_buf)
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/definition")
+		eq(params.position.line, 1)
+		eq(params.position.character, 6)
+		callback({
+			[1] = {
+				result = {
+					uri = uri,
+					range = {
+						start = { line = 0, character = 6 },
+						["end"] = { line = 0, character = 11 },
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpDefinitions")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-definitions")
+
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local definition_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(definition_qflist.title:find("ACP definitions", 1, true))
+		eq(#definition_qflist.items, 1)
+		eq(definition_qflist.items[1].bufnr, source_buf)
+		eq(definition_qflist.items[1].lnum, 1)
+		eq(definition_qflist.items[1].col, 7)
+		ok(definition_qflist.items[1].text:find("DEFINITION", 1, true))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after definitions quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpDefinitionsQuickfix")
+		definition_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(definition_qflist.title:find("ACP definitions", 1, true))
+		eq(#definition_qflist.items, 1)
+		eq(definition_qflist.items[1].lnum, 1)
+		eq(definition_qflist.items[1].col, 7)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible before definition draft")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpDefinitions")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-definitions")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP definition as context.", 1, true))
+		ok(prompt:find("Definition:", 1, true))
+		ok(prompt:find("Selection: lines 1-1", 1, true))
+		ok(prompt:find("local value = 1", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.fn.delete(path)
 	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
 	if not passed then
 		error(err, 2)

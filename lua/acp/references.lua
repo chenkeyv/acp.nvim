@@ -71,16 +71,22 @@ end
 
 function M.flatten(results)
 	local out = {}
-	for _, reference in ipairs(results or {}) do
-		if reference_uri(reference) and reference_range(reference) then
-			table.insert(out, reference)
+	local function collect(item)
+		if reference_uri(item) and reference_range(item) then
+			table.insert(out, item)
+		elseif type(item) == "table" then
+			for _, child in ipairs(item) do
+				collect(child)
+			end
 		end
 	end
+	collect(results)
 	return out
 end
 
-function M.picker_lines(references)
-	local lines = { "ACP References", "" }
+function M.picker_lines(references, opts)
+	opts = opts or {}
+	local lines = { opts.title or "ACP References", "" }
 	local line_references = {}
 	for index, reference in ipairs(references or {}) do
 		local range = M.range(reference)
@@ -94,7 +100,9 @@ function M.picker_lines(references)
 	return lines, line_references
 end
 
-function M.quickfix_items(references)
+function M.quickfix_items(references, opts)
+	opts = opts or {}
+	local label = opts.label or "REFERENCE"
 	local items = {}
 	for _, reference in ipairs(references or {}) do
 		local bufnr = M.bufnr(reference)
@@ -106,7 +114,7 @@ function M.quickfix_items(references)
 				col = range.col1 or 1,
 				end_lnum = range.line2,
 				end_col = range.col2 or range.col1 or 1,
-				text = ("REFERENCE: %s:%d"):format(M.display_path(reference), range.line1),
+				text = ("%s: %s:%d"):format(label, M.display_path(reference), range.line1),
 			})
 		end
 	end
