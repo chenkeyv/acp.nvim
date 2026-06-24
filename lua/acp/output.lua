@@ -150,7 +150,7 @@ function M.dashboard_lines(state)
 		("Session: #%s | Mode: %s"):format(tostring(state and state.id or "?"), clean(state and state.mode) or "?"),
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
-		"Keys: [[/]] sections | za folds | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>af changes | <leader>ad diagnostics",
+		"Keys: <leader>ax search | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>ak actions",
 		"",
 	}
 end
@@ -328,7 +328,7 @@ function M.ghost_text(state, lines, frame)
 		return "Ready - draft in the prompt buffer"
 	end
 
-	return "Idle - [[/]] sections, za folds, <leader>av outline, <leader>ag locs, <leader>ab code"
+	return "Idle - <leader>ax search, [[/]] sections, <leader>av outline, <leader>ak actions"
 end
 
 function M.filetype_for_language(language)
@@ -465,6 +465,50 @@ function M.file_reference_lines(references)
 	table.insert(lines, "")
 	table.insert(lines, "Press <Enter> to jump, / to filter, or q/<Esc> to close.")
 	return lines, line_references
+end
+
+function M.transcript_entries(lines, opts)
+	opts = opts or {}
+	local limit = opts.limit or 500
+	local entries = {}
+
+	for index, line in ipairs(lines or {}) do
+		local text = clean(line)
+		if text then
+			local kind = "TEXT"
+			if M.is_section(line) then
+				kind = section_label(line)
+			end
+			table.insert(entries, {
+				line = index,
+				kind = kind,
+				text = text,
+			})
+			if #entries >= limit then
+				return entries
+			end
+		end
+	end
+
+	return entries
+end
+
+function M.transcript_entry_lines(entries)
+	local lines = { "ACP Output Search", "" }
+	local line_entries = {}
+
+	for _, entry in ipairs(entries or {}) do
+		local text = entry.text or ""
+		if #text > 104 then
+			text = text:sub(1, 101) .. "..."
+		end
+		table.insert(lines, ("%4d  %-7s  %s"):format(entry.line or 1, entry.kind or "TEXT", text))
+		line_entries[#lines] = entry
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Type / to filter, press <Enter> to jump, or q/<Esc> to close.")
+	return lines, line_entries
 end
 
 function M.fold_level(lines, lnum)

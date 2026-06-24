@@ -381,6 +381,76 @@ local function open_output_outline(state)
 	return true
 end
 
+local function output_line_preview(lines, entry)
+	if not entry or not entry.line then
+		return nil
+	end
+
+	local line_count = #lines
+	if line_count == 0 then
+		return nil
+	end
+	local line = math.max(1, math.min(entry.line, line_count))
+	local start_line = math.max(1, line - 5)
+	local end_line = math.min(line_count, line + 5)
+	local preview = {}
+	for index = start_line, end_line do
+		local marker = index == line and ">" or " "
+		table.insert(preview, ("%s %4d  %s"):format(marker, index, lines[index] or ""))
+	end
+
+	return {
+		lines = preview,
+		filetype = "acp",
+		title = (" ACP output line %d "):format(line),
+		cursor_line = line - start_line + 1,
+	}
+end
+
+local function open_output_search(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local entries = output.transcript_entries(output_lines)
+	if #entries == 0 then
+		notify("No ACP output lines found", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_entries = output.transcript_entry_lines(entries)
+	picker.open({
+		name = ("ACP://%s/%d/output-search"):format(state.adapter, state.id),
+		filetype = "acp-output-search",
+		lines = lines,
+		title = " ACP output search ",
+		submit_desc = "Jump to ACP output line",
+		close_desc = "Close ACP output search",
+		preview = function(row)
+			return output_line_preview(output_lines, line_entries[row])
+		end,
+		on_submit = function(row, view)
+			local entry = line_entries[row]
+			if not entry then
+				return
+			end
+
+			local winid = vim.fn.bufwinid(state.output_buf)
+			if not valid_win(winid) then
+				notify("ACP output window is not visible", vim.log.levels.WARN)
+				return
+			end
+
+			view.close()
+			vim.api.nvim_set_current_win(winid)
+			pcall(vim.api.nvim_win_set_cursor, winid, { entry.line, 0 })
+		end,
+	})
+	return true
+end
+
 local file_reference_preview
 local jump_to_file_reference
 
@@ -1539,6 +1609,9 @@ local function register_keymaps(state)
 	local open_output = function()
 		open_output_outline(state)
 	end
+	local open_search = function()
+		open_output_search(state)
+	end
 	local open_code_blocks = function()
 		open_output_code_blocks(state)
 	end
@@ -1583,6 +1656,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 		vim.keymap.set("n", "<leader>av", open_output, { buffer = bufnr, desc = "Open ACP output outline" })
+		vim.keymap.set("n", "<leader>ax", open_search, { buffer = bufnr, desc = "Search ACP output" })
 		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
 		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
 		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
@@ -1746,6 +1820,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutput", function()
 		M.open_output()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputSearch", function()
+		M.open_output_search()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
@@ -2118,6 +2196,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "session", function()
 			M.open_output()
+		end)
+		add_action(items, "Search output", "Search every non-empty transcript line with context preview", "<leader>ax", "session", function()
+			M.open_output_search()
 		end)
 		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
 			M.open_code_blocks()
@@ -2816,6 +2897,15 @@ function M.open_output()
 	end
 
 	open_output_outline(state)
+end
+
+function M.open_output_search()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_search(state)
 end
 
 function M.open_code_blocks()

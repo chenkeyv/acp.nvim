@@ -14,6 +14,7 @@ This plugin provides an editor-native ACP chat surface:
 - visual output dashboard with source, model, context window, and key workflow hints
 - output-visible run status for active prompts, tools, and completion
 - live output winbar/title with status, model, context, and changed-file counts
+- searchable output transcript picker with context previews and jump-to-line navigation
 - searchable output code-block picker with language-aware previews and scratch buffers
 - searchable output location picker for jumping from transcript file references into source
 - Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
@@ -107,6 +108,7 @@ vim.g.acp_nvim_config = {
 - `:AcpActions` opens a picker of available ACP workflows
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
 - `:AcpOutput` opens a floating outline of the current output transcript
+- `:AcpOutputSearch` opens every non-empty output line with context previews
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
 - `:AcpOutputLocations` opens local file references from the current output with source previews
 - `:AcpDiagnostics` opens a picker for source-buffer diagnostics
@@ -139,6 +141,7 @@ In the prompt buffer:
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
 - `<C-Space>` opens native ACP prompt completion
 - `<leader>ac` inserts source-buffer context into the prompt
+- `<leader>ax` searches output transcript lines
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
 - `<leader>ag` opens output file references
@@ -160,6 +163,7 @@ In the output buffer:
 - `za` toggles the fold under the cursor
 - `zM` closes all transcript folds
 - `zR` opens all transcript folds
+- `<leader>ax` searches output transcript lines
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
 - `<leader>ag` opens output file references

@@ -88,6 +88,7 @@ test("setup registers public user commands", function()
 		"AcpActions",
 		"AcpChanges",
 		"AcpOutput",
+		"AcpOutputSearch",
 		"AcpCodeBlocks",
 		"AcpOutputLocations",
 		"AcpDiagnostics",
@@ -336,7 +337,8 @@ test("output dashboard and section helpers are rendered", function()
 	ok(text:find("ACP: test", 1, true))
 	ok(text:find("Session: #7 | Mode: window", 1, true))
 	ok(text:find("Model: test-model | Context: 1k", 1, true))
-	ok(text:find("Keys: [[/]] sections", 1, true))
+	ok(text:find("[[/]] sections", 1, true))
+	ok(text:find("<leader>ax search", 1, true))
 	ok(text:find("<leader>ab code", 1, true))
 	ok(text:find("<leader>ag locs", 1, true))
 
@@ -354,6 +356,15 @@ test("output dashboard and section helpers are rendered", function()
 	ok(outline_text:find("ACP Output Outline", 1, true))
 	ok(outline_text:find("USER", 1, true))
 	eq(line_sections[3].kind, "SESSION")
+	local transcript_entries = acp_output.transcript_entries({ "ACP: test", "", "You", "hello", "Status: running" })
+	eq(#transcript_entries, 4)
+	eq(transcript_entries[2].kind, "USER")
+	eq(transcript_entries[3].line, 4)
+	local transcript_picker, line_entries = acp_output.transcript_entry_lines(transcript_entries)
+	local transcript_text = table.concat(transcript_picker, "\n")
+	ok(transcript_text:find("ACP Output Search", 1, true))
+	ok(transcript_text:find("hello", 1, true))
+	eq(line_entries[4].text, "You")
 
 	local fold_lines = { "ACP: test", "Session: #7 | Mode: window", "You", "hello", "Agent", "world" }
 	eq(acp_output.fold_level(fold_lines, 1), ">1")
@@ -868,7 +879,8 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(dashboard:find("Session: #", 1, true))
 		ok(dashboard:find("Model: test-model | Context: 1k", 1, true))
 		ok(dashboard:find("Source:", 1, true))
-		ok(dashboard:find("Keys: [[/]] sections", 1, true))
+		ok(dashboard:find("[[/]] sections", 1, true))
+		ok(dashboard:find("<leader>ax search", 1, true))
 		ok(vim.wo[output_win].winbar:find("ACP test #", 1, true))
 		eq(vim.wo[output_win].foldmethod, "expr")
 		ok(vim.wo[output_win].foldexpr:find("acp_nvim_output_foldexpr", 1, true))
@@ -912,8 +924,39 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local line = vim.api.nvim_win_get_cursor(output_win)[1]
 		eq(vim.api.nvim_buf_get_lines(output_buf, line - 1, line, false)[1], "You")
 
-		vim.cmd("AcpOutput")
+		vim.cmd("AcpOutputSearch")
 		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-output-search")
+		local search_lines = vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false)
+		local search_row
+		for index, search_line in ipairs(search_lines) do
+			if search_line:find("hello output", 1, true) then
+				search_row = index
+				break
+			end
+		end
+		ok(search_row, "output search should include transcript text")
+		vim.api.nvim_win_set_cursor(0, { search_row, 0 })
+		vim.cmd("doautocmd CursorMoved")
+		local search_preview = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local preview_bufnr = vim.api.nvim_win_get_buf(winid)
+			if preview_bufnr ~= picker_buf and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "acp" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
+				if preview:find("hello output", 1, true) then
+					search_preview = true
+					break
+				end
+			end
+		end
+		ok(search_preview, "output search should show context preview")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_win(), output_win)
+		eq(vim.api.nvim_buf_get_lines(output_buf, vim.api.nvim_win_get_cursor(output_win)[1] - 1, vim.api.nvim_win_get_cursor(output_win)[1], false)[1], "hello output")
+
+		vim.cmd("AcpOutput")
+		picker_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[picker_buf].filetype, "acp-output")
 		local outline = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
 		ok(outline:find("ACP Output Outline", 1, true))
