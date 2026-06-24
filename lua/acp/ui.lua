@@ -2336,6 +2336,9 @@ local function prompt_action_items()
 	add("Add context", "Insert captured editor context into the prompt", "<leader>ac", "source", function()
 		M.add_context()
 	end)
+	add("Smart context", "Insert source context plus available LSP signals", ":AcpSmartContext", "source+LSP", function()
+		M.add_smart_context()
+	end)
 	add("Source diagnostics", "Draft a focused fix from source diagnostics", "<leader>ad", "LSP", function()
 		M.open_diagnostics()
 	end)
@@ -2512,6 +2515,7 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "")
 	table.insert(lines, "Context Sources")
 	table.insert(lines, "- Source selection and cursor context")
+	table.insert(lines, "- Smart context combines source, Tree-sitter, diagnostics, hover, signature help, inlay hints, and semantic ranges")
 	table.insert(
 		lines,
 		"- LSP diagnostics, code actions, hover, signature help, inlay hints, selection ranges, call hierarchy, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
@@ -3686,6 +3690,10 @@ function M.setup(opts)
 		M.open_code_actions()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpSmartContext", function()
+		M.add_smart_context()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpHover", function()
 		M.add_hover()
 	end, {})
@@ -4122,6 +4130,9 @@ local function action_palette_items(state)
 		add_action(items, "Add context", "Insert captured editor context into the prompt", "<leader>ac", "session", function()
 			M.add_context()
 		end)
+		add_action(items, "Smart context", "Insert source context plus available LSP signals", ":AcpSmartContext", "source+LSP", function()
+			M.add_smart_context()
+		end)
 		add_action(items, "Prompt actions", "Show composer-focused actions and source context preview", "?", "session", function()
 			M.open_prompt_actions()
 		end)
@@ -4437,6 +4448,10 @@ local function source_action_items(state)
 	end)
 	add("Add marked context", "Insert this marked source range into the prompt", "<leader>ac", "source", function()
 		add_marked_source_context(state)
+	end)
+	add("Smart context", "Insert source context plus available LSP signals", ":AcpSmartContext", "source+LSP", function()
+		focus_session(state)
+		M.add_smart_context()
 	end)
 	add("Refresh source", "Update this ACP session to the current source cursor or range", ":AcpRefreshSource", "source", function()
 		refresh_source_context(state)
@@ -5592,6 +5607,44 @@ function M.add_context()
 	end
 end
 
+function M.add_smart_context()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local smart_context = require("acp.smart_context")
+	if not state.busy then
+		set_run_status(state, "loading smart context")
+	end
+	smart_context.request(state.source, function(data, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+
+		local prompt = smart_context.prompt(state.source, data)
+		if not prompt then
+			notify("Failed to render smart editor context", vim.log.levels.ERROR)
+			return
+		end
+		append_input_text(state, prompt)
+		if not state.busy then
+			set_run_status(state, "smart context added")
+		end
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
+	end)
+end
+
 function M.open_changes()
 	local state = current_state()
 	if not state then
@@ -6687,6 +6740,9 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 	local runners = {
 		context = function()
 			M.add_context()
+		end,
+		smart_context = function()
+			M.add_smart_context()
 		end,
 		diagnostics = function()
 			M.open_diagnostics()

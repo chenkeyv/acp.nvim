@@ -55,12 +55,14 @@ This plugin provides an editor-native ACP chat surface:
 - native slash-command and `@workflow` completion in the prompt buffer
 - prompt-buffer ghost text and draft statistics while composing
 - prompt-focused action picker with source, LSP, Tree-sitter, output, and session workflows
+- smart context drafting that combines source, Tree-sitter, diagnostics, and available LSP signals
 - floating session config picker for adapter-advertised model, mode, and reasoning options
 - per-session prompt history recall
 - searchable, previewable plain-text transcript history under Neovim state
 - saved transcript replay into a new chat draft
 - adapter-backed session listing and restoration
 - async LSP code-action picker for drafting focused fix/refactor prompts
+- async smart-context insertion for source, hover, signature, inlay hints, and semantic ranges
 - async LSP hover context insertion for source-cursor documentation
 - async LSP signature-help insertion for call-site context
 - async LSP inlay-hint picker for hidden type and parameter context
@@ -176,6 +178,7 @@ vim.g.acp_nvim_config = {
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
+- `:AcpSmartContext` inserts source context plus available LSP hover, signature, inlay hints, and semantic ranges
 - `:AcpHover` inserts LSP hover documentation for the source cursor
 - `:AcpSignature` inserts LSP signature help for the source cursor
 - `:AcpInlayHints` opens LSP inlay hints for the source cursor or captured range
@@ -224,7 +227,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
-- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@diagnostics`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@output` workflows
+- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>am` opens a persistent output map with progress rails and item counts

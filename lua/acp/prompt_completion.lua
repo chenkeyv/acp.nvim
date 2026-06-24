@@ -10,6 +10,12 @@ local workflows = {
 		info = "Insert the captured source context into the prompt.",
 	},
 	{
+		id = "smart_context",
+		trigger = "@smart-context",
+		menu = "source+LSP",
+		info = "Insert source context plus available LSP hover, signature, hints, and ranges.",
+	},
+	{
 		id = "diagnostics",
 		trigger = "@diagnostics",
 		menu = "LSP",

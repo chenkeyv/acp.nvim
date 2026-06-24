@@ -22,6 +22,7 @@ local references = require("acp.references")
 local selection_ranges = require("acp.selection_ranges")
 local session_view = require("acp.session_view")
 local signature = require("acp.signature")
+local smart_context = require("acp.smart_context")
 local source_view = require("acp.source_view")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
@@ -122,6 +123,7 @@ test("setup registers public user commands", function()
 		"AcpCommands",
 		"AcpConfig",
 		"AcpCodeActions",
+		"AcpSmartContext",
 		"AcpHover",
 		"AcpSignature",
 		"AcpInlayHints",
@@ -1078,6 +1080,36 @@ test("LSP selection ranges are flattened for picker rows", function()
 	pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 end)
 
+test("smart context prompt combines editor and LSP signals", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local result = add(a, b)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	local source = acp_context.capture(source_buf, nil, { line1 = 1, line2 = 1 })
+	local prompt = smart_context.prompt(source, {
+		hover_text = "`add`: function",
+		signature_text = "Signature: add(left: number, right: number): number",
+		inlay_hints = {
+			{ line = 1, col = 20, kind = "PARAM", label = "left:" },
+			{ line = 1, col = 23, kind = "TYPE", label = ": number" },
+		},
+		selection_ranges = {
+			{ label = "cursor expression", range = { line1 = 1, line2 = 1 } },
+		},
+	})
+
+	ok(prompt:find("Use this smart editor context", 1, true))
+	ok(prompt:find("Context", 1, true))
+	ok(prompt:find("Selected text:", 1, true))
+	ok(prompt:find("Hover:\n`add`: function", 1, true))
+	ok(prompt:find("Signature help:\nSignature: add%(left: number, right: number%): number"))
+	ok(prompt:find("Inlay hints:\n- 1:20 PARAM left:", 1, true))
+	ok(prompt:find("- 1:23 TYPE : number", 1, true))
+	ok(prompt:find("Selection ranges:\n- cursor expression lines 1-1", 1, true))
+	pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+end)
+
 test("LSP document highlights are normalized for source marks", function()
 	local items = lsp_highlights.normalize({
 		{
@@ -1483,6 +1515,9 @@ test("slash command completion items are rendered for completefunc", function()
 	eq(workflow_items[1].kind, "Snippet")
 	eq(workflow_items[1].user_data, "acp.nvim:context")
 	eq(prompt_completion.action_id(workflow_items[1]), "context")
+	local smart_item = prompt_completion.items(commands, "@smart")[1]
+	eq(smart_item.word, "@smart-context")
+	eq(prompt_completion.action_id(smart_item), "smart_context")
 	local code_action_item = prompt_completion.items(commands, "@code")[1]
 	eq(code_action_item.word, "@code-actions")
 	eq(code_action_item.menu, "LSP")
@@ -2448,6 +2483,7 @@ test("actions command opens a session action palette", function()
 		local output_actions = false
 		local yank_code_block = false
 		local diagnostics_quickfix = false
+		local smart_context_action = false
 		local signature_help = false
 		local inlay_hints_action = false
 		local selection_ranges_action = false
@@ -2486,6 +2522,9 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Diagnostics quickfix", 1, true) then
 				diagnostics_quickfix = true
+			end
+			if line:find("Smart context", 1, true) then
+				smart_context_action = true
 			end
 			if line:find("Signature help", 1, true) then
 				signature_help = true
@@ -2538,6 +2577,7 @@ test("actions command opens a session action palette", function()
 		ok(output_actions, "action palette should include output actions")
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
+		ok(smart_context_action, "action palette should include smart context")
 		ok(signature_help, "action palette should include signature help")
 		ok(inlay_hints_action, "action palette should include inlay hints")
 		ok(selection_ranges_action, "action palette should include selection ranges")
@@ -2930,6 +2970,123 @@ test("code actions command drafts selected LSP action context", function()
 
 	vim.lsp.buf_request_all = original_buf_request_all
 	vim.diagnostic.reset(ns, source_buf)
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("smart context command drafts combined editor and LSP context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	local source_line = "local result = add(a, b)"
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		source_line,
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 19 })
+
+	local seen = {}
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		seen[method] = true
+		if method == "textDocument/hover" then
+			eq(params.position.line, 0)
+			eq(params.position.character, 19)
+			callback({
+				[1] = {
+					result = {
+						contents = {
+							kind = "markdown",
+							value = "`add`: function",
+						},
+					},
+				},
+			})
+		elseif method == "textDocument/signatureHelp" then
+			eq(params.position.line, 0)
+			eq(params.position.character, 19)
+			callback({
+				[1] = {
+					result = {
+						activeSignature = 0,
+						signatures = {
+							{
+								label = "add(left: number, right: number): number",
+								parameters = {
+									{ label = "left" },
+									{ label = "right" },
+								},
+							},
+						},
+					},
+				},
+			})
+		elseif method == "textDocument/inlayHint" then
+			eq(params.range.start.line, 0)
+			eq(params.range.start.character, 0)
+			eq(params.range["end"].line, 0)
+			eq(params.range["end"].character, #source_line)
+			callback({
+				[1] = {
+					result = {
+						{ position = { line = 0, character = 19 }, kind = 2, label = "left:" },
+						{ position = { line = 0, character = 22 }, kind = 1, label = ": number" },
+					},
+				},
+			})
+		elseif method == "textDocument/selectionRange" then
+			eq(params.positions[1].line, 0)
+			eq(params.positions[1].character, 19)
+			callback({
+				[1] = {
+					result = {
+						{
+							range = {
+								start = { line = 0, character = 15 },
+								["end"] = { line = 0, character = 21 },
+							},
+						},
+					},
+				},
+			})
+		else
+			error("unexpected LSP method: " .. tostring(method))
+		end
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpSmartContext")
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+		ok(seen["textDocument/hover"], "smart context should request hover")
+		ok(seen["textDocument/signatureHelp"], "smart context should request signature help")
+		ok(seen["textDocument/inlayHint"], "smart context should request inlay hints")
+		ok(seen["textDocument/selectionRange"], "smart context should request selection ranges")
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this smart editor context", 1, true))
+		ok(prompt:find("Line: local result = add%(a, b%)"))
+		ok(prompt:find("Hover:\n`add`: function", 1, true))
+		ok(prompt:find("Signature help:\nSignature: add%(left: number, right: number%): number"))
+		ok(prompt:find("Inlay hints:\n- 1:20 PARAM left:", 1, true))
+		ok(prompt:find("- 1:23 TYPE : number", 1, true))
+		ok(prompt:find("Selection ranges:\n- cursor expression lines 1-1", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
 	end
