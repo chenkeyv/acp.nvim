@@ -172,7 +172,7 @@ function M.dashboard_lines(state, opts)
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
 		summary_label(opts.stats),
-		"Keys: <leader>ax search | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>ak actions",
+		"Keys: <leader>ax search | <leader>ay yank | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>ak actions",
 		"",
 	}
 end
@@ -201,6 +201,8 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpCodeFence", { fg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpInjectedLanguage", { fg = "#1a1b26", bg = "#7aa2f7", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputPulse", { link = "IncSearch", default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputPulseSoft", { link = "Search", default = true })
 end
 
 function M.line_style(line)
@@ -414,6 +416,36 @@ function M.section_range(lines, lnum)
 		title = section.title,
 		preview = section.preview,
 	}
+end
+
+function M.section_lines(lines, lnum, opts)
+	lines = lines or {}
+	opts = opts or {}
+	local range = M.section_range(lines, lnum)
+	if not range then
+		return nil
+	end
+
+	local section_lines = {}
+	for index = range.line1, range.line2 do
+		table.insert(section_lines, lines[index] or "")
+	end
+
+	if opts.trim_blank ~= false then
+		while #section_lines > 1 and not clean(section_lines[#section_lines]) do
+			table.remove(section_lines)
+		end
+	end
+
+	return section_lines, range
+end
+
+function M.section_text(lines, lnum, opts)
+	local section_lines, range = M.section_lines(lines, lnum, opts)
+	if not section_lines then
+		return nil
+	end
+	return table.concat(section_lines, "\n"), range, section_lines
 end
 
 function M.outline_lines(sections)

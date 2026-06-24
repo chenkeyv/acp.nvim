@@ -89,6 +89,7 @@ test("setup registers public user commands", function()
 		"AcpChanges",
 		"AcpOutput",
 		"AcpOutputSearch",
+		"AcpOutputYank",
 		"AcpCodeBlocks",
 		"AcpOutputLocations",
 		"AcpOutputQuickfix",
@@ -371,6 +372,12 @@ test("output dashboard and section helpers are rendered", function()
 	eq(range.kind, "USER")
 	eq(range.line1, 3)
 	eq(range.line2, 5)
+	local section_lines, section_range = acp_output.section_lines({ "ACP: test", "", "You", "hello", "", "Agent", "world" }, 4)
+	eq(section_range.kind, "USER")
+	eq(section_lines, { "You", "hello" })
+	local section_text, text_range = acp_output.section_text({ "ACP: test", "", "You", "hello", "", "Agent", "world" }, 4)
+	eq(text_range.line1, 3)
+	eq(section_text, "You\nhello")
 	local outline, line_sections = acp_output.outline_lines(sections)
 	local outline_text = table.concat(outline, "\n")
 	ok(outline_text:find("ACP Output Outline", 1, true))
@@ -894,6 +901,8 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 	local output_buf
 	local output_win
 	local location_buf
+	local unnamed_register
+	local unnamed_register_type
 	local original_notify = vim.notify
 	vim.notify = function() end
 	local passed, err = pcall(function()
@@ -1009,6 +1018,20 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(current_section_highlight, "current output section should be highlighted")
+
+		unnamed_register = vim.fn.getreg('"')
+		unnamed_register_type = vim.fn.getregtype('"')
+		vim.cmd("AcpOutputYank")
+		local yanked = vim.fn.getreg('"')
+		ok(yanked:find("You", 1, true))
+		ok(yanked:find("hello output", 1, true))
+		ok(not yanked:find("Agent", 1, true), "yank should stay inside the current section")
+		local pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
+		local pulse_marks = vim.api.nvim_buf_get_extmarks(output_buf, pulse_ns, 0, -1, { details = true })
+		ok(#pulse_marks > 0, "yanking should pulse the output section")
+		vim.fn.setreg('"', unnamed_register, unnamed_register_type)
+		unnamed_register = nil
+		unnamed_register_type = nil
 
 		vim.cmd("AcpOutputSearch")
 		local picker_buf = vim.api.nvim_get_current_buf()
@@ -1128,6 +1151,9 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(vim.api.nvim_win_get_cursor(0)[1], 1)
 	end)
 
+	if unnamed_register ~= nil then
+		vim.fn.setreg('"', unnamed_register, unnamed_register_type)
+	end
 	vim.notify = original_notify
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })

@@ -57,6 +57,7 @@ local next_session_id = 1
 local session_panel_lines = {}
 local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
 local output_current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_section")
+local output_pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
 local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 local session_panel_ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
 local source_ns = vim.api.nvim_create_namespace("acp.nvim.source")
@@ -167,6 +168,50 @@ local function refresh_current_output_section(state)
 			priority = 10,
 		})
 	end
+end
+
+local function pulse_output_section(state, range)
+	if not (state and range and valid_buf(state.output_buf)) then
+		return
+	end
+
+	state.output_pulse_token = (state.output_pulse_token or 0) + 1
+	local token = state.output_pulse_token
+	local frames = {
+		{ hl = "AcpOutputPulse", badge = " YANKED " },
+		{ hl = "AcpOutputPulseSoft", badge = " COPIED " },
+		{ hl = "AcpOutputPulse", badge = " READY " },
+	}
+
+	local function draw(frame)
+		if token ~= state.output_pulse_token or not valid_buf(state.output_buf) then
+			return
+		end
+
+		vim.api.nvim_buf_clear_namespace(state.output_buf, output_pulse_ns, 0, -1)
+		local style = frames[frame]
+		if not style then
+			return
+		end
+
+		for line = range.line1, range.line2 do
+			local opts = {
+				line_hl_group = style.hl,
+				priority = 95,
+			}
+			if line == range.line1 then
+				opts.virt_text = { { style.badge, "AcpBadge" } }
+				opts.virt_text_pos = "right_align"
+			end
+			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_pulse_ns, line - 1, 0, opts)
+		end
+
+		vim.defer_fn(function()
+			draw(frame + 1)
+		end, 90)
+	end
+
+	draw(1)
 end
 
 local function save_output_history(state)
@@ -507,6 +552,47 @@ local function open_output_search(state)
 			refresh_output_chrome(state)
 		end,
 	})
+	return true
+end
+
+local function output_cursor_line(state)
+	local winid = vim.api.nvim_get_current_win()
+	if valid_win(winid) and vim.api.nvim_win_get_buf(winid) == state.output_buf then
+		return vim.api.nvim_win_get_cursor(winid)[1]
+	end
+
+	if valid_win(state.output_win) and vim.api.nvim_win_get_buf(state.output_win) == state.output_buf then
+		return vim.api.nvim_win_get_cursor(state.output_win)[1]
+	end
+
+	winid = vim.fn.bufwinid(state.output_buf)
+	if valid_win(winid) then
+		return vim.api.nvim_win_get_cursor(winid)[1]
+	end
+
+	return vim.api.nvim_buf_line_count(state.output_buf)
+end
+
+local function yank_output_section(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local text, range, section_lines = output.section_text(lines, output_cursor_line(state))
+	if not text or text == "" then
+		notify("No ACP output section found", vim.log.levels.WARN)
+		return false
+	end
+
+	vim.fn.setreg('"', text, "l")
+	pulse_output_section(state, range)
+	local count = #section_lines
+	notify(
+		("Yanked ACP %s section (%d line%s)"):format(range.kind or "output", count, count == 1 and "" or "s"),
+		vim.log.levels.INFO
+	)
 	return true
 end
 
@@ -1707,6 +1793,9 @@ local function register_keymaps(state)
 	local open_search = function()
 		open_output_search(state)
 	end
+	local yank_section = function()
+		yank_output_section(state)
+	end
 	local open_code_blocks = function()
 		open_output_code_blocks(state)
 	end
@@ -1752,6 +1841,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 		vim.keymap.set("n", "<leader>av", open_output, { buffer = bufnr, desc = "Open ACP output outline" })
 		vim.keymap.set("n", "<leader>ax", open_search, { buffer = bufnr, desc = "Search ACP output" })
+		vim.keymap.set("n", "<leader>ay", yank_section, { buffer = bufnr, desc = "Yank current ACP output section" })
 		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
 		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
 		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
@@ -1919,6 +2009,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutputSearch", function()
 		M.open_output_search()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputYank", function()
+		M.yank_output_section()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
@@ -2298,6 +2392,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Search output", "Search every non-empty transcript line with context preview", "<leader>ax", "session", function()
 			M.open_output_search()
+		end)
+		add_action(items, "Yank output section", "Copy the current transcript section into the unnamed register", "<leader>ay", "session", function()
+			M.yank_output_section()
 		end)
 		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
 			M.open_code_blocks()
@@ -3008,6 +3105,15 @@ function M.open_output_search()
 	end
 
 	open_output_search(state)
+end
+
+function M.yank_output_section()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	yank_output_section(state)
 end
 
 function M.open_code_blocks()
