@@ -18,6 +18,26 @@ local function clean(text)
 	return tostring(text or ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+function M.severity_name(severity)
+	return severity_names[severity] or "INFO"
+end
+
+function M.range(item)
+	if type(item) ~= "table" then
+		return nil
+	end
+
+	local line1 = (item.lnum or 0) + 1
+	local line2 = (item.end_lnum or item.lnum or 0) + 1
+	if line2 < line1 then
+		line2 = line1
+	end
+	return {
+		line1 = line1,
+		line2 = line2,
+	}
+end
+
 local function normalize_range(range)
 	if type(range) ~= "table" or not range.line1 or not range.line2 then
 		return nil
@@ -130,7 +150,7 @@ function M.render(bufnr, opts)
 			break
 		end
 
-		local severity = severity_names[item.severity] or "INFO"
+		local severity = M.severity_name(item.severity)
 		local source = item.source and item.source ~= "" and (" [" .. item.source .. "]") or ""
 		local code = item.code and item.code ~= "" and (" (" .. tostring(item.code) .. ")") or ""
 		table.insert(lines, ("- %d:%d %s%s%s: %s"):format(
@@ -144,6 +164,30 @@ function M.render(bufnr, opts)
 	end
 
 	return table.concat(lines, "\n")
+end
+
+function M.picker_lines(items)
+	local lines = { "ACP Diagnostics", "" }
+	local line_items = {}
+	for index, item in ipairs(items or {}) do
+		local source = item.source and item.source ~= "" and (" [" .. item.source .. "]") or ""
+		local code = item.code and item.code ~= "" and (" (" .. tostring(item.code) .. ")") or ""
+		table.insert(lines, ("%d. %d:%d %s%s%s"):format(
+			index,
+			(item.lnum or 0) + 1,
+			(item.col or 0) + 1,
+			M.severity_name(item.severity),
+			source,
+			code
+		))
+		line_items[#lines] = item
+		table.insert(lines, ("   %s"):format(clean(item.message)))
+		line_items[#lines] = item
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Press <Enter> to draft a fix, or q/<Esc> to close.")
+	return lines, line_items
 end
 
 return M

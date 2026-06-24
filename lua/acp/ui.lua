@@ -501,6 +501,37 @@ local function diagnostics_prompt(source)
 	return table.concat(lines, "\n")
 end
 
+local function diagnostic_item_prompt(source, item)
+	if not source or not source.bufnr then
+		return nil
+	end
+
+	local range = diagnostics.range(item)
+	local diagnostic_source = context.capture(source.bufnr, source.winid, range)
+	local rendered_diagnostics = diagnostics.render(source.bufnr, {
+		range = range,
+		limit = 8,
+	})
+	if not rendered_diagnostics then
+		return nil
+	end
+
+	local rendered_context = context.render(diagnostic_source, {
+		include_diagnostics = false,
+	})
+	if not rendered_context then
+		return nil
+	end
+
+	return table.concat({
+		"Fix this diagnostic. Keep the change focused and preserve existing behavior.",
+		"",
+		rendered_context,
+		"",
+		rendered_diagnostics,
+	}, "\n")
+end
+
 local function context_prompt(source, instruction)
 	if not source or not source.bufnr then
 		return nil
@@ -974,6 +1005,9 @@ local function register_keymaps(state)
 	local open_changes = function()
 		M.open_changes()
 	end
+	local open_diagnostics = function()
+		M.open_diagnostics()
+	end
 	local open_commands = function()
 		M.open_commands()
 	end
@@ -1002,6 +1036,7 @@ local function register_keymaps(state)
 	for _, bufnr in ipairs({ state.output_buf, state.input_buf }) do
 		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
+		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
 		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
@@ -1145,6 +1180,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpChanges", function()
 		M.open_changes()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpDiagnostics", function()
+		M.open_diagnostics()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpCommands", function()
@@ -1672,6 +1711,61 @@ local function open_command_picker(state)
 	return true
 end
 
+local function open_diagnostic_picker(state)
+	local items = diagnostics.items(state.source and state.source.bufnr, {
+		range = state.source and state.source.range,
+	})
+	if #items == 0 then
+		notify("No diagnostics found for the source buffer or range", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_items = diagnostics.picker_lines(items)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/diagnostics"):format(state.adapter, state.id))
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-diagnostics",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+
+	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
+	vim.wo[winid].cursorline = true
+	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
+
+	vim.keymap.set("n", "<CR>", function()
+		local item = line_items[vim.api.nvim_win_get_cursor(winid)[1]]
+		if not item then
+			return
+		end
+		local prompt = diagnostic_item_prompt(state.source, item)
+		if not prompt then
+			notify("Failed to render diagnostic context", vim.log.levels.ERROR)
+			return
+		end
+		close_picker(winid, bufnr)
+		append_input_text(state, prompt)
+		if not state.busy then
+			set_run_status(state, ("diagnostic: %s"):format(diagnostics.severity_name(item.severity)))
+		end
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
+	end, { buffer = bufnr, nowait = true, desc = "Draft ACP diagnostic fix" })
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			close_picker(winid, bufnr)
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP diagnostics" })
+	end
+
+	return true
+end
+
 local function open_config_value_picker(state, option)
 	local lines, line_values = acp_config.value_lines(option)
 	local bufnr = vim.api.nvim_create_buf(false, true)
@@ -2059,6 +2153,19 @@ function M.open_changes()
 		notify("No ACP file changes recorded for this session", vim.log.levels.WARN)
 		return
 	end
+end
+
+function M.open_diagnostics()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	open_diagnostic_picker(state)
 end
 
 function M.open_commands()

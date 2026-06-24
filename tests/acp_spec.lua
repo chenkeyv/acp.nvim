@@ -78,6 +78,7 @@ test("setup registers public user commands", function()
 		"AcpStop",
 		"AcpSessions",
 		"AcpChanges",
+		"AcpDiagnostics",
 		"AcpCommands",
 		"AcpConfig",
 		"AcpCodeActions",
@@ -93,6 +94,32 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("diagnostic picker lines render source and code", function()
+	local lines, line_items = acp_diagnostics.picker_lines({
+		{
+			lnum = 1,
+			col = 4,
+			severity = vim.diagnostic.severity.ERROR,
+			source = "lua_ls",
+			code = "undefined-global",
+			message = "undefined global missing",
+		},
+	})
+	local text = table.concat(lines, "\n")
+
+	ok(text:find("2:5 ERROR [lua_ls] (undefined-global)", 1, true))
+	ok(text:find("undefined global missing", 1, true))
+	eq(line_items[3].message, "undefined global missing")
+	eq(line_items[4].message, "undefined global missing")
+
+	local range = acp_diagnostics.range({
+		lnum = 2,
+		end_lnum = 4,
+	})
+	eq(range.line1, 3)
+	eq(range.line2, 5)
 end)
 
 test("LSP hover markdown content is normalized", function()
@@ -467,6 +494,61 @@ test("sessions command opens a picker from source buffers", function()
 		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 	end
 	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+end)
+
+test("diagnostics command drafts selected diagnostic context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = missing",
+		"print(value)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+
+	local ns = vim.api.nvim_create_namespace("acp.nvim.test.diagnostic-picker")
+	vim.diagnostic.set(ns, source_buf, {
+		{
+			lnum = 0,
+			col = 14,
+			end_lnum = 0,
+			end_col = 21,
+			severity = vim.diagnostic.severity.ERROR,
+			message = "undefined global missing",
+			source = "lua_ls",
+			code = "undefined-global",
+		},
+	})
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpDiagnostics")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-diagnostics")
+
+		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Fix this diagnostic. Keep the change focused", 1, true))
+		ok(prompt:find("Selection: lines 1-1", 1, true))
+		ok(prompt:find("ERROR [lua_ls] (undefined-global): undefined global missing", 1, true))
+		ok(prompt:find("local value = missing", 1, true))
+	end)
+
+	vim.diagnostic.reset(ns, source_buf)
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
 end)
 
 test("symbols command drafts selected LSP symbol context", function()

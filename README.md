@@ -30,6 +30,7 @@ This plugin provides an editor-native ACP chat surface:
 - floating terminal command approval with live output in tool calls
 - floating batch file-write review with diff previews before applying agent edits
 - quickfix navigation for files changed during an ACP session
+- floating diagnostics picker for drafting focused fixes
 - floating Markdown input prompt for completion-friendly editing
 - `codex-acp` and `claude-agent-acp` adapter presets
 - basic ACP JSON-RPC, session, prompt, permission, terminal, and file read/write support
@@ -89,6 +90,7 @@ vim.g.acp_nvim_config = {
 - `:AcpStop` stops the current agent process
 - `:AcpSessions` focuses the sessions side panel or opens a floating session picker
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
+- `:AcpDiagnostics` opens a picker for source-buffer diagnostics
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
@@ -114,6 +116,7 @@ In the prompt buffer:
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
 - `<C-Space>` opens native ACP prompt completion
 - `<leader>ac` inserts source-buffer context into the prompt
+- `<leader>ad` opens source-buffer diagnostics
 - `<leader>af` opens the current session's changed files in quickfix
 - `<leader>a/` opens advertised ACP slash commands
 - `<leader>ao` opens advertised ACP config options
