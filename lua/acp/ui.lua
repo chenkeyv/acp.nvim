@@ -2348,6 +2348,18 @@ local function prompt_action_items()
 	add("Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
 		M.add_hover()
 	end)
+	add("Callers", "Pick incoming LSP call hierarchy entries as focused context", ":AcpCallers", "LSP", function()
+		M.open_callers()
+	end)
+	add("Callers quickfix", "Send incoming LSP call hierarchy entries to quickfix", ":AcpCallersQuickfix", "LSP", function()
+		M.open_callers_quickfix()
+	end)
+	add("Callees", "Pick outgoing LSP call hierarchy entries as focused context", ":AcpCallees", "LSP", function()
+		M.open_callees()
+	end)
+	add("Callees quickfix", "Send outgoing LSP call hierarchy entries to quickfix", ":AcpCalleesQuickfix", "LSP", function()
+		M.open_callees_quickfix()
+	end)
 	add("LSP highlights", "Show source-buffer LSP read/write highlights", "<leader>aH", "LSP", function()
 		M.open_highlights()
 	end)
@@ -2493,7 +2505,7 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "- Source selection and cursor context")
 	table.insert(
 		lines,
-		"- LSP diagnostics, code actions, hover, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
+		"- LSP diagnostics, code actions, hover, call hierarchy, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
 	)
 	table.insert(lines, "- Tree-sitter nodes around the source cursor")
 	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
@@ -3669,6 +3681,22 @@ function M.setup(opts)
 		M.add_hover()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpCallers", function()
+		M.open_callers()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCallersQuickfix", function()
+		M.open_callers_quickfix()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCallees", function()
+		M.open_callees()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCalleesQuickfix", function()
+		M.open_callees_quickfix()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpHighlights", function()
 		M.open_highlights()
 	end, {})
@@ -4145,6 +4173,18 @@ local function action_palette_items(state)
 		add_action(items, "Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
 			M.add_hover()
 		end)
+		add_action(items, "Callers", "Pick incoming LSP call hierarchy entries as focused context", ":AcpCallers", "LSP", function()
+			M.open_callers()
+		end)
+		add_action(items, "Callers quickfix", "Send incoming LSP call hierarchy entries to quickfix", ":AcpCallersQuickfix", "LSP", function()
+			M.open_callers_quickfix()
+		end)
+		add_action(items, "Callees", "Pick outgoing LSP call hierarchy entries as focused context", ":AcpCallees", "LSP", function()
+			M.open_callees()
+		end)
+		add_action(items, "Callees quickfix", "Send outgoing LSP call hierarchy entries to quickfix", ":AcpCalleesQuickfix", "LSP", function()
+			M.open_callees_quickfix()
+		end)
 		add_action(items, "LSP highlights", "Show source-buffer LSP read/write highlights", "<leader>aH", "LSP", function()
 			M.open_highlights()
 		end)
@@ -4390,6 +4430,22 @@ local function source_action_items(state)
 	add("Hover context", "Insert LSP hover documentation from the source cursor", "<leader>ah", "LSP", function()
 		focus_session(state)
 		M.add_hover()
+	end)
+	add("Callers", "Pick incoming LSP call hierarchy entries from the source cursor", ":AcpCallers", "LSP", function()
+		focus_session(state)
+		M.open_callers()
+	end)
+	add("Callers quickfix", "Send incoming LSP call hierarchy entries to quickfix", ":AcpCallersQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_callers_quickfix()
+	end)
+	add("Callees", "Pick outgoing LSP call hierarchy entries from the source cursor", ":AcpCallees", "LSP", function()
+		focus_session(state)
+		M.open_callees()
+	end)
+	add("Callees quickfix", "Send outgoing LSP call hierarchy entries to quickfix", ":AcpCalleesQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_callees_quickfix()
 	end)
 	add("LSP highlights", "Show LSP read/write highlights from the source cursor", "<leader>aH", "LSP", function()
 		focus_session(state)
@@ -5783,6 +5839,176 @@ function M.add_hover()
 	end)
 end
 
+function M.open_call_hierarchy(direction)
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local call_hierarchy = require("acp.call_hierarchy")
+	local spec = direction == "outgoing" and {
+		status = "outgoing calls",
+		title = " ACP outgoing calls ",
+		filetype = "acp-callees",
+		suffix = "callees",
+		submit = "Add ACP callee context",
+		close = "Close ACP callees",
+		preview = "Callee",
+	} or {
+		status = "incoming calls",
+		title = " ACP incoming calls ",
+		filetype = "acp-callers",
+		suffix = "callers",
+		submit = "Add ACP caller context",
+		close = "Close ACP callers",
+		preview = "Caller",
+	}
+
+	if not state.busy then
+		set_run_status(state, ("loading %s"):format(spec.status))
+	end
+	call_hierarchy.request(state.source, direction, function(call_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		if not call_list or #call_list == 0 then
+			notify(("No LSP %s found for the source cursor"):format(spec.status), vim.log.levels.WARN)
+			return
+		end
+
+		local lines, line_calls = call_hierarchy.picker_lines(call_list, {
+			direction = direction,
+		})
+		local view = picker.open({
+			name = ("ACP://%s/%d/%s"):format(state.adapter, state.id, spec.suffix),
+			filetype = spec.filetype,
+			lines = lines,
+			title = spec.title,
+			submit_desc = spec.submit,
+			close_desc = spec.close,
+			preview = function(row)
+				local call = line_calls[row]
+				if not call then
+					return nil
+				end
+				return source_preview(
+					call_hierarchy.bufnr(call),
+					call_hierarchy.range(call),
+					(" %s %s "):format(spec.preview, call.name)
+				)
+			end,
+			on_submit = function(row, view)
+				local call = line_calls[row]
+				if not call then
+					return
+				end
+				local prompt, prompt_err = call_hierarchy.prompt(call, direction)
+				if not prompt then
+					notify(prompt_err or "Failed to render LSP call hierarchy context", vim.log.levels.ERROR)
+					return
+				end
+				view.close()
+				append_input_text(state, prompt)
+				if not state.busy then
+					set_run_status(state, ("%s: %s"):format(spec.status, call.name))
+				end
+				if valid_win(state.input_win) then
+					vim.api.nvim_set_current_win(state.input_win)
+				end
+			end,
+		})
+
+		vim.keymap.set("n", "Q", function()
+			view.close()
+			M.open_call_hierarchy_quickfix(direction, call_list, state)
+		end, { buffer = view.bufnr, nowait = true, desc = ("Open ACP %s quickfix"):format(spec.status) })
+	end)
+end
+
+function M.open_call_hierarchy_quickfix(direction, call_list, state_override)
+	local state = state_override or current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local call_hierarchy = require("acp.call_hierarchy")
+	local label = direction == "outgoing" and "OUTGOING CALL" or "INCOMING CALL"
+	local title = direction == "outgoing" and "ACP outgoing calls" or "ACP incoming calls"
+
+	local function open_items(items)
+		if not items or #items == 0 then
+			notify(("No LSP %s found for the source cursor"):format(title:lower()), vim.log.levels.WARN)
+			return false
+		end
+
+		local qf_items = call_hierarchy.quickfix_items(items, {
+			direction = direction,
+			label = label,
+		})
+		if #qf_items == 0 then
+			notify(("No quickfix-ready LSP %s found"):format(title:lower()), vim.log.levels.WARN)
+			return false
+		end
+
+		vim.fn.setqflist({}, " ", {
+			title = ("%s #%s"):format(title, tostring(state.id or "?")),
+			items = qf_items,
+		})
+		vim.cmd("copen")
+		if not state.busy then
+			set_run_status(state, ("%s quickfix"):format(title:gsub("^ACP%s+", "")))
+		end
+		return true
+	end
+
+	if call_list then
+		open_items(call_list)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, ("loading %s quickfix"):format(title:lower()))
+	end
+	call_hierarchy.request(state.source, direction, function(items, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_items(items)
+	end)
+end
+
+function M.open_callers()
+	M.open_call_hierarchy("incoming")
+end
+
+function M.open_callers_quickfix()
+	M.open_call_hierarchy_quickfix("incoming")
+end
+
+function M.open_callees()
+	M.open_call_hierarchy("outgoing")
+end
+
+function M.open_callees_quickfix()
+	M.open_call_hierarchy_quickfix("outgoing")
+end
+
 function M.open_highlights()
 	local state = current_source_action_state()
 	if not state then
@@ -6246,6 +6472,12 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		references = function()
 			M.open_references()
+		end,
+		callers = function()
+			M.open_callers()
+		end,
+		callees = function()
+			M.open_callees()
 		end,
 		symbols = function()
 			M.open_symbols()

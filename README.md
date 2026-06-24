@@ -62,6 +62,7 @@ This plugin provides an editor-native ACP chat surface:
 - adapter-backed session listing and restoration
 - async LSP code-action picker for drafting focused fix/refactor prompts
 - async LSP hover context insertion for source-cursor documentation
+- async LSP incoming/outgoing call-hierarchy pickers with quickfix export
 - async LSP document-highlight marks for read/write source occurrences
 - async LSP references picker with quickfix export for focused usage context
 - async LSP declaration picker with quickfix export for API declaration context
@@ -173,6 +174,10 @@ vim.g.acp_nvim_config = {
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
 - `:AcpHover` inserts LSP hover documentation for the source cursor
+- `:AcpCallers` opens an LSP incoming-call picker for the source cursor
+- `:AcpCallersQuickfix` sends incoming LSP calls for the source cursor to quickfix
+- `:AcpCallees` opens an LSP outgoing-call picker for the source cursor
+- `:AcpCalleesQuickfix` sends outgoing LSP calls for the source cursor to quickfix
 - `:AcpHighlights` shows LSP read/write highlights in the linked source buffer
 - `:AcpClearHighlights` clears source-buffer LSP highlight marks
 - `:AcpReferences` opens an LSP references picker for the source cursor
@@ -213,7 +218,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
-- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@diagnostics`/`@output` workflows
+- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@diagnostics`/`@callers`/`@callees`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>am` opens a persistent output map with progress rails and item counts
@@ -278,7 +283,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file, diagnostics, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-workspace-symbol, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
+- changed-file, diagnostics, LSP-call-hierarchy, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-workspace-symbol, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 

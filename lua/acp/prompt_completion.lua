@@ -34,6 +34,18 @@ local workflows = {
 		info = "Open source-cursor LSP references as focused context.",
 	},
 	{
+		id = "callers",
+		trigger = "@callers",
+		menu = "LSP",
+		info = "Open incoming LSP call hierarchy entries as focused context.",
+	},
+	{
+		id = "callees",
+		trigger = "@callees",
+		menu = "LSP",
+		info = "Open outgoing LSP call hierarchy entries as focused context.",
+	},
+	{
 		id = "symbols",
 		trigger = "@symbols",
 		menu = "LSP",

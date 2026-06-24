@@ -1,5 +1,6 @@
 local jsonrpc = require("acp.jsonrpc")
 local actions = require("acp.actions")
+local call_hierarchy = require("acp.call_hierarchy")
 local acp_changes = require("acp.changes")
 local code_actions = require("acp.code_actions")
 local acp_commands = require("acp.commands")
@@ -119,6 +120,10 @@ test("setup registers public user commands", function()
 		"AcpConfig",
 		"AcpCodeActions",
 		"AcpHover",
+		"AcpCallers",
+		"AcpCallersQuickfix",
+		"AcpCallees",
+		"AcpCalleesQuickfix",
 		"AcpHighlights",
 		"AcpClearHighlights",
 		"AcpReferences",
@@ -1169,6 +1174,79 @@ test("LSP workspace symbols are rendered for picker and quickfix", function()
 	ok(qf_items[1].text:find("WORKSPACE SYMBOL", 1, true))
 end)
 
+test("LSP call hierarchy entries are rendered for picker and quickfix", function()
+	local path = vim.fn.tempname() .. ".lua"
+	vim.fn.writefile({
+		"local function caller()",
+		"\ttarget()",
+		"end",
+	}, path)
+	local uri = vim.uri_from_fname(path)
+	local incoming = call_hierarchy.normalize({
+		{
+			from = {
+				name = "caller",
+				kind = 12,
+				detail = "local function",
+				uri = uri,
+				range = {
+					start = { line = 0, character = 0 },
+					["end"] = { line = 2, character = 3 },
+				},
+				selectionRange = {
+					start = { line = 0, character = 15 },
+					["end"] = { line = 0, character = 21 },
+				},
+			},
+			fromRanges = {
+				{
+					start = { line = 1, character = 1 },
+					["end"] = { line = 1, character = 9 },
+				},
+			},
+		},
+	}, "incoming")
+	local outgoing = call_hierarchy.normalize({
+		{
+			to = {
+				name = "callee",
+				kind = 12,
+				uri = uri,
+				range = {
+					start = { line = 1, character = 1 },
+					["end"] = { line = 1, character = 9 },
+				},
+			},
+		},
+	}, "outgoing")
+
+	eq(#incoming, 1)
+	eq(incoming[1].name, "caller")
+	eq(call_hierarchy.range(incoming[1]).line1, 1)
+	eq(call_hierarchy.range(incoming[1]).col1, 16)
+	eq(outgoing[1].name, "callee")
+	eq(call_hierarchy.range(outgoing[1]).line1, 2)
+
+	local lines, line_calls = call_hierarchy.picker_lines(incoming, { direction = "incoming" })
+	local text = table.concat(lines, "\n")
+	ok(text:find("ACP Incoming Calls", 1, true))
+	ok(text:find("caller  Function", 1, true))
+	ok(text:find("local function", 1, true))
+	ok(text:find("Q for quickfix", 1, true))
+	eq(line_calls[3].name, "caller")
+
+	local qf_items = call_hierarchy.quickfix_items(incoming, { direction = "incoming" })
+	eq(#qf_items, 1)
+	eq(qf_items[1].lnum, 1)
+	eq(qf_items[1].col, 16)
+	ok(qf_items[1].text:find("INCOMING CALL", 1, true))
+
+	local prompt = call_hierarchy.prompt(incoming[1], "incoming")
+	ok(prompt:find("Use this LSP incoming call as context: caller %(Function%)."))
+	ok(prompt:find("Call caller:", 1, true))
+	ok(prompt:find("local function caller", 1, true))
+end)
+
 test("config option picker lines render selectable options", function()
 	local lines, line_options = acp_config.picker_lines({
 		{
@@ -1276,6 +1354,12 @@ test("slash command completion items are rendered for completefunc", function()
 	local code_action_item = prompt_completion.items(commands, "@code")[1]
 	eq(code_action_item.word, "@code-actions")
 	eq(code_action_item.menu, "LSP")
+	local caller_item = prompt_completion.items(commands, "@caller")[1]
+	eq(caller_item.word, "@callers")
+	eq(prompt_completion.action_id(caller_item), "callers")
+	local callee_item = prompt_completion.items(commands, "@callee")[1]
+	eq(callee_item.word, "@callees")
+	eq(prompt_completion.action_id(callee_item), "callees")
 
 	local completion_buf = vim.api.nvim_create_buf(true, true)
 	vim.api.nvim_set_current_buf(completion_buf)
@@ -2224,6 +2308,8 @@ test("actions command opens a session action palette", function()
 		local yank_code_block = false
 		local diagnostics_quickfix = false
 		local lsp_highlight_action = false
+		local callers_quickfix = false
+		local callees_quickfix = false
 		local references_quickfix = false
 		local declarations_quickfix = false
 		local definitions_quickfix = false
@@ -2260,6 +2346,12 @@ test("actions command opens a session action palette", function()
 			if line:find("LSP highlights", 1, true) then
 				lsp_highlight_action = true
 			end
+			if line:find("Callers quickfix", 1, true) then
+				callers_quickfix = true
+			end
+			if line:find("Callees quickfix", 1, true) then
+				callees_quickfix = true
+			end
 			if line:find("References quickfix", 1, true) then
 				references_quickfix = true
 			end
@@ -2294,6 +2386,8 @@ test("actions command opens a session action palette", function()
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
 		ok(lsp_highlight_action, "action palette should include LSP highlights")
+		ok(callers_quickfix, "action palette should include callers quickfix")
+		ok(callees_quickfix, "action palette should include callees quickfix")
 		ok(references_quickfix, "action palette should include references quickfix")
 		ok(declarations_quickfix, "action palette should include declarations quickfix")
 		ok(definitions_quickfix, "action palette should include definitions quickfix")
@@ -3412,6 +3506,167 @@ test("workspace symbols command drafts selected LSP workspace symbol context", f
 		ok(prompt:find("Symbol:", 1, true))
 		ok(prompt:find("Selection: lines 1-1", 1, true))
 		ok(prompt:find("local WorkspaceValue = 1", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.fn.delete(path)
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("call hierarchy commands draft selected LSP caller and callee context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	local path = vim.fn.tempname() .. ".lua"
+	vim.api.nvim_buf_set_name(source_buf, path)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local function caller()",
+		"\ttarget()",
+		"end",
+		"local function callee()",
+		"\treturn target()",
+		"end",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 2, 2 })
+
+	local uri = vim.uri_from_bufnr(source_buf)
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		if method == "textDocument/prepareCallHierarchy" then
+			eq(params.position.line, 1)
+			eq(params.position.character, 2)
+			callback({
+				[1] = {
+					result = {
+						{
+							name = "target",
+							kind = 12,
+							uri = uri,
+							range = {
+								start = { line = 1, character = 1 },
+								["end"] = { line = 1, character = 9 },
+							},
+							selectionRange = {
+								start = { line = 1, character = 1 },
+								["end"] = { line = 1, character = 7 },
+							},
+						},
+					},
+				},
+			})
+		elseif method == "callHierarchy/incomingCalls" then
+			eq(params.item.name, "target")
+			callback({
+				[1] = {
+					result = {
+						{
+							from = {
+								name = "caller",
+								kind = 12,
+								uri = uri,
+								range = {
+									start = { line = 0, character = 0 },
+									["end"] = { line = 2, character = 3 },
+								},
+								selectionRange = {
+									start = { line = 0, character = 15 },
+									["end"] = { line = 0, character = 21 },
+								},
+							},
+							fromRanges = {
+								{
+									start = { line = 1, character = 1 },
+									["end"] = { line = 1, character = 9 },
+								},
+							},
+						},
+					},
+				},
+			})
+		elseif method == "callHierarchy/outgoingCalls" then
+			eq(params.item.name, "target")
+			callback({
+				[1] = {
+					result = {
+						{
+							to = {
+								name = "callee",
+								kind = 12,
+								uri = uri,
+								range = {
+									start = { line = 3, character = 0 },
+									["end"] = { line = 5, character = 3 },
+								},
+								selectionRange = {
+									start = { line = 3, character = 15 },
+									["end"] = { line = 3, character = 21 },
+								},
+							},
+						},
+					},
+				},
+			})
+		else
+			error("unexpected LSP method: " .. method)
+		end
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpCallers")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-callers")
+
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local caller_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(caller_qflist.title:find("ACP incoming calls", 1, true))
+		eq(#caller_qflist.items, 1)
+		eq(caller_qflist.items[1].bufnr, source_buf)
+		eq(caller_qflist.items[1].lnum, 1)
+		eq(caller_qflist.items[1].col, 16)
+		ok(caller_qflist.items[1].text:find("INCOMING CALL", 1, true))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after callers quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpCallersQuickfix")
+		caller_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(caller_qflist.title:find("ACP incoming calls", 1, true))
+		eq(#caller_qflist.items, 1)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible before callee draft")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpCallees")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-callees")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP outgoing call as context: callee %(Function%)."))
+		ok(prompt:find("Call callee:", 1, true))
+		ok(prompt:find("Selection: lines 4-4", 1, true))
+		ok(prompt:find("local function callee", 1, true))
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all
