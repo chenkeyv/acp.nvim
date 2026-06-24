@@ -9,6 +9,9 @@ local methods = {
 	initialize = "initialize",
 	authenticate = "authenticate",
 	session_new = "session/new",
+	session_list = "session/list",
+	session_load = "session/load",
+	session_resume = "session/resume",
 	session_prompt = "session/prompt",
 	session_update = "session/update",
 	session_request_permission = "session/request_permission",
@@ -148,6 +151,36 @@ local function command_display(command, args)
 		table.insert(parts, arg)
 	end
 	return table.concat(parts, " ")
+end
+
+local function agent_capabilities(connection)
+	return (connection.agent_info and connection.agent_info.agentCapabilities) or {}
+end
+
+local function session_capabilities(connection)
+	return agent_capabilities(connection).sessionCapabilities or {}
+end
+
+local function has_session_capability(connection, name)
+	return session_capabilities(connection)[name] ~= nil
+end
+
+local function session_setup_params(connection, session_id, session_info)
+	local params = {
+		sessionId = session_id,
+		cwd = connection.cwd,
+		mcpServers = connection.adapter.mcp_servers or {},
+	}
+
+	if
+		session_info
+		and type(session_info.additionalDirectories) == "table"
+		and has_session_capability(connection, "additionalDirectories")
+	then
+		params.additionalDirectories = session_info.additionalDirectories
+	end
+
+	return params
 end
 
 local Connection = {}
@@ -497,6 +530,92 @@ function Connection:ensure_session_async(callback)
 	end)
 end
 
+function Connection:list_sessions_async(callback)
+	return self:initialize_async(function(ok, err)
+		if not ok then
+			callback(nil, err or "failed to initialize ACP agent")
+			return
+		end
+		if not has_session_capability(self, "list") then
+			callback(nil, "ACP agent does not support session/list")
+			return
+		end
+
+		local sessions = {}
+		local request_page
+		request_page = function(cursor)
+			local params = {
+				cwd = self.cwd,
+			}
+			if cursor then
+				params.cursor = cursor
+			end
+
+			self:request_async(methods.session_list, params, function(result, request_err)
+				if request_err or type(result) ~= "table" then
+					callback(nil, request_err or "ACP session list failed")
+					return
+				end
+
+				for _, session in ipairs(result.sessions or {}) do
+					table.insert(sessions, session)
+				end
+
+				if result.nextCursor then
+					request_page(result.nextCursor)
+				else
+					callback(sessions, nil)
+				end
+			end)
+		end
+
+		request_page(nil)
+	end)
+end
+
+function Connection:restore_session_async(session_info, handlers, callback)
+	session_info = session_info or {}
+	local session_id = session_info.sessionId
+	if type(session_id) ~= "string" or session_id == "" then
+		callback(false, "Invalid ACP session id")
+		return false
+	end
+
+	return self:initialize_async(function(ok, err)
+		if not ok then
+			callback(false, err or "failed to initialize ACP agent")
+			return
+		end
+
+		local method
+		local mode
+		if agent_capabilities(self).loadSession then
+			method = methods.session_load
+			mode = "load"
+		elseif has_session_capability(self, "resume") then
+			method = methods.session_resume
+			mode = "resume"
+		else
+			callback(false, "ACP agent does not support session/load or session/resume")
+			return
+		end
+
+		self.active_handlers = handlers
+		self:request_async(method, session_setup_params(self, session_id, session_info), function(result, request_err)
+			if request_err then
+				if self.active_handlers == handlers then
+					self.active_handlers = nil
+				end
+				callback(false, request_err or ("ACP session %s failed"):format(mode))
+				return
+			end
+
+			self.session_id = session_id
+			callback(true, mode, result)
+		end)
+	end)
+end
+
 function Connection:prompt(text, handlers)
 	if not self:ensure_session() then
 		return false
@@ -614,6 +733,11 @@ function Connection:handle_session_update(update)
 		local text = extract_text(update.content)
 		if text and text ~= "" and self.active_handlers.message_chunk then
 			self.active_handlers.message_chunk(text)
+		end
+	elseif update.sessionUpdate == "user_message_chunk" then
+		local text = extract_text(update.content)
+		if text and text ~= "" and self.active_handlers.user_message_chunk then
+			self.active_handlers.user_message_chunk(text)
 		end
 	elseif update.sessionUpdate == "agent_thought_chunk" then
 		local text = extract_text(update.content)

@@ -73,6 +73,7 @@ test("setup registers public user commands", function()
 		"AcpSessions",
 		"AcpChanges",
 		"AcpHistory",
+		"AcpRestore",
 		"AcpHistoryDraft",
 		"AcpAddContext",
 		"AcpFixDiagnostics",
@@ -453,6 +454,201 @@ test("async prompt starts session without blocking before sending prompt", funct
 	}))
 
 	eq(done_reason, "end_turn")
+end)
+
+test("adapter session list paginates when supported", function()
+	local connection = Connection.new({
+		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 1000 },
+		cwd = vim.fn.getcwd(),
+	})
+	function connection:start()
+		return true
+	end
+
+	local writes = {}
+	function connection:write(message)
+		table.insert(writes, message)
+		return true
+	end
+
+	local listed
+	local list_err
+	ok(connection:list_sessions_async(function(sessions, err)
+		listed = sessions
+		list_err = err
+	end))
+
+	eq(writes[1].method, "initialize")
+	connection:handle_line(vim.json.encode({
+		jsonrpc = "2.0",
+		id = writes[1].id,
+		result = {
+			agentCapabilities = {
+				sessionCapabilities = {
+					list = {},
+				},
+			},
+			authMethods = {},
+		},
+	}))
+
+	eq(writes[2].method, "session/list")
+	eq(writes[2].params.cwd, vim.fn.getcwd())
+	connection:handle_line(vim.json.encode({
+		jsonrpc = "2.0",
+		id = writes[2].id,
+		result = {
+			sessions = {
+				{ sessionId = "session-1", cwd = vim.fn.getcwd(), title = "One" },
+			},
+			nextCursor = "cursor-2",
+		},
+	}))
+
+	eq(writes[3].method, "session/list")
+	eq(writes[3].params.cursor, "cursor-2")
+	connection:handle_line(vim.json.encode({
+		jsonrpc = "2.0",
+		id = writes[3].id,
+		result = {
+			sessions = {
+				{ sessionId = "session-2", cwd = vim.fn.getcwd(), title = "Two" },
+			},
+		},
+	}))
+
+	eq(list_err, nil)
+	eq(#listed, 2)
+	eq(listed[1].sessionId, "session-1")
+	eq(listed[2].sessionId, "session-2")
+end)
+
+test("adapter session load replays user and agent chunks", function()
+	local connection = Connection.new({
+		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 1000 },
+		cwd = vim.fn.getcwd(),
+	})
+	connection.initialized = true
+	connection.authenticated = true
+	connection.agent_info = {
+		agentCapabilities = {
+			loadSession = true,
+			sessionCapabilities = {
+				additionalDirectories = {},
+			},
+		},
+	}
+
+	local writes = {}
+	function connection:write(message)
+		table.insert(writes, message)
+		return true
+	end
+
+	local replay = {}
+	local restored
+	local restore_mode
+	ok(connection:restore_session_async({
+		sessionId = "session-load",
+		additionalDirectories = { "/tmp/acp-extra" },
+	}, {
+		user_message_chunk = function(text)
+			table.insert(replay, "user:" .. text)
+		end,
+		message_chunk = function(text)
+			table.insert(replay, "agent:" .. text)
+		end,
+	}, function(success, mode)
+		restored = success
+		restore_mode = mode
+	end))
+
+	eq(writes[1].method, "session/load")
+	eq(writes[1].params.sessionId, "session-load")
+	eq(writes[1].params.additionalDirectories[1], "/tmp/acp-extra")
+
+	connection:handle_request({
+		method = "session/update",
+		params = {
+			sessionId = "session-load",
+			update = {
+				sessionUpdate = "user_message_chunk",
+				content = {
+					type = "text",
+					text = "restore question",
+				},
+			},
+		},
+	})
+	connection:handle_request({
+		method = "session/update",
+		params = {
+			sessionId = "session-load",
+			update = {
+				sessionUpdate = "agent_message_chunk",
+				content = {
+					type = "text",
+					text = "restore answer",
+				},
+			},
+		},
+	})
+	connection:handle_line(vim.json.encode({
+		jsonrpc = "2.0",
+		id = writes[1].id,
+		result = vim.NIL,
+	}))
+
+	eq(restored, true)
+	eq(restore_mode, "load")
+	eq(connection.session_id, "session-load")
+	eq(replay, {
+		"user:restore question",
+		"agent:restore answer",
+	})
+end)
+
+test("adapter session restore falls back to resume", function()
+	local connection = Connection.new({
+		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 1000 },
+		cwd = vim.fn.getcwd(),
+	})
+	connection.initialized = true
+	connection.authenticated = true
+	connection.agent_info = {
+		agentCapabilities = {
+			sessionCapabilities = {
+				resume = {},
+			},
+		},
+	}
+
+	local writes = {}
+	function connection:write(message)
+		table.insert(writes, message)
+		return true
+	end
+
+	local restored
+	local restore_mode
+	ok(connection:restore_session_async({
+		sessionId = "session-resume",
+	}, {}, function(success, mode)
+		restored = success
+		restore_mode = mode
+	end))
+
+	eq(writes[1].method, "session/resume")
+	eq(writes[1].params.sessionId, "session-resume")
+	connection:handle_line(vim.json.encode({
+		jsonrpc = "2.0",
+		id = writes[1].id,
+		result = {},
+	}))
+
+	eq(restored, true)
+	eq(restore_mode, "resume")
+	eq(connection.session_id, "session-resume")
 end)
 
 test("terminal requests capture bounded output and wait for exit", function()

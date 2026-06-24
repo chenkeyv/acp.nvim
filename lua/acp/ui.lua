@@ -1016,6 +1016,15 @@ function M.setup(opts)
 		history.open_browser()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpRestore", function(command)
+		M.restore(command.args ~= "" and command.args or nil)
+	end, {
+		nargs = "?",
+		complete = function()
+			return adapter_names()
+		end,
+	})
+
 	vim.api.nvim_create_user_command("AcpHistoryDraft", function(command)
 		local adapter_name = command.args ~= "" and command.args or nil
 		history.open_browser({
@@ -1073,6 +1082,144 @@ function M.setup(opts)
 	})
 end
 
+local function append_role_text(state, role, text)
+	if not text or text == "" then
+		return
+	end
+	if state.stream_role ~= role then
+		append_lines(state, { "", role, "" })
+		state.stream_role = role
+	end
+	append_text(state, text)
+end
+
+local function chat_handlers(state, opts)
+	opts = opts or {}
+	return {
+		started = function()
+			if opts.started then
+				opts.started()
+			else
+				set_run_status(state, "running")
+			end
+		end,
+		user_message_chunk = function(text)
+			append_role_text(state, "You", text)
+		end,
+		message_chunk = function(text)
+			if not state.streaming then
+				state.streaming = true
+				set_run_status(state, "streaming")
+			end
+			append_role_text(state, "Agent", text)
+		end,
+		thought_chunk = function(text)
+			state.stream_role = nil
+			set_run_status(state, "thinking")
+			append_lines(state, { "", ("Thought: %s"):format(text), "" })
+		end,
+		tool_call = function(update)
+			state.stream_role = nil
+			set_run_status(state, ("tool: %s"):format(update.title or update.kind or "tool call"))
+			append_lines(state, { "", ("Tool: %s"):format(update.title or update.kind or "tool call"), "" })
+		end,
+		tool_update = function(update)
+			state.stream_role = nil
+			set_run_status(state, ("tool: %s"):format(update.status or update.title or "updated"))
+			append_lines(state, { "", ("Tool update: %s"):format(update.status or update.title or "updated"), "" })
+		end,
+		terminal_attach = function(event)
+			state.stream_role = nil
+			ensure_terminal_block(state, event.terminal_id)
+			if event.output and event.output ~= "" then
+				append_terminal_output(state, {
+					terminal_id = event.terminal_id,
+					text = event.output,
+					truncated = event.truncated,
+				})
+			end
+		end,
+		terminal_output = function(event)
+			state.stream_role = nil
+			set_run_status(state, ("terminal: %s"):format(event.terminal_id))
+			append_terminal_output(state, event)
+		end,
+		file_written = function(path)
+			state.stream_role = nil
+			local entry = changes.record(state, path)
+			local display = entry and entry.display or vim.fn.fnamemodify(path, ":.")
+			set_run_status(state, ("wrote %s"):format(display))
+			append_lines(state, { "", ("Wrote %s"):format(display), "Use :AcpChanges to review changed files.", "" })
+			refresh_session_panels()
+		end,
+		session_info = function(update)
+			if update.title and update.title ~= "" then
+				set_tab_title(state, update.title)
+			end
+			if metadata.apply_session(state, update) then
+				refresh_prompt_chrome(state)
+			end
+		end,
+		usage = function(update)
+			if metadata.apply_session(state, update) then
+				refresh_prompt_chrome(state)
+			end
+		end,
+		stderr = function(text)
+			state.stream_role = nil
+			append_lines(state, { "", "stderr:" })
+			append_lines(state, vim.split(text:gsub("%s+$", ""), "\n", { plain = true }))
+			append_lines(state, { "" })
+		end,
+		done = function(stop_reason)
+			state.busy = false
+			set_run_status(state, ("stopped: %s"):format(stop_reason or "done"))
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
+		error = function(message)
+			state.busy = false
+			set_run_status(state, ("error: %s"):format(message))
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
+	}
+end
+
+local function start_restore(state, session_info)
+	local title = session_info.title or session_info.sessionId
+	state.restored_session_id = session_info.sessionId
+	state.busy = true
+	state.streaming = false
+	state.stream_role = nil
+	set_tab_title(state, title and ("ACP %s"):format(title) or state.title)
+	append_lines(state, { ("Restoring session: %s"):format(title or "[unknown]"), "" })
+	set_run_status(state, "restoring")
+
+	local ok = state.connection:restore_session_async(session_info, chat_handlers(state), function(success, mode_or_err)
+		state.busy = false
+		if not success then
+			set_run_status(state, ("error: %s"):format(mode_or_err))
+			return
+		end
+
+		if mode_or_err == "resume" then
+			append_lines(state, { "", "Session resumed without replayed transcript.", "" })
+		end
+		set_run_status(state, ("restored: %s"):format(mode_or_err or "done"))
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
+	end)
+
+	if not ok then
+		state.busy = false
+		set_run_status(state, "error: failed to restore session")
+	end
+end
+
 function M.open(adapter_name, opts)
 	opts = opts or {}
 	adapter_name = adapter_name or config.default_adapter
@@ -1094,7 +1241,7 @@ function M.open(adapter_name, opts)
 		title = ("ACP %s #%d"):format(adapter_name, id),
 		model = resolved_metadata.model,
 		context_window = resolved_metadata.context_window,
-		connection = Connection.new({
+		connection = opts.connection or Connection.new({
 			adapter = adapter,
 			cwd = vim.fn.getcwd(),
 		}),
@@ -1124,7 +1271,11 @@ function M.open(adapter_name, opts)
 	apply_layout(state)
 	refresh_session_panels()
 
-	vim.api.nvim_set_current_win(state.input_win)
+	if opts.restore_session then
+		start_restore(state, opts.restore_session)
+	elseif valid_win(state.input_win) then
+		vim.api.nvim_set_current_win(state.input_win)
+	end
 end
 
 local function current_state()
@@ -1244,6 +1395,65 @@ local function open_session_picker()
 	return true
 end
 
+local function restore_picker_lines(list)
+	local lines = { "ACP Adapter Sessions", "" }
+	local line_sessions = {}
+	for index, session in ipairs(list) do
+		local title = session.title or session.sessionId or "[untitled]"
+		local updated = session.updatedAt and session.updatedAt ~= "" and ("  " .. session.updatedAt) or ""
+		local cwd = session.cwd and session.cwd ~= "" and session.cwd or "[unknown cwd]"
+		table.insert(lines, ("%d. %s%s"):format(index, title, updated))
+		line_sessions[#lines] = session
+		table.insert(lines, ("   %s"):format(cwd))
+		line_sessions[#lines] = session
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Press <Enter> to restore, or q/<Esc> to close.")
+	return lines, line_sessions
+end
+
+local function open_restore_picker(adapter_name, connection, list)
+	local lines, line_sessions = restore_picker_lines(list)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/restore"):format(adapter_name))
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-sessions",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+
+	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
+	vim.wo[winid].cursorline = true
+	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
+
+	vim.keymap.set("n", "<CR>", function()
+		local session = line_sessions[vim.api.nvim_win_get_cursor(winid)[1]]
+		if not session then
+			return
+		end
+		close_picker(winid, bufnr)
+		M.open(adapter_name, {
+			mode = config.default_mode,
+			connection = connection,
+			restore_session = session,
+		})
+	end, { buffer = bufnr, nowait = true, desc = "Restore ACP adapter session" })
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			close_picker(winid, bufnr)
+			connection:stop()
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP restore sessions" })
+	end
+
+	return true
+end
+
 function M.select_session()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local line = vim.api.nvim_win_get_cursor(0)[1]
@@ -1270,6 +1480,35 @@ function M.focus_sessions()
 	end
 
 	open_session_picker()
+end
+
+function M.restore(adapter_name)
+	adapter_name = adapter_name or config.default_adapter
+	local adapter = config.adapters[adapter_name]
+	if not adapter then
+		notify(("Unknown ACP adapter: %s"):format(adapter_name), vim.log.levels.ERROR)
+		return
+	end
+
+	local connection = Connection.new({
+		adapter = adapter,
+		cwd = vim.fn.getcwd(),
+	})
+	notify(("Listing %s ACP sessions"):format(adapter_name))
+	connection:list_sessions_async(function(list, err)
+		if err then
+			connection:stop()
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		if not list or #list == 0 then
+			connection:stop()
+			notify("No adapter-backed ACP sessions found for this workspace", vim.log.levels.WARN)
+			return
+		end
+
+		open_restore_picker(adapter_name, connection, list)
+	end)
 end
 
 function M.add_context()
@@ -1346,86 +1585,11 @@ function M.send()
 	append_lines(state, { "", "You", "" })
 	append_lines(state, vim.split(prompt, "\n", { plain = true }))
 	append_lines(state, { "", "Agent", "" })
+	state.stream_role = "Agent"
 	set_run_status(state, "connecting")
 	pcall(vim.cmd, "redraw")
 
-	local ok = state.connection:prompt_async(prompt, {
-		started = function()
-			set_run_status(state, "running")
-		end,
-		message_chunk = function(text)
-			if not state.streaming then
-				state.streaming = true
-				set_run_status(state, "streaming")
-			end
-			append_text(state, text)
-		end,
-		thought_chunk = function(text)
-			set_run_status(state, "thinking")
-			append_lines(state, { "", ("Thought: %s"):format(text), "" })
-		end,
-		tool_call = function(update)
-			set_run_status(state, ("tool: %s"):format(update.title or update.kind or "tool call"))
-			append_lines(state, { "", ("Tool: %s"):format(update.title or update.kind or "tool call"), "" })
-		end,
-		tool_update = function(update)
-			set_run_status(state, ("tool: %s"):format(update.status or update.title or "updated"))
-			append_lines(state, { "", ("Tool update: %s"):format(update.status or update.title or "updated"), "" })
-		end,
-		terminal_attach = function(event)
-			ensure_terminal_block(state, event.terminal_id)
-			if event.output and event.output ~= "" then
-				append_terminal_output(state, {
-					terminal_id = event.terminal_id,
-					text = event.output,
-					truncated = event.truncated,
-				})
-			end
-		end,
-		terminal_output = function(event)
-			set_run_status(state, ("terminal: %s"):format(event.terminal_id))
-			append_terminal_output(state, event)
-		end,
-		file_written = function(path)
-			local entry = changes.record(state, path)
-			local display = entry and entry.display or vim.fn.fnamemodify(path, ":.")
-			set_run_status(state, ("wrote %s"):format(display))
-			append_lines(state, { "", ("Wrote %s"):format(display), "Use :AcpChanges to review changed files.", "" })
-			refresh_session_panels()
-		end,
-		session_info = function(update)
-			if update.title and update.title ~= "" then
-				set_tab_title(state, update.title)
-			end
-			if metadata.apply_session(state, update) then
-				refresh_prompt_chrome(state)
-			end
-		end,
-		usage = function(update)
-			if metadata.apply_session(state, update) then
-				refresh_prompt_chrome(state)
-			end
-		end,
-		stderr = function(text)
-			append_lines(state, { "", "stderr:" })
-			append_lines(state, vim.split(text:gsub("%s+$", ""), "\n", { plain = true }))
-			append_lines(state, { "" })
-		end,
-		done = function(stop_reason)
-			state.busy = false
-			set_run_status(state, ("stopped: %s"):format(stop_reason or "done"))
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-		error = function(message)
-			state.busy = false
-			set_run_status(state, ("error: %s"):format(message))
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
+	local ok = state.connection:prompt_async(prompt, chat_handlers(state))
 
 	if not ok then
 		state.busy = false

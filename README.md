@@ -14,6 +14,7 @@ This plugin provides an editor-native ACP chat surface:
 - per-session prompt history recall
 - plain-text transcript history under Neovim state
 - saved transcript replay into a new chat draft
+- adapter-backed session listing and restoration
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
 - visual/range context capture for selected code
 - context and review draft commands for source/Visual-mode workflows
@@ -82,6 +83,7 @@ vim.g.acp_nvim_config = {
 - `:AcpSessions` focuses the sessions side panel or opens a floating session picker
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
 - `:AcpHistory` opens saved transcript history
+- `:AcpRestore [adapter]` lists adapter-backed sessions and restores the selected session
 - `:AcpHistoryDraft [adapter]` opens saved transcript history and drafts a new chat from the selected transcript
 - `:AcpAddContext` inserts source-buffer context into the current prompt
 - `:AcpFixDiagnostics [adapter]` opens chat with a diagnostics-focused draft prompt
@@ -128,5 +130,4 @@ NVIM_LOG_FILE=/tmp/acp.nvim-nvim.log nvim --headless -u tests/minimal_init.lua -
 
 ## Status
 
-This is an early ACP client. Adapter-backed session restoration is not
-implemented yet.
+This is an early ACP client; expect adapter support and protocol coverage to vary.
