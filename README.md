@@ -8,6 +8,13 @@ This plugin provides an editor-native ACP chat surface:
 - side panel for open ACP sessions
 - plain output buffer for streamed agent responses
 - output-visible run status for active prompts, tools, and completion
+- Neovim highlight groups for readable transcript sections
+- non-blocking adapter startup and session creation
+- plain-text transcript history under Neovim state
+- editor context insertion from the source buffer, Tree-sitter node, LSP clients, and diagnostics
+- visual/range context capture for selected code
+- floating permission chooser with numbered actions
+- floating file-write review with a diff preview before applying agent edits
 - floating Markdown input prompt for completion-friendly editing
 - `codex-acp` and `claude-agent-acp` adapter presets
 - basic ACP JSON-RPC, session, prompt, permission, and file read/write support
@@ -62,6 +69,8 @@ vim.g.acp_nvim_config = {
 - `:AcpSend` sends the current prompt
 - `:AcpStop` stops the current agent process
 - `:AcpSessions` focuses the sessions side panel
+- `:AcpHistory` opens saved transcript history
+- `:AcpAddContext` inserts source-buffer context into the current prompt
 - `:AcpHealth [adapter]` checks whether the adapter command is available
 
 In the sessions panel:
@@ -73,8 +82,26 @@ In the prompt buffer:
 - `<Enter>` inserts a newline
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
+- `<leader>ac` inserts source-buffer context into the prompt
+
+The chat-opening commands accept a line range, so opening ACP from Visual mode
+preserves the selected lines for `:AcpAddContext`.
 
 ## Development
+
+Activate this checkout in the already installed `vim.pack` plugin slot:
+
+```sh
+scripts/update-local-plugin.sh
+```
+
+The script moves the installed checkout to `acp.nvim.remote`, then symlinks this
+repo in its place. Later edits in this checkout are picked up by a fresh Neovim
+session. To restore the installed checkout:
+
+```sh
+scripts/update-local-plugin.sh --restore
+```
 
 Run the headless smoke tests with:
 
@@ -84,5 +111,5 @@ NVIM_LOG_FILE=/tmp/acp.nvim-nvim.log nvim --headless -u tests/minimal_init.lua -
 
 ## Status
 
-This is an early minimal ACP client. Terminal operations, persistent session
-restoration, and rich diff approval UI are not implemented yet.
+This is an early minimal ACP client. Terminal operations, adapter-backed session
+restoration, and multi-file review workflows are not implemented yet.

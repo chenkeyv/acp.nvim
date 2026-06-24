@@ -1,4 +1,6 @@
 local Connection = require("acp.connection").Connection
+local context = require("acp.context")
+local history = require("acp.history")
 local metadata = require("acp.metadata")
 
 local M = {}
@@ -36,6 +38,7 @@ local states = {}
 local sessions = {}
 local next_session_id = 1
 local session_panel_lines = {}
+local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
 
 local function notify(message, level)
 	vim.notify(message, level or vim.log.levels.INFO, { title = "ACP" })
@@ -47,6 +50,72 @@ end
 
 local function valid_win(winid)
 	return winid and vim.api.nvim_win_is_valid(winid)
+end
+
+local function define_highlights()
+	vim.api.nvim_set_hl(0, "AcpUserHeader", { link = "Title", default = true })
+	vim.api.nvim_set_hl(0, "AcpAgentHeader", { link = "Function", default = true })
+	vim.api.nvim_set_hl(0, "AcpStatus", { link = "DiagnosticInfo", default = true })
+	vim.api.nvim_set_hl(0, "AcpTool", { link = "Type", default = true })
+	vim.api.nvim_set_hl(0, "AcpThought", { link = "Comment", default = true })
+	vim.api.nvim_set_hl(0, "AcpError", { link = "DiagnosticError", default = true })
+end
+
+local function output_line_highlight(line)
+	if line == "You" then
+		return "AcpUserHeader"
+	end
+	if line == "Agent" then
+		return "AcpAgentHeader"
+	end
+	if line:match("^Status:%s+error") then
+		return "AcpError"
+	end
+	if line:match("^Status:") then
+		return "AcpStatus"
+	end
+	if line:match("^ACP:") then
+		return "AcpStatus"
+	end
+	if line:match("^Tool") or line:match("^Wrote ") then
+		return "AcpTool"
+	end
+	if line:match("^Thought:") then
+		return "AcpThought"
+	end
+	if line:match("^stderr:") then
+		return "AcpError"
+	end
+end
+
+local function refresh_output_highlights(state)
+	if not valid_buf(state.output_buf) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(state.output_buf, output_ns, 0, -1)
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	for index, line in ipairs(lines) do
+		local highlight = output_line_highlight(line)
+		if highlight then
+			vim.api.nvim_buf_set_extmark(state.output_buf, output_ns, index - 1, 0, {
+				line_hl_group = highlight,
+			})
+		end
+	end
+end
+
+local function save_output_history(state)
+	if not valid_buf(state.output_buf) then
+		return
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local ok, err = pcall(history.save, state, lines)
+	if not ok and not state.history_error_reported then
+		state.history_error_reported = true
+		notify(("Failed to save ACP history: %s"):format(err), vim.log.levels.WARN)
+	end
 end
 
 local function set_buf_options(bufnr, opts)
@@ -63,6 +132,8 @@ local function set_output_lines(state, start, stop, lines)
 	vim.bo[state.output_buf].modifiable = true
 	vim.api.nvim_buf_set_lines(state.output_buf, start, stop, false, lines)
 	vim.bo[state.output_buf].modifiable = false
+	refresh_output_highlights(state)
+	save_output_history(state)
 end
 
 local function set_panel_lines(bufnr, lines)
@@ -266,10 +337,42 @@ local function clear_input(state)
 	end
 end
 
+local function append_input_text(state, text)
+	if not valid_buf(state.input_buf) or not text or text == "" then
+		return
+	end
+
+	local lines = vim.split(text, "\n", { plain = true })
+	local existing = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
+	local empty = #existing == 0 or (#existing == 1 and existing[1] == "")
+	if empty then
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, lines)
+	else
+		vim.api.nvim_buf_set_lines(state.input_buf, -1, -1, false, { "", "" })
+		vim.api.nvim_buf_set_lines(state.input_buf, -1, -1, false, lines)
+	end
+
+	if valid_win(state.input_win) then
+		local line_count = vim.api.nvim_buf_line_count(state.input_buf)
+		local last = vim.api.nvim_buf_get_lines(state.input_buf, line_count - 1, line_count, false)[1] or ""
+		pcall(vim.api.nvim_win_set_cursor, state.input_win, { line_count, #last })
+	end
+end
+
 local function adapter_names()
 	local names = vim.tbl_keys(config.adapters)
 	table.sort(names)
 	return names
+end
+
+local function command_source_range(command)
+	if not command or not command.range or command.range == 0 then
+		return nil
+	end
+	return {
+		line1 = command.line1,
+		line2 = command.line2,
+	}
 end
 
 local function escape_tabline(text)
@@ -550,11 +653,10 @@ local function create_buffers(state)
 		swapfile = false,
 	})
 
-	vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, {
+	set_output_lines(state, 0, -1, {
 		("ACP: %s"):format(state.adapter),
 		"",
 	})
-	vim.bo[state.output_buf].modifiable = false
 	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
 end
 
@@ -619,12 +721,16 @@ local function register_keymaps(state)
 	local stop = function()
 		M.stop()
 	end
+	local add_context = function()
+		M.add_context()
+	end
 
 	for _, bufnr in ipairs({ state.output_buf, state.input_buf }) do
 		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 	end
 
+	vim.keymap.set("n", "<leader>ac", add_context, { buffer = state.input_buf, desc = "Add ACP editor context" })
 	vim.keymap.set("i", "<CR>", "<CR>", { buffer = state.input_buf, desc = "Insert newline" })
 	vim.keymap.set({ "n", "i" }, "<C-CR>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<C-s>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
@@ -632,51 +738,72 @@ end
 
 function M.setup(opts)
 	config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
+	define_highlights()
 
 	if vim.o.tabline == "" then
 		vim.o.tabline = "%!v:lua.require'acp.ui'.tabline()"
 	end
 
 	vim.api.nvim_create_user_command("AcpChat", function(command)
-		M.open(command.args ~= "" and command.args or nil, { mode = config.default_mode })
+		M.open(command.args ~= "" and command.args or nil, {
+			mode = config.default_mode,
+			source_range = command_source_range(command),
+		})
 	end, {
 		nargs = "?",
+		range = true,
 		complete = function()
 			return adapter_names()
 		end,
 	})
 
 	vim.api.nvim_create_user_command("AcpChatFloat", function(command)
-		M.open(command.args ~= "" and command.args or nil, { mode = "float" })
+		M.open(command.args ~= "" and command.args or nil, {
+			mode = "float",
+			source_range = command_source_range(command),
+		})
 	end, {
 		nargs = "?",
+		range = true,
 		complete = function()
 			return adapter_names()
 		end,
 	})
 
 	vim.api.nvim_create_user_command("AcpChatWindow", function(command)
-		M.open(command.args ~= "" and command.args or nil, { mode = "window" })
+		M.open(command.args ~= "" and command.args or nil, {
+			mode = "window",
+			source_range = command_source_range(command),
+		})
 	end, {
 		nargs = "?",
+		range = true,
 		complete = function()
 			return adapter_names()
 		end,
 	})
 
 	vim.api.nvim_create_user_command("AcpChatBuffer", function(command)
-		M.open(command.args ~= "" and command.args or nil, { mode = "window" })
+		M.open(command.args ~= "" and command.args or nil, {
+			mode = "window",
+			source_range = command_source_range(command),
+		})
 	end, {
 		nargs = "?",
+		range = true,
 		complete = function()
 			return adapter_names()
 		end,
 	})
 
 	vim.api.nvim_create_user_command("AcpChatTab", function(command)
-		M.open(command.args ~= "" and command.args or nil, { mode = "tab" })
+		M.open(command.args ~= "" and command.args or nil, {
+			mode = "tab",
+			source_range = command_source_range(command),
+		})
 	end, {
 		nargs = "?",
+		range = true,
 		complete = function()
 			return adapter_names()
 		end,
@@ -692,6 +819,14 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpSessions", function()
 		M.focus_sessions()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpHistory", function()
+		history.open_browser()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpAddContext", function()
+		M.add_context()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpHealth", function(command)
@@ -716,6 +851,7 @@ function M.open(adapter_name, opts)
 	local id = next_session_id
 	next_session_id = next_session_id + 1
 	local resolved_metadata = metadata.resolve_adapter(adapter)
+	local source = context.capture(vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win(), opts.source_range)
 
 	local state = {
 		id = id,
@@ -728,6 +864,7 @@ function M.open(adapter_name, opts)
 			adapter = adapter,
 			cwd = vim.fn.getcwd(),
 		}),
+		source = source,
 		busy = false,
 	}
 
@@ -806,6 +943,24 @@ function M.focus_sessions()
 	vim.api.nvim_set_current_win(state.session_panel_win)
 end
 
+function M.add_context()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	local rendered = context.render(state.source)
+	if not rendered then
+		notify("No editor context is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	append_input_text(state, rendered)
+	if valid_win(state.input_win) then
+		vim.api.nvim_set_current_win(state.input_win)
+	end
+end
+
 function M.send()
 	local state = current_state()
 	if not state then
@@ -831,18 +986,13 @@ function M.send()
 	append_lines(state, { "", "You", "" })
 	append_lines(state, vim.split(prompt, "\n", { plain = true }))
 	append_lines(state, { "", "Agent", "" })
-	set_run_status(state, "starting")
+	set_run_status(state, "connecting")
 	pcall(vim.cmd, "redraw")
 
-	if not state.connection:ensure_session() then
-		state.busy = false
-		set_run_status(state, "error: failed to start session")
-		return
-	end
-
-	set_run_status(state, "running")
-
-	local ok = state.connection:prompt(prompt, {
+	local ok = state.connection:prompt_async(prompt, {
+		started = function()
+			set_run_status(state, "running")
+		end,
 		message_chunk = function(text)
 			if not state.streaming then
 				state.streaming = true
@@ -902,7 +1052,7 @@ function M.send()
 
 	if not ok then
 		state.busy = false
-		set_run_status(state, "error: failed to send prompt")
+		set_run_status(state, "error: failed to start session")
 	end
 end
 

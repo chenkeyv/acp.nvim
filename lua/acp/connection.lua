@@ -1,4 +1,6 @@
 local jsonrpc = require("acp.jsonrpc")
+local file_review = require("acp.file_review")
+local permission = require("acp.permission")
 
 local M = {}
 
@@ -75,6 +77,14 @@ local function read_text_file(path, params)
 	end
 
 	return table.concat(out, "\n")
+end
+
+local function read_existing_text(path)
+	local ok, lines = pcall(vim.fn.readfile, path)
+	if not ok then
+		return ""
+	end
+	return table.concat(lines, "\n")
 end
 
 local function write_text_file(path, content)
@@ -164,6 +174,38 @@ function Connection:request(method, params, timeout_ms)
 	end
 
 	return response.result
+end
+
+function Connection:request_async(method, params, callback, timeout_ms)
+	local id = self:next_request_id()
+	local pending = {
+		callback = callback,
+		method = method,
+	}
+	self.pending[id] = pending
+
+	if not self:write(jsonrpc.request(id, method, params)) then
+		self.pending[id] = nil
+		if callback then
+			callback(nil, ("ACP request failed to send: %s"):format(method))
+		end
+		return false
+	end
+
+	vim.defer_fn(function()
+		if self.pending[id] ~= pending then
+			return
+		end
+
+		self.pending[id] = nil
+		local message = ("ACP request timed out: %s"):format(method)
+		notify(message, vim.log.levels.ERROR)
+		if callback then
+			callback(nil, message)
+		end
+	end, timeout_ms or self.adapter.timeout_ms or 20000)
+
+	return true
 end
 
 function Connection:start()
@@ -268,6 +310,79 @@ function Connection:authenticate()
 	return true
 end
 
+function Connection:authenticate_async(callback)
+	if self.authenticated then
+		callback(true)
+		return true
+	end
+
+	local auth_methods = self.agent_info and self.agent_info.authMethods or {}
+	if #auth_methods == 0 then
+		self.authenticated = true
+		callback(true)
+		return true
+	end
+
+	local selected = self.adapter.auth_method
+	local selected_id
+	for _, method in ipairs(auth_methods) do
+		if method.id == selected then
+			selected_id = method.id
+			break
+		end
+	end
+	selected_id = selected_id or auth_methods[1].id
+	if not selected_id then
+		self.authenticated = true
+		callback(true)
+		return true
+	end
+
+	return self:request_async(methods.authenticate, { methodId = selected_id }, function(result, err)
+		if not result then
+			callback(false, err)
+			return
+		end
+
+		self.authenticated = true
+		callback(true)
+	end)
+end
+
+function Connection:initialize_async(callback)
+	if self.initialized then
+		return self:authenticate_async(callback)
+	end
+	if not self:start() then
+		callback(false, "failed to start ACP agent")
+		return false
+	end
+
+	return self:request_async(methods.initialize, {
+		protocolVersion = 1,
+		clientCapabilities = {
+			fs = {
+				readTextFile = true,
+				writeTextFile = true,
+			},
+			terminal = false,
+		},
+		clientInfo = {
+			name = "keyv.nvim-acp",
+			version = "0.1.0",
+		},
+	}, function(result, err)
+		if not result then
+			callback(false, err)
+			return
+		end
+
+		self.agent_info = result
+		self.initialized = true
+		self:authenticate_async(callback)
+	end)
+end
+
 function Connection:ensure_session()
 	if self.session_id then
 		return true
@@ -287,6 +402,35 @@ function Connection:ensure_session()
 
 	self.session_id = result.sessionId
 	return true
+end
+
+function Connection:ensure_session_async(callback)
+	if self.session_id then
+		callback(true)
+		return true
+	end
+
+	return self:initialize_async(function(ok, err)
+		if not ok then
+			callback(false, err)
+			return
+		end
+
+		self:request_async(methods.session_new, {
+			cwd = self.cwd,
+			mcpServers = self.adapter.mcp_servers or {},
+		}, function(result, request_err)
+			if not result or not result.sessionId then
+				local message = request_err or "ACP agent did not create a session"
+				notify(message, vim.log.levels.ERROR)
+				callback(false, message)
+				return
+			end
+
+			self.session_id = result.sessionId
+			callback(true)
+		end)
+	end)
 end
 
 function Connection:prompt(text, handlers)
@@ -313,6 +457,45 @@ function Connection:prompt(text, handlers)
 	end
 
 	return ok
+end
+
+function Connection:prompt_async(text, handlers)
+	handlers = handlers or {}
+
+	return self:ensure_session_async(function(ok, err)
+		if not ok then
+			if handlers.error then
+				handlers.error(err or "failed to start session")
+			end
+			return
+		end
+
+		self.active_handlers = handlers
+		local id = self:next_request_id()
+		self.pending[id] = { async = true }
+
+		local sent = self:write(jsonrpc.request(id, methods.session_prompt, {
+			sessionId = self.session_id,
+			prompt = {
+				{
+					type = "text",
+					text = text,
+				},
+			},
+		}))
+
+		if not sent then
+			self.pending[id] = nil
+			if handlers.error then
+				handlers.error("failed to send prompt")
+			end
+			return
+		end
+
+		if handlers.started then
+			handlers.started()
+		end
+	end)
 end
 
 local function extract_text(content)
@@ -365,17 +548,11 @@ function Connection:handle_permission_request(id, params)
 		return self:send_error(id, "Permission request has no options", jsonrpc.errors.invalid_params)
 	end
 
-	local labels = vim.tbl_map(function(option)
-		return option.name or option.kind or option.optionId
-	end, options)
-
-	vim.ui.select(labels, {
-		prompt = params.toolCall and params.toolCall.title or "ACP permission request",
-	}, function(choice, index)
-		if not choice or not index then
+	permission.select(params, function(option)
+		if not option then
 			return self:send_error(id, "Permission request cancelled", jsonrpc.errors.internal_error)
 		end
-		self:send_result(id, { outcome = options[index].optionId })
+		self:send_result(id, { outcome = option.optionId })
 	end)
 end
 
@@ -410,15 +587,26 @@ function Connection:handle_fs_write(id, params)
 		return self:send_error(id, "Refusing to write outside cwd", jsonrpc.errors.invalid_params)
 	end
 
-	local ok, err = pcall(write_text_file, path, content)
-	if ok then
-		if self.active_handlers and self.active_handlers.file_written then
-			self.active_handlers.file_written(path)
+	file_review.select({
+		path = path,
+		display_path = vim.fn.fnamemodify(path, ":."),
+		before = read_existing_text(path),
+		after = content,
+	}, function(approved)
+		if not approved then
+			return self:send_error(id, "File write cancelled", jsonrpc.errors.internal_error)
 		end
-		return self:send_result(id, nil)
-	end
 
-	self:send_error(id, ("Write failed: %s"):format(err))
+		local ok, err = pcall(write_text_file, path, content)
+		if ok then
+			if self.active_handlers and self.active_handlers.file_written then
+				self.active_handlers.file_written(path)
+			end
+			return self:send_result(id, nil)
+		end
+
+		self:send_error(id, ("Write failed: %s"):format(err))
+	end)
 end
 
 function Connection:handle_request(message)
@@ -453,6 +641,16 @@ function Connection:handle_line(line)
 
 	if message.id and not message.method then
 		local pending = self.pending[message.id]
+		if pending and pending.callback then
+			self.pending[message.id] = nil
+			if message.error then
+				pending.callback(nil, message.error.message or "ACP request failed", message.error)
+			else
+				pending.callback(message.result, nil)
+			end
+			return
+		end
+
 		local async = pending and pending.async
 		if pending then
 			pending.done = true
@@ -480,11 +678,17 @@ function Connection:handle_exit(result)
 		self.active_handlers.error(("ACP agent exited with code %s"):format(code))
 	end
 
-	for _, pending in pairs(self.pending) do
-		pending.done = true
-		pending.error = {
-			message = ("ACP agent exited with code %s"):format(code),
-		}
+	local message = ("ACP agent exited with code %s"):format(code)
+	for id, pending in pairs(self.pending) do
+		if pending.callback then
+			self.pending[id] = nil
+			pending.callback(nil, message)
+		else
+			pending.done = true
+			pending.error = {
+				message = message,
+			}
+		end
 	end
 
 	self.handle = nil
