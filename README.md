@@ -6,6 +6,7 @@ This plugin provides an editor-native ACP chat surface:
 
 - dedicated ACP tab by default
 - side panel for open ACP sessions
+- command-style ACP action palette for discovering session and global workflows
 - floating session picker from any buffer
 - plain output buffer for streamed agent responses
 - visual output dashboard with source, model, context window, and key workflow hints
@@ -97,6 +98,7 @@ vim.g.acp_nvim_config = {
 - `:AcpPromptNext` steps forward through prompt history or restores the draft
 - `:AcpStop` stops the current agent process
 - `:AcpSessions` focuses the sessions side panel or opens a floating session picker
+- `:AcpActions` opens a picker of available ACP workflows
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
 - `:AcpOutput` opens a floating outline of the current output transcript
 - `:AcpDiagnostics` opens a picker for source-buffer diagnostics
@@ -118,6 +120,7 @@ vim.g.acp_nvim_config = {
 In the sessions panel:
 
 - `<Enter>` focuses the session under the cursor
+- `<leader>ak` opens the ACP action palette
 
 In the prompt buffer:
 
@@ -132,6 +135,7 @@ In the prompt buffer:
 - `<leader>af` opens the current session's changed files in quickfix
 - `<leader>a/` opens advertised ACP slash commands
 - `<leader>ao` opens advertised ACP config options
+- `<leader>ak` opens the ACP action palette
 - `<leader>aa` opens source-buffer LSP code actions
 - `<leader>ah` inserts source-buffer LSP hover documentation
 - `<leader>ar` opens source-buffer LSP references
@@ -146,6 +150,7 @@ In the output buffer:
 - `zM` closes all transcript folds
 - `zR` opens all transcript folds
 - `<leader>av` opens the output outline
+- `<leader>ak` opens the ACP action palette
 - `<leader>az` toggles the fold under the cursor
 
 The chat-opening and draft commands accept a line range, so opening ACP from

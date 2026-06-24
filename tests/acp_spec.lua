@@ -1,4 +1,5 @@
 local jsonrpc = require("acp.jsonrpc")
+local actions = require("acp.actions")
 local acp_changes = require("acp.changes")
 local code_actions = require("acp.code_actions")
 local acp_commands = require("acp.commands")
@@ -80,6 +81,7 @@ test("setup registers public user commands", function()
 		"AcpPromptNext",
 		"AcpStop",
 		"AcpSessions",
+		"AcpActions",
 		"AcpChanges",
 		"AcpOutput",
 		"AcpDiagnostics",
@@ -99,6 +101,27 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("action picker lines render workflow details", function()
+	local run = function() end
+	local lines, line_actions = actions.picker_lines({
+		{
+			label = "Output outline",
+			detail = "Jump across transcript sections",
+			key = "<leader>av",
+			scope = "session",
+			run = run,
+		},
+	})
+	local text = table.concat(lines, "\n")
+
+	ok(text:find("ACP Actions", 1, true))
+	ok(text:find("Output outline", 1, true))
+	ok(text:find("<leader>av", 1, true))
+	ok(text:find("[session]", 1, true))
+	eq(line_actions[3].run, run)
+	eq(line_actions[4].run, run)
 end)
 
 test("health report checks adapter commands and metadata", function()
@@ -751,6 +774,48 @@ test("sessions command opens a picker from source buffers", function()
 		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 	end
 	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+end)
+
+test("actions command opens a session action palette", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_set_current_buf(source_buf)
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpActions")
+		local action_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[action_buf].filetype, "acp-actions")
+		local action_lines = vim.api.nvim_buf_get_lines(action_buf, 0, -1, false)
+		local output_outline_row
+		for index, line in ipairs(action_lines) do
+			if line:find("Output outline", 1, true) then
+				output_outline_row = index
+				break
+			end
+		end
+		ok(output_outline_row, "action palette should include output outline")
+
+		vim.api.nvim_win_set_cursor(0, { output_outline_row, 0 })
+		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.bo[vim.api.nvim_get_current_buf()].filetype, "acp-output")
+		local outline = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+		ok(outline:find("ACP Output Outline", 1, true))
+		pcall(vim.api.nvim_buf_delete, vim.api.nvim_get_current_buf(), { force = true })
+	end)
+
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
 end)
 
 test("diagnostics command drafts selected diagnostic context", function()

@@ -1,4 +1,5 @@
 local Connection = require("acp.connection").Connection
+local actions = require("acp.actions")
 local changes = require("acp.changes")
 local code_actions = require("acp.code_actions")
 local acp_commands = require("acp.commands")
@@ -1064,6 +1065,9 @@ local function create_session_panel_buffer(state)
 	vim.keymap.set("n", "<CR>", function()
 		M.select_session()
 	end, { buffer = state.session_panel_buf, desc = "Open ACP session" })
+	vim.keymap.set("n", "<leader>ak", function()
+		M.open_actions()
+	end, { buffer = state.session_panel_buf, desc = "Open ACP actions" })
 	register_session_panel_autocmd(state)
 end
 
@@ -1227,6 +1231,9 @@ local function register_keymaps(state)
 	local open_config = function()
 		M.open_config()
 	end
+	local open_actions = function()
+		M.open_actions()
+	end
 	local open_code_actions = function()
 		M.open_code_actions()
 	end
@@ -1257,6 +1264,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
 		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
+		vim.keymap.set("n", "<leader>ak", open_actions, { buffer = bufnr, desc = "Open ACP actions" })
 		vim.keymap.set("n", "<leader>aa", open_code_actions, { buffer = bufnr, desc = "Open ACP LSP code actions" })
 		vim.keymap.set("n", "<leader>ah", add_hover, { buffer = bufnr, desc = "Add ACP LSP hover context" })
 		vim.keymap.set("n", "<leader>ar", open_references, { buffer = bufnr, desc = "Open ACP LSP references" })
@@ -1401,6 +1409,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpSessions", function()
 		M.focus_sessions()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpActions", function()
+		M.open_actions()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpChanges", function()
@@ -1739,6 +1751,113 @@ local function current_state()
 		return nil
 	end
 	return state
+end
+
+local function state_for_current_buffer()
+	return states[vim.api.nvim_get_current_buf()]
+end
+
+local function add_action(items, label, detail, key, scope, run)
+	table.insert(items, {
+		label = label,
+		detail = detail,
+		key = key,
+		scope = scope,
+		run = run,
+	})
+end
+
+local function action_palette_items(state)
+	local items = {}
+
+	if state then
+		add_action(items, "Send prompt", "Submit the current prompt buffer", "<C-s>", "session", function()
+			M.send()
+		end)
+		add_action(items, "Stop agent", "Stop the active ACP adapter process", "<leader>aq", "session", function()
+			M.stop()
+		end)
+		add_action(items, "Add context", "Insert captured editor context into the prompt", "<leader>ac", "session", function()
+			M.add_context()
+		end)
+		add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "session", function()
+			M.open_output()
+		end)
+		add_action(items, "Changed files", "Open files changed by this session in quickfix", "<leader>af", "session", function()
+			M.open_changes()
+		end)
+		add_action(items, "Diagnostics", "Draft a focused fix from source diagnostics", "<leader>ad", "LSP", function()
+			M.open_diagnostics()
+		end)
+		add_action(items, "Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
+			M.open_code_actions()
+		end)
+		add_action(items, "Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
+			M.add_hover()
+		end)
+		add_action(items, "References", "Pick LSP references as focused context", "<leader>ar", "LSP", function()
+			M.open_references()
+		end)
+		add_action(items, "Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
+			M.open_symbols()
+		end)
+		add_action(items, "Tree-sitter nodes", "Pick syntax-aware source context", "<leader>at", "Tree-sitter", function()
+			M.open_treesitter()
+		end)
+		add_action(items, "Slash commands", "Draft an adapter-advertised slash command", "<leader>a/", "session", function()
+			M.open_commands()
+		end)
+		add_action(items, "Config options", "Pick adapter-advertised session config", "<leader>ao", "session", function()
+			M.open_config()
+		end)
+	else
+		add_action(items, "New chat", "Open the default ACP chat layout", ":AcpChat", "global", function()
+			M.open(config.default_adapter, { mode = config.default_mode })
+		end)
+		add_action(items, "Chat with context", "Open chat with source context prefilled", ":AcpChatContext", "global", function()
+			M.open(config.default_adapter, { mode = config.default_mode, draft = "context" })
+		end)
+		add_action(items, "Review source", "Open a review-focused chat draft", ":AcpReview", "global", function()
+			M.open(config.default_adapter, { mode = config.default_mode, draft = "review" })
+		end)
+	end
+
+	add_action(items, "Sessions", "Focus or pick an open ACP session", ":AcpSessions", "global", function()
+		M.focus_sessions()
+	end)
+	add_action(items, "Restore session", "Restore an adapter-backed ACP session", ":AcpRestore", "global", function()
+		M.restore(config.default_adapter)
+	end)
+	add_action(items, "History", "Browse saved plain-text transcripts", ":AcpHistory", "global", function()
+		history.open_browser()
+	end)
+
+	return items
+end
+
+local function open_action_palette(state, origin_win)
+	local action_items = action_palette_items(state)
+	local lines, line_actions = actions.picker_lines(action_items)
+	picker.open({
+		name = "ACP://actions",
+		filetype = "acp-actions",
+		lines = lines,
+		title = " ACP actions ",
+		submit_desc = "Run ACP action",
+		close_desc = "Close ACP actions",
+		on_submit = function(row, view)
+			local action = line_actions[row]
+			if not action then
+				return
+			end
+
+			view.close()
+			if valid_win(origin_win) then
+				vim.api.nvim_set_current_win(origin_win)
+			end
+			action.run()
+		end,
+	})
 end
 
 local function focus_session(state)
@@ -2219,6 +2338,10 @@ function M.focus_sessions()
 	end
 
 	open_session_picker()
+end
+
+function M.open_actions()
+	open_action_palette(state_for_current_buffer(), vim.api.nvim_get_current_win())
 end
 
 function M.restore(adapter_name)
