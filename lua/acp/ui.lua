@@ -1,5 +1,6 @@
 local Connection = require("acp.connection").Connection
 local changes = require("acp.changes")
+local code_actions = require("acp.code_actions")
 local acp_commands = require("acp.commands")
 local acp_config = require("acp.config")
 local context = require("acp.context")
@@ -540,6 +541,39 @@ local function symbol_prompt(source, symbol)
 	}, "\n")
 end
 
+local function code_action_prompt(source, action)
+	local rendered_context = context.render(source, {
+		treesitter_text_lines = 40,
+		selection_limit = 120,
+	})
+	if not rendered_context then
+		return nil
+	end
+
+	local lines = {
+		("Use this LSP code action as guidance: %s."):format(action.title),
+		("Kind: %s"):format(code_actions.kind_label(action)),
+	}
+	if action.isPreferred then
+		table.insert(lines, "Preferred: yes")
+	end
+	local diagnostic_count = code_actions.diagnostic_count(action)
+	if diagnostic_count > 0 then
+		table.insert(lines, ("Action diagnostics: %d"):format(diagnostic_count))
+	end
+	if code_actions.has_edit(action) then
+		table.insert(lines, "Workspace edit: provided by LSP")
+	end
+	if type(action.command) == "table" and action.command.command then
+		table.insert(lines, ("Command: %s"):format(action.command.command))
+	elseif type(action.command) == "string" then
+		table.insert(lines, ("Command: %s"):format(action.command))
+	end
+	table.insert(lines, "")
+	table.insert(lines, rendered_context)
+	return table.concat(lines, "\n")
+end
+
 local function escape_tabline(text)
 	return tostring(text):gsub("%%", "%%%%")
 end
@@ -900,6 +934,9 @@ local function register_keymaps(state)
 	local open_config = function()
 		M.open_config()
 	end
+	local open_code_actions = function()
+		M.open_code_actions()
+	end
 	local open_symbols = function()
 		M.open_symbols()
 	end
@@ -916,6 +953,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
 		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
+		vim.keymap.set("n", "<leader>aa", open_code_actions, { buffer = bufnr, desc = "Open ACP LSP code actions" })
 		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
 		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
 		vim.keymap.set("n", "<leader>an", next_prompt, { buffer = bufnr, desc = "Next ACP prompt" })
@@ -1061,6 +1099,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpConfig", function()
 		M.open_config()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCodeActions", function()
+		M.open_code_actions()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpSymbols", function()
@@ -1682,6 +1724,58 @@ local function open_config_picker(state)
 	return true
 end
 
+local function open_code_action_picker(state, action_list)
+	if not action_list or #action_list == 0 then
+		notify("No LSP code actions found for the source range", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_actions = code_actions.picker_lines(action_list)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/code-actions"):format(state.adapter, state.id))
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-code-actions",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+
+	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
+	vim.wo[winid].cursorline = true
+	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
+
+	vim.keymap.set("n", "<CR>", function()
+		local action = line_actions[vim.api.nvim_win_get_cursor(winid)[1]]
+		if not action then
+			return
+		end
+		local prompt = code_action_prompt(state.source, action)
+		if not prompt then
+			notify("Failed to render LSP code action context", vim.log.levels.ERROR)
+			return
+		end
+		close_picker(winid, bufnr)
+		append_input_text(state, prompt)
+		if not state.busy then
+			set_run_status(state, ("code action: %s"):format(action.title))
+		end
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
+	end, { buffer = bufnr, nowait = true, desc = "Draft ACP code action" })
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			close_picker(winid, bufnr)
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP code actions" })
+	end
+
+	return true
+end
+
 local function request_lsp_symbols(bufnr, callback)
 	if not vim.lsp or not vim.lsp.buf_request_all then
 		callback(nil, "Neovim LSP document-symbol requests are unavailable")
@@ -1869,6 +1963,31 @@ function M.open_config()
 	end
 
 	open_config_picker(state)
+end
+
+function M.open_code_actions()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading code actions")
+	end
+	code_actions.request(state.source, function(action_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_code_action_picker(state, action_list)
+	end)
 end
 
 function M.open_symbols()

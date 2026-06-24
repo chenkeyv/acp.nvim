@@ -1,5 +1,6 @@
 local jsonrpc = require("acp.jsonrpc")
 local acp_changes = require("acp.changes")
+local code_actions = require("acp.code_actions")
 local acp_commands = require("acp.commands")
 local acp_config = require("acp.config")
 local acp_context = require("acp.context")
@@ -77,6 +78,7 @@ test("setup registers public user commands", function()
 		"AcpChanges",
 		"AcpCommands",
 		"AcpConfig",
+		"AcpCodeActions",
 		"AcpSymbols",
 		"AcpHistory",
 		"AcpRestore",
@@ -87,6 +89,44 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("LSP code actions are flattened and rendered for picker", function()
+	local flattened = code_actions.flatten({
+		{
+			title = "Apply quick fix",
+			kind = "quickfix",
+			isPreferred = true,
+			edit = {},
+			diagnostics = {
+				{ message = "missing value" },
+			},
+		},
+		{
+			title = "Run command",
+			command = {
+				command = "example.command",
+			},
+		},
+		{
+			title = "",
+			kind = "empty",
+		},
+	})
+
+	eq(#flattened, 2)
+	eq(code_actions.kind_label(flattened[1]), "quickfix")
+	eq(code_actions.kind_label(flattened[2]), "command")
+	eq(code_actions.diagnostic_count(flattened[1]), 1)
+	ok(code_actions.has_edit(flattened[1]))
+
+	local lines, line_actions = code_actions.picker_lines(flattened)
+	local text = table.concat(lines, "\n")
+	ok(text:find("Apply quick fix  quickfix [preferred, edit]", 1, true))
+	ok(text:find("1 diagnostic(s)", 1, true))
+	ok(text:find("Run command  command [command]", 1, true))
+	eq(line_actions[3].title, "Apply quick fix")
+	eq(line_actions[5].title, "Run command")
 end)
 
 test("LSP symbols are flattened and rendered for picker", function()
@@ -409,6 +449,90 @@ test("symbols command drafts selected LSP symbol context", function()
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("code actions command drafts selected LSP action context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = missing",
+		"print(value)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+
+	local ns = vim.api.nvim_create_namespace("acp.nvim.test.code-actions")
+	vim.diagnostic.set(ns, source_buf, {
+		{
+			lnum = 0,
+			col = 14,
+			end_lnum = 0,
+			end_col = 21,
+			severity = vim.diagnostic.severity.ERROR,
+			message = "undefined global missing",
+			source = "lua_ls",
+		},
+	})
+
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/codeAction")
+		eq(params.range.start.line, 0)
+		eq(params.range["end"].line, 0)
+		eq(#params.context.diagnostics, 1)
+		eq(params.context.diagnostics[1].message, "undefined global missing")
+		callback({
+			[1] = {
+				result = {
+					{
+						title = "Declare local missing",
+						kind = "quickfix",
+						isPreferred = true,
+						edit = {},
+						diagnostics = {
+							{ message = "undefined global missing" },
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpCodeActions")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-code-actions")
+
+		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP code action as guidance: Declare local missing.", 1, true))
+		ok(prompt:find("Kind: quickfix", 1, true))
+		ok(prompt:find("Preferred: yes", 1, true))
+		ok(prompt:find("Workspace edit: provided by LSP", 1, true))
+		ok(prompt:find("ERROR: undefined global missing", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	vim.diagnostic.reset(ns, source_buf)
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
 	end
