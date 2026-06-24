@@ -132,6 +132,13 @@ local function title_parts(state, opts)
 	if opts.change_count and opts.change_count > 0 then
 		table.insert(parts, ("%d change(s)"):format(opts.change_count))
 	end
+	if opts.current_section then
+		local section_title = clean(opts.current_section.title) or opts.current_section.kind or "section"
+		if #section_title > 36 then
+			section_title = section_title:sub(1, 33) .. "..."
+		end
+		table.insert(parts, ("at %s: %s"):format(opts.current_section.kind or "SECTION", section_title))
+	end
 
 	return parts
 end
@@ -291,6 +298,22 @@ function M.sections(lines)
 		end
 	end
 	return sections
+end
+
+function M.current_section(lines, lnum)
+	lines = lines or {}
+	local current = math.max(1, math.min(tonumber(lnum) or 1, #lines))
+	for index = current, 1, -1 do
+		if M.is_section(lines[index]) then
+			local kind, title = section_label(lines[index])
+			return {
+				line = index,
+				kind = kind,
+				title = clean(title) or kind,
+				preview = preview_after(lines, index),
+			}
+		end
+	end
 end
 
 function M.outline_lines(sections)

@@ -14,6 +14,7 @@ This plugin provides an editor-native ACP chat surface:
 - visual output dashboard with source, model, context window, and key workflow hints
 - output-visible run status for active prompts, tools, and completion
 - live output winbar/title with status, model, context, and changed-file counts
+- cursor-aware output breadcrumb showing the active transcript section
 - searchable output transcript picker with context previews and jump-to-line navigation
 - searchable output code-block picker with language-aware previews and scratch buffers
 - searchable output location picker for jumping from transcript file references into source

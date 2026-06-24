@@ -258,8 +258,15 @@ local function refresh_output_chrome(state)
 		return
 	end
 
+	local current_section
+	if valid_buf(state.output_buf) and vim.api.nvim_win_get_buf(state.output_win) == state.output_buf then
+		local cursor = vim.api.nvim_win_get_cursor(state.output_win)
+		local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+		current_section = output.current_section(lines, cursor[1])
+	end
 	local title = output.window_title(state, {
 		change_count = changes.count(state),
+		current_section = current_section,
 	})
 	local win_config = vim.api.nvim_win_get_config(state.output_win)
 	if win_config.relative ~= "" then
@@ -268,6 +275,7 @@ local function refresh_output_chrome(state)
 	else
 		vim.wo[state.output_win].winbar = output.winbar(state, {
 			change_count = changes.count(state),
+			current_section = current_section,
 		})
 	end
 end
@@ -338,6 +346,7 @@ local function jump_output_section(state, direction)
 	local target = output.next_section(lines, current, direction)
 	if target then
 		vim.api.nvim_win_set_cursor(winid, { target, 0 })
+		refresh_output_chrome(state)
 	end
 end
 
@@ -1589,6 +1598,14 @@ local function register_autocmds(state)
 		buffer = state.input_buf,
 		callback = function()
 			refresh_prompt_hints(state)
+		end,
+	})
+
+	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+		group = group,
+		buffer = state.output_buf,
+		callback = function()
+			refresh_output_chrome(state)
 		end,
 	})
 end
