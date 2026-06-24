@@ -2337,6 +2337,12 @@ local function prompt_action_items()
 	add("References quickfix", "Send source-buffer LSP references to quickfix", "<leader>aR", "LSP", function()
 		M.open_references_quickfix()
 	end)
+	add("Declarations", "Pick LSP declarations as focused context", "<leader>aC", "LSP", function()
+		M.open_declarations()
+	end)
+	add("Declarations quickfix", "Send source-buffer LSP declarations to quickfix", ":AcpDeclarationsQuickfix", "LSP", function()
+		M.open_declarations_quickfix()
+	end)
 	add("Definitions", "Pick LSP definitions as focused context", "<leader>aG", "LSP", function()
 		M.open_definitions()
 	end)
@@ -2458,7 +2464,7 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "- Source selection and cursor context")
 	table.insert(
 		lines,
-		"- LSP diagnostics, code actions, hover, highlights, references, definitions, implementations, type definitions, symbols"
+		"- LSP diagnostics, code actions, hover, highlights, references, declarations, definitions, implementations, type definitions, symbols"
 	)
 	table.insert(lines, "- Tree-sitter nodes around the source cursor")
 	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
@@ -2737,6 +2743,20 @@ local function reference_prompt(reference)
 end
 
 local lsp_location_specs = {
+	declaration = {
+		method = "textDocument/declaration",
+		plural = "declarations",
+		noun = "Declaration",
+		label = "DECLARATION",
+		picker_title = "ACP Declarations",
+		filetype = "acp-declarations",
+		name_suffix = "declarations",
+		instruction = "Use this LSP declaration as context.",
+		range_error = "LSP declaration has no range",
+		render_error = "Failed to render LSP declaration context",
+		unavailable = "Neovim LSP declaration requests are unavailable",
+		unsupported = "No attached LSP client supports declarations",
+	},
 	definition = {
 		method = "textDocument/definition",
 		plural = "definitions",
@@ -3267,6 +3287,9 @@ local function register_keymaps(state)
 	local open_references_quickfix = function()
 		M.open_references_quickfix()
 	end
+	local open_declarations = function()
+		M.open_declarations()
+	end
 	local open_definitions = function()
 		M.open_definitions()
 	end
@@ -3316,6 +3339,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aH", open_highlights, { buffer = bufnr, desc = "Show ACP LSP highlights" })
 		vim.keymap.set("n", "<leader>ar", open_references, { buffer = bufnr, desc = "Open ACP LSP references" })
 		vim.keymap.set("n", "<leader>aR", open_references_quickfix, { buffer = bufnr, desc = "Open ACP LSP references quickfix" })
+		vim.keymap.set("n", "<leader>aC", open_declarations, { buffer = bufnr, desc = "Open ACP LSP declarations" })
 		vim.keymap.set("n", "<leader>aG", open_definitions, { buffer = bufnr, desc = "Open ACP LSP definitions" })
 		vim.keymap.set("n", "<leader>aI", open_implementations, { buffer = bufnr, desc = "Open ACP LSP implementations" })
 		vim.keymap.set("n", "<leader>aT", open_type_definitions, { buffer = bufnr, desc = "Open ACP LSP type definitions" })
@@ -3612,6 +3636,14 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpReferencesQuickfix", function()
 		M.open_references_quickfix()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpDeclarations", function()
+		M.open_declarations()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpDeclarationsQuickfix", function()
+		M.open_declarations_quickfix()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpDefinitions", function()
@@ -4066,6 +4098,12 @@ local function action_palette_items(state)
 		add_action(items, "References quickfix", "Send source-buffer LSP references to quickfix", "<leader>aR", "LSP", function()
 			M.open_references_quickfix()
 		end)
+		add_action(items, "Declarations", "Pick LSP declarations as focused context", "<leader>aC", "LSP", function()
+			M.open_declarations()
+		end)
+		add_action(items, "Declarations quickfix", "Send source-buffer LSP declarations to quickfix", ":AcpDeclarationsQuickfix", "LSP", function()
+			M.open_declarations_quickfix()
+		end)
 		add_action(items, "Definitions", "Pick LSP definitions as focused context", "<leader>aG", "LSP", function()
 			M.open_definitions()
 		end)
@@ -4303,6 +4341,14 @@ local function source_action_items(state)
 	add("References quickfix", "Send LSP references from the source cursor to quickfix", "<leader>aR", "LSP", function()
 		focus_session(state)
 		M.open_references_quickfix()
+	end)
+	add("Declarations", "Pick LSP declarations from the source cursor", "<leader>aC", "LSP", function()
+		focus_session(state)
+		M.open_declarations()
+	end)
+	add("Declarations quickfix", "Send LSP declarations from the source cursor to quickfix", ":AcpDeclarationsQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_declarations_quickfix()
 	end)
 	add("Definitions", "Pick LSP definitions from the source cursor", "<leader>aG", "LSP", function()
 		focus_session(state)
@@ -5746,6 +5792,44 @@ function M.open_references_quickfix()
 	end
 
 	open_references_quickfix(state)
+end
+
+function M.open_declarations()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading declarations")
+	end
+	local spec = lsp_location_specs.declaration
+	request_lsp_locations(state.source, spec.method, function(declaration_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_lsp_location_picker(state, spec, declaration_list)
+	end, {
+		unavailable = spec.unavailable,
+		unsupported = spec.unsupported,
+	})
+end
+
+function M.open_declarations_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_lsp_location_quickfix(state, lsp_location_specs.declaration)
 end
 
 function M.open_definitions()

@@ -64,6 +64,7 @@ This plugin provides an editor-native ACP chat surface:
 - async LSP hover context insertion for source-cursor documentation
 - async LSP document-highlight marks for read/write source occurrences
 - async LSP references picker with quickfix export for focused usage context
+- async LSP declaration picker with quickfix export for API declaration context
 - async LSP definition picker with quickfix export for source-cursor navigation context
 - async LSP implementation picker with quickfix export for interface and abstract API context
 - async LSP type-definition picker with quickfix export for typed source context
@@ -175,6 +176,8 @@ vim.g.acp_nvim_config = {
 - `:AcpClearHighlights` clears source-buffer LSP highlight marks
 - `:AcpReferences` opens an LSP references picker for the source cursor
 - `:AcpReferencesQuickfix` sends LSP references for the source cursor to quickfix
+- `:AcpDeclarations` opens an LSP declaration picker for the source cursor
+- `:AcpDeclarationsQuickfix` sends LSP declarations for the source cursor to quickfix
 - `:AcpDefinitions` opens an LSP definition picker for the source cursor
 - `:AcpDefinitionsQuickfix` sends LSP definitions for the source cursor to quickfix
 - `:AcpImplementations` opens an LSP implementation picker for the source cursor
@@ -230,6 +233,7 @@ In the prompt buffer:
 - `<leader>aH` shows source-buffer LSP read/write highlights
 - `<leader>ar` opens source-buffer LSP references
 - `<leader>aR` sends source-buffer LSP references to quickfix
+- `<leader>aC` opens source-buffer LSP declarations
 - `<leader>aG` opens source-buffer LSP definitions
 - `<leader>aI` opens source-buffer LSP implementations
 - `<leader>aT` opens source-buffer LSP type definitions
@@ -269,7 +273,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file, diagnostics, LSP-reference, LSP-definition, LSP-implementation, LSP-type-definition, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
+- changed-file, diagnostics, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 
