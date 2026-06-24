@@ -381,6 +381,86 @@ local function open_output_outline(state)
 	return true
 end
 
+local function code_block_title(block)
+	return (" %s lines %d-%d "):format(block.language or "code", block.start_line or 1, block.end_line or 1)
+end
+
+local function open_output_code_block_buffer(state, block)
+	if not state or not block or not block.lines then
+		return false
+	end
+
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	pcall(
+		vim.api.nvim_buf_set_name,
+		bufnr,
+		("ACP Code://%s/%s/%d-%d.%s"):format(
+			state.adapter or "adapter",
+			tostring(state.id or "?"),
+			block.start_line or 1,
+			block.end_line or 1,
+			block.filetype or "text"
+		)
+	)
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = block.filetype or "text",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, block.lines)
+	vim.b[bufnr].acp_output_source = state.output_buf
+
+	vim.cmd("tabnew")
+	vim.api.nvim_win_set_buf(0, bufnr)
+	return true
+end
+
+local function open_output_code_blocks(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local blocks = output.code_blocks(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false))
+	if #blocks == 0 then
+		notify("No ACP code blocks found in the output", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_blocks = output.code_block_lines(blocks)
+	picker.open({
+		name = ("ACP://%s/%d/code-blocks"):format(state.adapter, state.id),
+		filetype = "acp-code-blocks",
+		lines = lines,
+		title = " ACP code blocks ",
+		submit_desc = "Open ACP code block",
+		close_desc = "Close ACP code blocks",
+		preview = function(row)
+			local block = line_blocks[row]
+			if not block then
+				return nil
+			end
+			return {
+				lines = block.lines,
+				filetype = block.filetype,
+				title = code_block_title(block),
+			}
+		end,
+		on_submit = function(row, view)
+			local block = line_blocks[row]
+			if not block then
+				return
+			end
+
+			view.close()
+			open_output_code_block_buffer(state, block)
+		end,
+	})
+	return true
+end
+
 local function follow_output(state)
 	if not valid_win(state.output_win) or not valid_buf(state.output_buf) then
 		return
@@ -1359,6 +1439,9 @@ local function register_keymaps(state)
 	local open_output = function()
 		open_output_outline(state)
 	end
+	local open_code_blocks = function()
+		open_output_code_blocks(state)
+	end
 	local open_diagnostics = function()
 		M.open_diagnostics()
 	end
@@ -1397,6 +1480,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 		vim.keymap.set("n", "<leader>av", open_output, { buffer = bufnr, desc = "Open ACP output outline" })
+		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
 		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
@@ -1558,6 +1642,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutput", function()
 		M.open_output()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
+		M.open_code_blocks()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpDiagnostics", function()
@@ -1920,6 +2008,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "session", function()
 			M.open_output()
+		end)
+		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
+			M.open_code_blocks()
 		end)
 		add_action(items, "Changed files", "Open files changed by this session in quickfix", "<leader>af", "session", function()
 			M.open_changes()
@@ -2612,6 +2703,15 @@ function M.open_output()
 	end
 
 	open_output_outline(state)
+end
+
+function M.open_code_blocks()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_code_blocks(state)
 end
 
 function M.open_diagnostics()

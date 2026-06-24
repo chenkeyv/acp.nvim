@@ -88,6 +88,7 @@ test("setup registers public user commands", function()
 		"AcpActions",
 		"AcpChanges",
 		"AcpOutput",
+		"AcpCodeBlocks",
 		"AcpDiagnostics",
 		"AcpCommands",
 		"AcpConfig",
@@ -335,6 +336,7 @@ test("output dashboard and section helpers are rendered", function()
 	ok(text:find("Session: #7 | Mode: window", 1, true))
 	ok(text:find("Model: test-model | Context: 1k", 1, true))
 	ok(text:find("Keys: [[/]] sections", 1, true))
+	ok(text:find("<leader>ab code", 1, true))
 
 	eq(acp_output.line_style("You").line_hl_group, "AcpUserHeader")
 	eq(acp_output.line_style("Status: error: failed").line_hl_group, "AcpStatusError")
@@ -369,8 +371,18 @@ test("output dashboard and section helpers are rendered", function()
 	eq(blocks[1].start_line, 2)
 	eq(blocks[1].end_line, 4)
 	eq(blocks[1].language, "lua")
+	eq(blocks[1].filetype, "lua")
+	eq(blocks[1].line_count, 1)
+	eq(blocks[1].lines[1], "print(1)")
 	eq(blocks[2].language, "text")
 	eq(blocks[2].end_line, 6)
+	eq(blocks[2].closed, false)
+	eq(blocks[2].lines[1], "plain")
+	local block_picker, line_blocks = acp_output.code_block_lines(blocks)
+	local block_text = table.concat(block_picker, "\n")
+	ok(block_text:find("ACP Output Code Blocks", 1, true))
+	ok(block_text:find("lua", 1, true))
+	eq(line_blocks[3].language, "lua")
 end)
 
 test("LSP references are flattened and rendered for picker", function()
@@ -890,6 +902,41 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		eq(vim.api.nvim_get_current_win(), output_win)
 		eq(vim.api.nvim_win_get_cursor(output_win)[1], 1)
+
+		vim.bo[output_buf].modifiable = true
+		vim.api.nvim_buf_set_lines(output_buf, -1, -1, false, {
+			"",
+			"Agent",
+			"```lua",
+			"print('from acp')",
+			"```",
+		})
+		vim.bo[output_buf].modifiable = false
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd("AcpCodeBlocks")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-code-blocks")
+		local block_picker = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+		ok(block_picker:find("ACP Output Code Blocks", 1, true))
+		ok(block_picker:find("lua", 1, true))
+		local preview_found = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local preview_bufnr = vim.api.nvim_win_get_buf(winid)
+			if preview_bufnr ~= picker_buf and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "lua" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
+				if preview:find("print('from acp')", 1, true) then
+					preview_found = true
+					break
+				end
+			end
+		end
+		ok(preview_found, "code block picker should show language preview")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local code_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[code_buf].filetype, "lua")
+		eq(table.concat(vim.api.nvim_buf_get_lines(code_buf, 0, -1, false), "\n"), "print('from acp')")
+		pcall(vim.cmd, "tabclose!")
 	end)
 
 	vim.notify = original_notify

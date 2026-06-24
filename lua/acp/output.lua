@@ -1,6 +1,17 @@
 local M = {}
 
 local animation_frames = { "|", "/", "-", "\\" }
+local filetype_aliases = {
+	bash = "sh",
+	js = "javascript",
+	jsonc = "json",
+	md = "markdown",
+	py = "python",
+	shell = "sh",
+	ts = "typescript",
+	yml = "yaml",
+	zsh = "sh",
+}
 
 local function clean(value)
 	if value == nil or value == "" or value == vim.NIL then
@@ -83,7 +94,7 @@ function M.dashboard_lines(state)
 		("Session: #%s | Mode: %s"):format(tostring(state and state.id or "?"), clean(state and state.mode) or "?"),
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
-		"Keys: [[/]] sections | za folds | <leader>av outline | <leader>af changes | <leader>ad diagnostics",
+		"Keys: [[/]] sections | za folds | <leader>av outline | <leader>ab code | <leader>af changes | <leader>ad diagnostics",
 		"",
 	}
 end
@@ -261,7 +272,41 @@ function M.ghost_text(state, lines, frame)
 		return "Ready - draft in the prompt buffer"
 	end
 
-	return "Idle - [[/]] sections, za folds, <leader>av outline"
+	return "Idle - [[/]] sections, za folds, <leader>av outline, <leader>ab code"
+end
+
+function M.filetype_for_language(language)
+	local value = clean(language)
+	if not value then
+		return "text"
+	end
+
+	value = value:lower()
+	return filetype_aliases[value] or value
+end
+
+local function block_lines(lines, block, closed)
+	local first = block.start_line + 1
+	local last = closed and (block.end_line - 1) or block.end_line
+	local body = {}
+
+	for index = first, last do
+		table.insert(body, lines[index] or "")
+	end
+	if #body == 0 then
+		table.insert(body, "")
+	end
+	return body
+end
+
+local function finish_block(blocks, lines, block, end_line, closed)
+	block.end_line = end_line
+	block.closed = closed
+	block.filetype = M.filetype_for_language(block.language)
+	block.lines = block_lines(lines, block, closed)
+	block.line_count = #block.lines == 1 and block.lines[1] == "" and 0 or #block.lines
+	block.preview = clean(block.lines[1])
+	table.insert(blocks, block)
 end
 
 function M.code_blocks(lines)
@@ -272,8 +317,7 @@ function M.code_blocks(lines)
 		local language = line:match("^%s*```%s*([^%s`]*)")
 		if language then
 			if current then
-				current.end_line = index
-				table.insert(blocks, current)
+				finish_block(blocks, lines, current, index, true)
 				current = nil
 			else
 				current = {
@@ -285,11 +329,33 @@ function M.code_blocks(lines)
 	end
 
 	if current then
-		current.end_line = #lines
-		table.insert(blocks, current)
+		finish_block(blocks, lines, current, #lines, false)
 	end
 
 	return blocks
+end
+
+function M.code_block_lines(blocks)
+	local lines = { "ACP Output Code Blocks", "" }
+	local line_blocks = {}
+
+	for _, block in ipairs(blocks or {}) do
+		local language = block.language or "text"
+		if #language > 16 then
+			language = language:sub(1, 13) .. "..."
+		end
+		local count = ("%d line%s"):format(block.line_count or 0, block.line_count == 1 and "" or "s")
+		table.insert(lines, ("%4d-%-4d  %-16s  %s"):format(block.start_line, block.end_line, language, count))
+		line_blocks[#lines] = block
+		if block.preview then
+			table.insert(lines, ("      %s"):format(block.preview:sub(1, 96)))
+			line_blocks[#lines] = block
+		end
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Press <Enter> to open a scratch buffer, / to filter, or q/<Esc> to close.")
+	return lines, line_blocks
 end
 
 function M.fold_level(lines, lnum)
