@@ -103,6 +103,10 @@ local function refresh_output_highlights(state)
 				opts.sign_text = style.sign_text
 				opts.sign_hl_group = style.sign_hl_group or style.line_hl_group or style.badge_hl or "AcpBadge"
 			end
+			if style.separator then
+				opts.virt_lines = { { { style.separator, style.separator_hl_group or style.line_hl_group or "AcpOutputMeta" } } }
+				opts.virt_lines_above = true
+			end
 			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, index - 1, 0, opts)
 		end
 	end

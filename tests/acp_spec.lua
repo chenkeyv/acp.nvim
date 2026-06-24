@@ -346,10 +346,13 @@ test("output dashboard and section helpers are rendered", function()
 
 	eq(acp_output.line_style("You").line_hl_group, "AcpUserHeader")
 	eq(acp_output.line_style("You").sign_text, "U>")
+	eq(acp_output.line_style("You").separator, "---- USER: Prompt ----")
 	eq(acp_output.line_style("Agent").sign_text, "A>")
+	eq(acp_output.line_style("Agent").separator, "---- AGENT: Response ----")
 	eq(acp_output.line_style("Transcript: 1 section | 0 code | 0 locs | 0 changes").line_hl_group, "AcpOutputMeta")
 	eq(acp_output.line_style("Status: error: failed").line_hl_group, "AcpStatusError")
 	eq(acp_output.line_style("Status: error: failed").sign_text, "E!")
+	eq(acp_output.line_style("Status: error: failed").separator, "---- STATUS: Error ----")
 	eq(acp_output.line_style("Tool: build").sign_text, "T>")
 	eq(acp_output.line_style("Wrote lua/acp/init.lua").sign_text, "F>")
 	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 1, 1), 3)
@@ -924,6 +927,17 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 				or vim.b[output_buf].acp_language_injection == "fence-detection"
 		)
 
+		local function has_virt_line(mark, text)
+			for _, virt_line in ipairs((mark[4] and mark[4].virt_lines) or {}) do
+				for _, chunk in ipairs(virt_line) do
+					if chunk[1] and chunk[1]:find(text, 1, true) then
+						return true
+					end
+				end
+			end
+			return false
+		end
+
 		local ns = vim.api.nvim_create_namespace("acp.nvim.output")
 		local marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
 		local highlighted_header = false
@@ -957,14 +971,20 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local user_sign = false
 		local agent_sign = false
 		local error_sign = false
+		local user_separator = false
+		local agent_separator = false
 		for _, mark in ipairs(marks) do
 			user_sign = user_sign or (mark[4] and mark[4].sign_text == "U>")
 			agent_sign = agent_sign or (mark[4] and mark[4].sign_text == "A>")
 			error_sign = error_sign or (mark[4] and mark[4].sign_text == "E!")
+			user_separator = user_separator or has_virt_line(mark, "---- USER: Prompt ----")
+			agent_separator = agent_separator or has_virt_line(mark, "---- AGENT: Response ----")
 		end
 		ok(user_sign, "output user sign should be rendered")
 		ok(agent_sign, "output agent sign should be rendered")
 		ok(error_sign, "output error sign should be rendered")
+		ok(user_separator, "output user separator should be rendered")
+		ok(agent_separator, "output agent separator should be rendered")
 		local updated_dashboard = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, 7, false), "\n")
 		ok(updated_dashboard:find("Transcript: 3 sections | 0 code | 0 locs | 0 changes", 1, true))
 
