@@ -542,7 +542,12 @@ test("output dashboard and section helpers are rendered", function()
 	local error_badge, error_hl = acp_output.activity_badge({ run_status = "error: failed" }, {}, 1)
 	ok(error_badge:find("error: failed", 1, true))
 	eq(error_hl, "AcpBadgeError")
-	ok(acp_output.ghost_text({ busy = true, run_status = "streaming" }, {}, 2):find("streaming", 1, true))
+	local live_status, live_status_hl = acp_output.live_status_label({ run_status = "streaming" }, 2)
+	ok(live_status:find("/ live: streaming", 1, true))
+	eq(live_status_hl, "AcpOutputLive")
+	local busy_ghost = acp_output.ghost_text({ busy = true, run_status = "streaming" }, {}, 2)
+	ok(busy_ghost:find("streaming", 1, true))
+	ok(busy_ghost:find("0 sections", 1, true))
 	ok(acp_output.ghost_text({ busy = false }, { "ACP: test", "" }):find("Ready", 1, true))
 	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("? menu", 1, true))
 	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("<leader>ay yank", 1, true))
@@ -562,13 +567,27 @@ test("output dashboard and section helpers are rendered", function()
 	eq(block_at.language, "lua")
 	eq(block_at.lines[1], "print(1)")
 	eq(acp_output.code_block_text(block_at), "print(1)")
-	local block_header = acp_output.code_block_header(block_at, true)
+	local block_header = acp_output.code_block_header(block_at, true, 2)
 	ok(block_header:find("CODE lua", 1, true))
+	ok(block_header:find("lua -> lua", 1, true))
 	ok(block_header:find("1 line", 1, true))
 	ok(block_header:find("Tree-sitter injection", 1, true))
+	ok(block_header:find("ready", 1, true))
 	ok(block_header:find("<Enter> open", 1, true))
 	ok(block_header:find("<leader>aY yank", 1, true))
-	ok(acp_output.cursor_hint({ "Agent", "```lua", "print(1)", "```" }, 3, 0):find("]o/[o items", 1, true))
+	local block_lens = acp_output.code_block_lens(block_at, true, 2)
+	local block_lens_text = {}
+	for _, chunk in ipairs(block_lens) do
+		table.insert(block_lens_text, chunk[1])
+	end
+	ok(table.concat(block_lens_text):find("Tree-sitter injection", 1, true))
+	eq(acp_output.injected_languages({ "Agent", "```lua", "print(1)", "```" })[1], "lua")
+	local code_hint = acp_output.cursor_hint({ "Agent", "```lua", "print(1)", "```" }, 3, 0, {
+		language_injection = true,
+	})
+	ok(code_hint:find("code lua", 1, true))
+	ok(code_hint:find("Tree-sitter injection", 1, true))
+	ok(code_hint:find("]o/[o items", 1, true))
 	local block_picker, line_blocks = acp_output.code_block_lines(blocks)
 	local block_text = table.concat(block_picker, "\n")
 	ok(block_text:find("ACP Output Code Blocks", 1, true))
@@ -1489,28 +1508,48 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
 		local code_header = false
 		local code_sign = false
+		local code_badge = false
 		for _, mark in ipairs(marks) do
 			if mark[4] and mark[4].sign_text == "C>" then
 				code_sign = true
 			end
+			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
+				if chunk[1] and chunk[1]:find("lua->lua", 1, true) then
+					code_badge = true
+				end
+			end
 			for _, virt_line in ipairs((mark[4] and mark[4].virt_lines) or {}) do
+				local rendered = {}
 				for _, chunk in ipairs(virt_line) do
-					if
-						chunk[1]
-						and chunk[1]:find("CODE lua", 1, true)
-						and (
-							chunk[1]:find("Tree-sitter injection", 1, true)
-							or chunk[1]:find("fence detection", 1, true)
-						)
-					then
-						code_header = true
-					end
+					table.insert(rendered, chunk[1] or "")
+				end
+				rendered = table.concat(rendered)
+				if
+					rendered:find("CODE lua", 1, true)
+					and rendered:find("lua -> lua", 1, true)
+					and (rendered:find("Tree-sitter injection", 1, true) or rendered:find("fence detection", 1, true))
+				then
+					code_header = true
 				end
 			end
 		end
 		ok(code_header, "output code blocks should render a virtual header")
 		ok(code_sign, "output code blocks should render a sign marker")
+		ok(code_badge, "output code blocks should render a language injection badge")
+		eq(vim.b[output_buf].acp_injected_languages[1], "lua")
 		vim.api.nvim_win_set_cursor(output_win, { code_line, 0 })
+		vim.cmd("doautocmd CursorMoved")
+		local code_hint_marks = vim.api.nvim_buf_get_extmarks(output_buf, hint_ns, 0, -1, { details = true })
+		local code_hint = false
+		for _, mark in ipairs(code_hint_marks) do
+			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
+				if chunk[1] and chunk[1]:find("code lua", 1, true) then
+					code_hint = true
+					break
+				end
+			end
+		end
+		ok(code_hint, "output code blocks should show language-aware ghost hints")
 		vim.cmd("AcpOutputInspect")
 		local code_preview_win, code_preview = output_inspector_text("lua")
 		ok(code_preview and code_preview:find("print('from acp')", 1, true), "output inspector should preview code blocks")

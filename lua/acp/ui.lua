@@ -107,6 +107,7 @@ local function refresh_output_highlights(state)
 
 	vim.api.nvim_buf_clear_namespace(state.output_buf, output_ns, 0, -1)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	vim.b[state.output_buf].acp_injected_languages = output.injected_languages(lines)
 	refresh_output_diagnostics(state, lines)
 	local dashboard_count = state.output_dashboard_lines or #output.dashboard_lines(state)
 	local activity_badge, activity_hl = output.activity_badge(
@@ -132,7 +133,12 @@ local function refresh_output_highlights(state)
 			local summary = section_summaries[index]
 			local timeline = section_timeline[index]
 			local header_activity = index == 1 and line:match("^ACP:") and activity_badge
-			if style.badge or summary or timeline or header_activity then
+			local live_status
+			local live_status_hl
+			if state.busy and line:match("^Status:") then
+				live_status, live_status_hl = output.live_status_label(state, state.output_animation_frame)
+			end
+			if style.badge or summary or timeline or header_activity or live_status then
 				opts.virt_text = {}
 				if timeline then
 					table.insert(opts.virt_text, { timeline.label, "AcpOutputTimeline" })
@@ -145,6 +151,9 @@ local function refresh_output_highlights(state)
 				end
 				if header_activity then
 					table.insert(opts.virt_text, { activity_badge, activity_hl or "AcpOutputIdle" })
+				end
+				if live_status then
+					table.insert(opts.virt_text, { live_status, live_status_hl or "AcpOutputLive" })
 				end
 				opts.virt_text_pos = "right_align"
 			end
@@ -173,10 +182,12 @@ local function refresh_output_highlights(state)
 				}
 				if line_number == block.start_line then
 					local prefix = state.output_language_injection and " inject:" or " lang:"
-					opts.virt_text = { { ("%s%s "):format(prefix, block.language), "AcpInjectedLanguage" } }
+					opts.virt_text = {
+						{ ("%s%s->%s "):format(prefix, block.language, block.filetype or "text"), "AcpInjectedLanguage" },
+					}
 					opts.virt_text_pos = "right_align"
 					opts.virt_lines = {
-						{ { output.code_block_header(block, state.output_language_injection), "AcpCodeBlockHeader" } },
+						output.code_block_lens(block, state.output_language_injection, state.output_animation_frame),
 					}
 					opts.virt_lines_above = true
 				end
@@ -294,6 +305,7 @@ local function refresh_output_cursor_hint(state)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 	local hint = output.cursor_hint(lines, cursor[1], cursor[2], {
 		cwd = state.cwd,
+		language_injection = state.output_language_injection,
 	})
 	if not hint then
 		return

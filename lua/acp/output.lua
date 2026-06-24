@@ -271,6 +271,8 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpCodeBlockHeader", { fg = "#1a1b26", bg = "#414868", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCodeBlockSign", { link = "AcpCodeFence", default = true })
 	vim.api.nvim_set_hl(0, "AcpInjectedLanguage", { fg = "#1a1b26", bg = "#7aa2f7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpInjectedLanguageActive", { fg = "#1a1b26", bg = "#9ece6a", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpCodeBlockLensMuted", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputReference", { link = "Underlined", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputReferenceBadge", { fg = "#1a1b26", bg = "#2ac3de", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpSectionStats", { fg = "#1a1b26", bg = "#565f89", bold = true, default = true })
@@ -279,6 +281,7 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentItem", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputActivity", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputLive", { fg = "#1a1b26", bg = "#f7768e", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputIdle", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulse", { link = "IncSearch", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulseSoft", { link = "Search", default = true })
@@ -765,17 +768,36 @@ function M.activity_badge(state, stats, frame)
 	return (" %s "):format(label), hl
 end
 
+function M.live_status_label(state, frame)
+	local status = clean(state and state.run_status) or "working"
+	if #status > 32 then
+		status = status:sub(1, 29) .. "..."
+	end
+	return (" %s live: %s "):format(M.animation_frame(frame), status), "AcpOutputLive"
+end
+
 function M.ghost_text(state, lines, frame)
 	lines = lines or {}
+	local stats = M.transcript_stats(lines)
 	if state and state.busy then
-		return ("%s %s"):format(M.animation_frame(frame), clean(state.run_status) or "working")
+		return ("%s %s | %d sections | %d code | %d refs"):format(
+			M.animation_frame(frame),
+			clean(state.run_status) or "working",
+			stats.sections or 0,
+			stats.code_blocks or 0,
+			stats.locations or 0
+		)
 	end
 
 	if #M.sections(lines) <= 1 then
-		return "Ready - draft in the prompt buffer"
+		return "Ready - draft in prompt | ? actions | <leader>ax search"
 	end
 
-	return "Idle - <leader>ax search, [[/]] sections, <leader>av outline, <leader>ak actions"
+	return ("Idle - %d sections | %d code | %d refs | [[/]] sections | <leader>av outline"):format(
+		stats.sections or 0,
+		stats.code_blocks or 0,
+		stats.locations or 0
+	)
 end
 
 function M.filetype_for_language(language)
@@ -855,16 +877,52 @@ function M.code_block_text(block)
 	return table.concat(block.lines, "\n")
 end
 
-function M.code_block_header(block, injection_active)
+function M.code_block_lens(block, injection_active, frame)
 	block = block or {}
 	local language = clean(block.language) or "text"
 	if #language > 18 then
 		language = language:sub(1, 15) .. "..."
 	end
+	local filetype = clean(block.filetype) or M.filetype_for_language(language)
+	if #filetype > 18 then
+		filetype = filetype:sub(1, 15) .. "..."
+	end
 	local line_count = tonumber(block.line_count) or 0
 	local count = ("%d line%s"):format(line_count, line_count == 1 and "" or "s")
 	local injection = injection_active and "Tree-sitter injection" or "fence detection"
-	return (" CODE %s | %s | %s | <Enter> open | <leader>aY yank "):format(language, count, injection)
+	local state = block.closed == false and ("live " .. M.animation_frame(frame)) or "ready"
+	local injection_hl = injection_active and "AcpInjectedLanguageActive" or "AcpInjectedLanguage"
+	local state_hl = block.closed == false and "AcpOutputLive" or "AcpCodeBlockLensMuted"
+	return {
+		{ " CODE ", "AcpCodeBlockHeader" },
+		{ language, "AcpInjectedLanguage" },
+		{ (" -> %s "):format(filetype), "AcpCodeBlockHeader" },
+		{ ("| %s | "):format(count), "AcpCodeBlockLensMuted" },
+		{ injection, injection_hl },
+		{ (" | %s | "):format(state), state_hl },
+		{ "<Enter> open | <leader>aY yank ", "AcpOutputHint" },
+	}
+end
+
+function M.code_block_header(block, injection_active, frame)
+	local text = {}
+	for _, chunk in ipairs(M.code_block_lens(block, injection_active, frame)) do
+		table.insert(text, chunk[1])
+	end
+	return table.concat(text)
+end
+
+function M.injected_languages(lines)
+	local languages = {}
+	local seen = {}
+	for _, block in ipairs(M.code_blocks(lines)) do
+		local filetype = clean(block.filetype) or M.filetype_for_language(block.language)
+		if filetype and not seen[filetype] then
+			seen[filetype] = true
+			table.insert(languages, filetype)
+		end
+	end
+	return languages
 end
 
 function M.code_block_lines(blocks)
@@ -1213,8 +1271,14 @@ function M.cursor_hint(lines, lnum, col, opts)
 	if M.file_reference_at(lines, line_number, col, { cwd = opts.cwd }) then
 		return "actions: ? menu | K inspect | <Enter> open ref | ]o/[o items"
 	end
-	if M.code_block_at(lines, line_number) then
-		return "actions: ? menu | K inspect | <Enter> open code | ]o/[o items"
+	local block = M.code_block_at(lines, line_number)
+	if block then
+		local filetype = clean(block.filetype) or M.filetype_for_language(block.language)
+		local injection = opts.language_injection and "Tree-sitter injection" or "fence detection"
+		return ("actions: code %s | %s | ? menu | K inspect | <Enter> open code | ]o/[o items"):format(
+			filetype,
+			injection
+		)
 	end
 	if line:match("^Status:%s+error") or line:match("^stderr:") or line:match("^Terminal output truncated") then
 		return "actions: ? menu | K inspect | ]o/[o items | <leader>ae problems"

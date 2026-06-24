@@ -33,7 +33,7 @@ This plugin provides an editor-native ACP chat surface:
 - cursor-aware code-block yank action that copies fenced output without Markdown fences
 - searchable output code-block picker with language-aware previews and scratch buffers
 - code-block scratch buffers with winbar actions, Tree-sitter/filetype status, and yank/close keymaps
-- virtual code-block headers with language, line count, injection status, and action hints
+- animated virtual code-block lenses with language-to-filetype mapping, line count, injection status, and action hints
 - searchable output location picker for jumping from transcript file references into source
 - quickfix export for transcript file references
 - Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
@@ -44,9 +44,9 @@ This plugin provides an editor-native ACP chat surface:
 - per-section right-aligned summary badges for line, word, and code-block counts
 - native output diagnostics and location-list navigation for transcript errors and stderr
 - virtual section separators for scanning long output without changing transcript text
-- ghost-text output hints and lightweight animated busy status
+- ghost-text output hints with live transcript counts and lightweight animated busy status
 - cursor-sensitive ghost-text action hints for references, code blocks, errors, and sections
-- optional Tree-sitter Markdown/code-fence language injection for agent responses
+- optional Tree-sitter Markdown/code-fence language injection with detected injected-language metadata
 - floating output outline with progress markers for jumping across long transcripts
 - native folds for collapsing transcript sections
 - non-blocking adapter startup and session creation
