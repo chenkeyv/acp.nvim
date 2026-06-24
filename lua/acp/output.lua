@@ -145,6 +145,23 @@ local function position_percent(line, total)
 	return ("%3d%%"):format(math.floor((line / total) * 100 + 0.5))
 end
 
+local function progress_bar(line, total, width)
+	width = tonumber(width) or 10
+	width = math.max(3, width)
+	total = tonumber(total) or 0
+	if total <= 0 then
+		return "[" .. string.rep("-", width) .. "]"
+	end
+
+	local ratio = math.max(0, math.min(1, (tonumber(line) or 1) / total))
+	local filled = math.floor((ratio * width) + 0.5)
+	if ratio > 0 then
+		filled = math.max(1, filled)
+	end
+	filled = math.min(width, filled)
+	return "[" .. string.rep("=", filled) .. string.rep("-", width - filled) .. "]"
+end
+
 local function source_label(source)
 	if not source or not source.bufnr or not vim.api.nvim_buf_is_valid(source.bufnr) then
 		return "none"
@@ -734,6 +751,13 @@ local map_kind_priority = {
 	reference = 4,
 }
 
+local map_kind_tokens = {
+	section = "SEC",
+	problem = "ERR",
+	code = "COD",
+	reference = "REF",
+}
+
 function M.output_map_entries(lines, opts)
 	opts = opts or {}
 	lines = lines or {}
@@ -770,9 +794,37 @@ function M.output_map_entries(lines, opts)
 	return entries
 end
 
+function M.progress_bar(line, total, width)
+	return progress_bar(line, total, width)
+end
+
+function M.output_map_summary(entries)
+	local counts = {
+		total = 0,
+		section = 0,
+		problem = 0,
+		code = 0,
+		reference = 0,
+	}
+	for _, entry in ipairs(entries or {}) do
+		counts.total = counts.total + 1
+		local kind = entry.kind
+		if counts[kind] ~= nil then
+			counts[kind] = counts[kind] + 1
+		end
+	end
+	return ("Entries: %d | sections %d | problems %d | code %d | refs %d"):format(
+		counts.total,
+		counts.section,
+		counts.problem,
+		counts.code,
+		counts.reference
+	)
+end
+
 function M.output_map_lines(entries, opts)
 	opts = opts or {}
-	local lines = { "ACP Output Map", "" }
+	local lines = { "ACP Output Map", M.output_map_summary(entries), "" }
 	local line_entries = {}
 	local current_line = tonumber(opts.current_line)
 	local total = tonumber(opts.total_lines)
@@ -787,11 +839,21 @@ function M.output_map_lines(entries, opts)
 		local line2 = tonumber(entry.line2) or line1
 		local marker = current_line and current_line >= line1 and current_line <= line2 and ">" or " "
 		local progress = position_percent(line1, total) or "   ?"
-		table.insert(lines, ("%s %4d  %s  %-9s  %s"):format(marker, line1, progress, (entry.kind or "item"):upper(), label))
+		local bar = progress_bar(line1, total, opts.bar_width or 10)
+		local token = map_kind_tokens[entry.kind] or "ITM"
+		table.insert(lines, ("%s %s  %4d  %s  %-3s  %-9s  %s"):format(
+			marker,
+			bar,
+			line1,
+			progress,
+			token,
+			(entry.kind or "item"):upper(),
+			label
+		))
 		line_entries[#lines] = entry
 	end
 
-	if #lines == 2 then
+	if #lines == 3 then
 		table.insert(lines, "No transcript map entries yet")
 	end
 

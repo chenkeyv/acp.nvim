@@ -364,7 +364,7 @@ local function output_map_config(state, line_count)
 	local output_width = vim.api.nvim_win_get_width(state.output_win)
 	local output_height = vim.api.nvim_win_get_height(state.output_win)
 	local available_width = math.max(12, output_width - 2)
-	local width = math.min(available_width, math.max(28, math.min(46, math.floor(output_width * 0.42))))
+	local width = math.min(available_width, math.max(34, math.min(64, math.floor(output_width * 0.48))))
 	local max_height = math.max(3, output_height - 2)
 	local height = math.max(3, math.min(max_height, math.max(6, line_count or 0)))
 	return {
@@ -412,6 +412,8 @@ local function refresh_output_map_highlights(state)
 		local opts = { priority = 80 }
 		if index == 1 then
 			opts.line_hl_group = "AcpOutputHeader"
+		elseif index == 2 and line:match("^Entries:") then
+			opts.line_hl_group = "AcpOutputMeta"
 		elseif entry then
 			opts.line_hl_group = output_map_highlight(entry)
 			if line:sub(1, 1) == ">" then

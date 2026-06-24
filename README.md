@@ -23,7 +23,7 @@ This plugin provides an editor-native ACP chat surface:
 - cursor-aware current-item highlighting for references, code blocks, and problems
 - unified output item picker for references, code blocks, and problems with previews
 - searchable output transcript picker with progress, context previews, and jump-to-line navigation
-- persistent floating output map for live section, problem, code, and reference navigation
+- persistent floating output map with progress rails, summary counts, and live section/problem/code/reference navigation
 - current-section yank action with a short visual pulse in the output buffer
 - follow-up prompt drafting from the current output section
 - direct `gf` navigation from transcript file references into source
@@ -216,7 +216,7 @@ In the prompt buffer:
 - `<C-Space>` opens native ACP prompt completion
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
-- `<leader>am` opens a persistent output map
+- `<leader>am` opens a persistent output map with progress rails and item counts
 - `<leader>aO` opens output references, code blocks, and problems
 - `<leader>ay` yanks the current output section
 - `<leader>ai` inserts the current output section as follow-up prompt context
