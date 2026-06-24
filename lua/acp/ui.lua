@@ -113,6 +113,7 @@ local function refresh_output_highlights(state)
 	vim.api.nvim_buf_clear_namespace(state.output_buf, output_ns, 0, -1)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 	vim.b[state.output_buf].acp_injected_languages = output.injected_languages(lines)
+	vim.b[state.output_buf].acp_language_injections = output.injection_ranges(lines)
 	refresh_output_diagnostics(state, lines)
 	local dashboard_count = state.output_dashboard_lines or #output.dashboard_lines(state)
 	local activity_badge, activity_hl = output.activity_badge(
@@ -195,6 +196,26 @@ local function refresh_output_highlights(state)
 						output.code_block_lens(block, state.output_language_injection, state.output_animation_frame),
 					}
 					opts.virt_lines_above = true
+				end
+				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, line_number - 1, 0, opts)
+			end
+		end
+		local body_start = block.start_line + 1
+		local body_end = block.closed and (block.end_line - 1) or block.end_line
+		for line_number = body_start, body_end do
+			local line = lines[line_number]
+			if line then
+				local opts = {
+					line_hl_group = "AcpInjectedCode",
+					priority = 8,
+				}
+				if line_number == body_start then
+					local injection_label = state.output_language_injection and " Tree-sitter " or " fence "
+					opts.virt_text = {
+						{ (" %s %s "):format(output.motion_frame(state.output_animation_frame), block.filetype or "text"), "AcpOutputMotion" },
+						{ injection_label, state.output_language_injection and "AcpInjectedLanguageActive" or "AcpInjectedLanguage" },
+					}
+					opts.virt_text_pos = "right_align"
 				end
 				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, line_number - 1, 0, opts)
 			end
@@ -308,7 +329,7 @@ local function refresh_output_cursor_hint(state)
 
 	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local hint = output.cursor_hint(lines, cursor[1], cursor[2], {
+	local hint = output.cursor_hint_chunks(lines, cursor[1], cursor[2], {
 		cwd = state.cwd,
 		language_injection = state.output_language_injection,
 	})
@@ -318,7 +339,7 @@ local function refresh_output_cursor_hint(state)
 
 	local line = lines[cursor[1]] or ""
 	pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_hint_ns, cursor[1] - 1, #line, {
-		virt_text = { { "  " .. hint, "AcpOutputHint" } },
+		virt_text = hint,
 		virt_text_pos = "eol",
 		hl_mode = "combine",
 		priority = 96,
@@ -2361,6 +2382,12 @@ local function prompt_action_items()
 	add("Type definitions quickfix", "Send source-buffer LSP type definitions to quickfix", ":AcpTypeDefinitionsQuickfix", "LSP", function()
 		M.open_type_definitions_quickfix()
 	end)
+	add("Workspace symbols", "Search LSP workspace symbols as focused context", "<leader>aw", "LSP", function()
+		M.open_workspace_symbols()
+	end)
+	add("Workspace symbols quickfix", "Send LSP workspace symbols to quickfix", ":AcpWorkspaceSymbolsQuickfix", "LSP", function()
+		M.open_workspace_symbols_quickfix()
+	end)
 	add("Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 		M.open_symbols()
 	end)
@@ -2464,7 +2491,7 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "- Source selection and cursor context")
 	table.insert(
 		lines,
-		"- LSP diagnostics, code actions, hover, highlights, references, declarations, definitions, implementations, type definitions, symbols"
+		"- LSP diagnostics, code actions, hover, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
 	)
 	table.insert(lines, "- Tree-sitter nodes around the source cursor")
 	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
@@ -3299,6 +3326,9 @@ local function register_keymaps(state)
 	local open_type_definitions = function()
 		M.open_type_definitions()
 	end
+	local open_workspace_symbols = function()
+		M.open_workspace_symbols()
+	end
 	local open_symbols = function()
 		M.open_symbols()
 	end
@@ -3343,6 +3373,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aG", open_definitions, { buffer = bufnr, desc = "Open ACP LSP definitions" })
 		vim.keymap.set("n", "<leader>aI", open_implementations, { buffer = bufnr, desc = "Open ACP LSP implementations" })
 		vim.keymap.set("n", "<leader>aT", open_type_definitions, { buffer = bufnr, desc = "Open ACP LSP type definitions" })
+		vim.keymap.set("n", "<leader>aw", open_workspace_symbols, { buffer = bufnr, desc = "Open ACP LSP workspace symbols" })
 		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
 		vim.keymap.set("n", "<leader>aL", open_symbols_quickfix, { buffer = bufnr, desc = "Open ACP LSP symbols quickfix" })
 		vim.keymap.set("n", "<leader>at", open_treesitter, { buffer = bufnr, desc = "Open ACP Tree-sitter nodes" })
@@ -3669,6 +3700,18 @@ function M.setup(opts)
 	vim.api.nvim_create_user_command("AcpTypeDefinitionsQuickfix", function()
 		M.open_type_definitions_quickfix()
 	end, {})
+
+	vim.api.nvim_create_user_command("AcpWorkspaceSymbols", function(command)
+		M.open_workspace_symbols(command.args)
+	end, {
+		nargs = "*",
+	})
+
+	vim.api.nvim_create_user_command("AcpWorkspaceSymbolsQuickfix", function(command)
+		M.open_workspace_symbols_quickfix(command.args)
+	end, {
+		nargs = "*",
+	})
 
 	vim.api.nvim_create_user_command("AcpSymbols", function()
 		M.open_symbols()
@@ -4122,6 +4165,12 @@ local function action_palette_items(state)
 		add_action(items, "Type definitions quickfix", "Send source-buffer LSP type definitions to quickfix", ":AcpTypeDefinitionsQuickfix", "LSP", function()
 			M.open_type_definitions_quickfix()
 		end)
+		add_action(items, "Workspace symbols", "Search LSP workspace symbols as focused context", "<leader>aw", "LSP", function()
+			M.open_workspace_symbols()
+		end)
+		add_action(items, "Workspace symbols quickfix", "Send LSP workspace symbols to quickfix", ":AcpWorkspaceSymbolsQuickfix", "LSP", function()
+			M.open_workspace_symbols_quickfix()
+		end)
 		add_action(items, "Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 			M.open_symbols()
 		end)
@@ -4373,6 +4422,14 @@ local function source_action_items(state)
 	add("Type definitions quickfix", "Send LSP type definitions from the source cursor to quickfix", ":AcpTypeDefinitionsQuickfix", "LSP", function()
 		focus_session(state)
 		M.open_type_definitions_quickfix()
+	end)
+	add("Workspace symbols", "Search LSP workspace symbols from the source word", "<leader>aw", "LSP", function()
+		focus_session(state)
+		M.open_workspace_symbols()
+	end)
+	add("Workspace symbols quickfix", "Send LSP workspace symbols to quickfix", ":AcpWorkspaceSymbolsQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_workspace_symbols_quickfix()
 	end)
 	add("Symbols", "Pick LSP document symbols from the source buffer", "<leader>al", "LSP", function()
 		focus_session(state)
@@ -5944,6 +6001,149 @@ function M.open_type_definitions_quickfix()
 	end
 
 	open_lsp_location_quickfix(state, lsp_location_specs.type_definition)
+end
+
+function M.open_workspace_symbols(query)
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local workspace_symbols = require("acp.workspace_symbols")
+	local resolved_query = workspace_symbols.default_query(state.source, query)
+	if not resolved_query or resolved_query == "" then
+		notify("No LSP workspace symbol query is available", vim.log.levels.WARN)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, ("loading workspace symbols: %s"):format(resolved_query))
+	end
+	workspace_symbols.request(state.source, resolved_query, function(symbol_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		if not symbol_list or #symbol_list == 0 then
+			notify("No LSP workspace symbols found", vim.log.levels.WARN)
+			return
+		end
+
+		local lines, line_symbols = workspace_symbols.picker_lines(symbol_list, {
+			title = ("ACP Workspace Symbols: %s"):format(resolved_query),
+		})
+		local view = picker.open({
+			name = ("ACP://%s/%d/workspace-symbols"):format(state.adapter, state.id),
+			filetype = "acp-workspace-symbols",
+			lines = lines,
+			title = " ACP workspace symbols ",
+			submit_desc = "Add ACP workspace symbol context",
+			close_desc = "Close ACP workspace symbols",
+			preview = function(row)
+				local symbol = line_symbols[row]
+				if not symbol then
+					return nil
+				end
+				local bufnr = workspace_symbols.bufnr(symbol)
+				return source_preview(
+					bufnr,
+					workspace_symbols.range(symbol),
+					(" Workspace symbol %s "):format(symbol.name)
+				)
+			end,
+			on_submit = function(row, view)
+				local symbol = line_symbols[row]
+				if not symbol then
+					return
+				end
+				local prompt, err = workspace_symbols.prompt(symbol)
+				if not prompt then
+					notify(err or "Failed to render LSP workspace symbol context", vim.log.levels.ERROR)
+					return
+				end
+				view.close()
+				append_input_text(state, prompt)
+				if not state.busy then
+					set_run_status(state, ("workspace symbol: %s"):format(symbol.name))
+				end
+				if valid_win(state.input_win) then
+					vim.api.nvim_set_current_win(state.input_win)
+				end
+			end,
+		})
+
+		vim.keymap.set("n", "Q", function()
+			view.close()
+			M.open_workspace_symbols_quickfix(resolved_query, symbol_list, state)
+		end, { buffer = view.bufnr, nowait = true, desc = "Open ACP workspace symbols quickfix" })
+	end)
+end
+
+function M.open_workspace_symbols_quickfix(query, symbol_list, state_override)
+	local state = state_override or current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local workspace_symbols = require("acp.workspace_symbols")
+	local resolved_query = workspace_symbols.default_query(state.source, query)
+	if not resolved_query or resolved_query == "" then
+		notify("No LSP workspace symbol query is available", vim.log.levels.WARN)
+		return
+	end
+
+	local function open_items(items)
+		if not items or #items == 0 then
+			notify("No LSP workspace symbols found", vim.log.levels.WARN)
+			return false
+		end
+
+		local qf_items = workspace_symbols.quickfix_items(items)
+		if #qf_items == 0 then
+			notify("No quickfix-ready LSP workspace symbols found", vim.log.levels.WARN)
+			return false
+		end
+
+		vim.fn.setqflist({}, " ", {
+			title = ("ACP workspace symbols #%s: %s"):format(tostring(state.id or "?"), resolved_query),
+			items = qf_items,
+		})
+		vim.cmd("copen")
+		if not state.busy then
+			set_run_status(state, "workspace symbols quickfix")
+		end
+		return true
+	end
+
+	if symbol_list then
+		open_items(symbol_list)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, ("loading workspace symbols quickfix: %s"):format(resolved_query))
+	end
+	workspace_symbols.request(state.source, resolved_query, function(items, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_items(items)
+	end)
 end
 
 function M.open_symbols()

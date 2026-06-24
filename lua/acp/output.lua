@@ -1,6 +1,7 @@
 local M = {}
 
 local animation_frames = { "|", "/", "-", "\\" }
+local motion_frames = { "[>   ]", "[=>  ]", "[ => ]", "[  =>]", "[   >]", "[  <=]", "[ <= ]", "[<=  ]" }
 local filetype_aliases = {
 	bash = "sh",
 	js = "javascript",
@@ -282,9 +283,11 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpCurrentItem", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputActivity", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputLive", { fg = "#1a1b26", bg = "#f7768e", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputMotion", { fg = "#1a1b26", bg = "#2ac3de", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputIdle", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulse", { link = "IncSearch", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulseSoft", { link = "Search", default = true })
+	vim.api.nvim_set_hl(0, "AcpInjectedCode", { link = "Visual", default = true })
 end
 
 function M.activity_separator(line)
@@ -802,6 +805,11 @@ function M.animation_frame(index)
 	return animation_frames[((number - 1) % #animation_frames) + 1]
 end
 
+function M.motion_frame(index)
+	local number = tonumber(index) or 1
+	return motion_frames[((number - 1) % #motion_frames) + 1]
+end
+
 function M.activity_badge(state, stats, frame)
 	stats = stats or {}
 	local status = clean(state and state.run_status)
@@ -823,6 +831,9 @@ function M.activity_badge(state, stats, frame)
 		stats.changes or 0,
 		stats.changes == 1 and "" or "s"
 	)
+	if busy then
+		label = ("%s | %s"):format(label, M.motion_frame(frame))
+	end
 
 	local lower_status = status:lower()
 	local hl = "AcpOutputIdle"
@@ -846,15 +857,16 @@ function M.live_status_label(state, frame)
 	if #status > 32 then
 		status = status:sub(1, 29) .. "..."
 	end
-	return (" %s live: %s "):format(M.animation_frame(frame), status), "AcpOutputLive"
+	return (" %s live: %s %s "):format(M.animation_frame(frame), status, M.motion_frame(frame)), "AcpOutputLive"
 end
 
 function M.ghost_text(state, lines, frame)
 	lines = lines or {}
 	local stats = M.transcript_stats(lines)
 	if state and state.busy then
-		return ("%s %s | %d sections | %d code | %d refs"):format(
+		return ("%s %s %s | %d sections | %d code | %d refs"):format(
 			M.animation_frame(frame),
+			M.motion_frame(frame),
 			clean(state.run_status) or "working",
 			stats.sections or 0,
 			stats.code_blocks or 0,
@@ -996,6 +1008,28 @@ function M.injected_languages(lines)
 		end
 	end
 	return languages
+end
+
+function M.injection_ranges(lines)
+	local ranges = {}
+	for _, block in ipairs(M.code_blocks(lines)) do
+		local line1 = block.start_line + 1
+		local line2 = block.closed and (block.end_line - 1) or block.end_line
+		if line2 < line1 then
+			line1 = block.start_line
+			line2 = block.end_line
+		end
+		table.insert(ranges, {
+			line1 = line1,
+			line2 = line2,
+			fence_line = block.start_line,
+			language = clean(block.language) or "text",
+			filetype = clean(block.filetype) or M.filetype_for_language(block.language),
+			line_count = block.line_count or 0,
+			closed = block.closed ~= false,
+		})
+	end
+	return ranges
 end
 
 function M.code_block_lines(blocks)
@@ -1333,7 +1367,15 @@ function M.next_output_item(lines, current, direction, opts)
 	return nil
 end
 
-function M.cursor_hint(lines, lnum, col, opts)
+local function flatten_chunks(chunks)
+	local text = {}
+	for _, chunk in ipairs(chunks or {}) do
+		table.insert(text, chunk[1] or "")
+	end
+	return table.concat(text)
+end
+
+function M.cursor_hint_chunks(lines, lnum, col, opts)
 	opts = opts or {}
 	lines = lines or {}
 	local line_number = math.max(1, math.min(tonumber(lnum) or 1, #lines))
@@ -1343,24 +1385,47 @@ function M.cursor_hint(lines, lnum, col, opts)
 	end
 
 	if M.file_reference_at(lines, line_number, col, { cwd = opts.cwd }) then
-		return "actions: ? menu | K inspect | <Enter> open ref | ]o/[o items"
+		return {
+			{ " REF ", "AcpOutputReferenceBadge" },
+			{ " ? menu | K inspect | <Enter> open ref | ]o/[o items", "AcpOutputHint" },
+		}
 	end
+
 	local block = M.code_block_at(lines, line_number)
 	if block then
 		local filetype = clean(block.filetype) or M.filetype_for_language(block.language)
 		local injection = opts.language_injection and "Tree-sitter injection" or "fence detection"
-		return ("actions: code %s | %s | ? menu | K inspect | <Enter> open code | ]o/[o items"):format(
-			filetype,
-			injection
-		)
+		local injection_hl = opts.language_injection and "AcpInjectedLanguageActive" or "AcpInjectedLanguage"
+		return {
+			{ " CODE ", "AcpCodeBlockHeader" },
+			{ ("code %s "):format(filetype), "AcpInjectedLanguage" },
+			{ ("%s "):format(injection), injection_hl },
+			{ "? menu | K inspect | <Enter> open code | <leader>aY yank | ]o/[o items", "AcpOutputHint" },
+		}
 	end
+
 	if line:match("^Status:%s+error") or line:match("^stderr:") or line:match("^Terminal output truncated") then
-		return "actions: ? menu | K inspect | ]o/[o items | <leader>ae problems"
+		return {
+			{ " PROBLEM ", "AcpBadgeError" },
+			{ " ? menu | K inspect | ]o/[o items | <leader>ae problems", "AcpOutputHint" },
+		}
 	end
+
 	if M.is_section(line) then
-		return "actions: ? menu | K inspect | <leader>ai draft | <leader>ay yank"
+		return {
+			{ " SECTION ", "AcpSectionStats" },
+			{ " ? menu | K inspect | <leader>ai draft | <leader>ay yank", "AcpOutputHint" },
+		}
 	end
 	return nil
+end
+
+function M.cursor_hint(lines, lnum, col, opts)
+	local chunks = M.cursor_hint_chunks(lines, lnum, col, opts)
+	if not chunks then
+		return nil
+	end
+	return flatten_chunks(chunks)
 end
 
 function M.transcript_stats(lines, opts)

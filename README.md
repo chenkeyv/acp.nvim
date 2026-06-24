@@ -45,9 +45,9 @@ This plugin provides an editor-native ACP chat surface:
 - per-section right-aligned summary badges for line, word, and code-block counts
 - native output diagnostics and location-list navigation for transcript errors and stderr
 - virtual section separators for scanning long output without changing transcript text
-- ghost-text output hints with live transcript counts and lightweight animated busy status
-- cursor-sensitive ghost-text action hints for references, code blocks, errors, and sections
-- optional Tree-sitter Markdown/code-fence language injection with detected injected-language metadata
+- ghost-text output hints with live transcript counts, motion badges, and animated busy status
+- cursor-sensitive ghost-text action chips for references, code blocks, errors, and sections
+- optional Tree-sitter Markdown/code-fence language injection with injected-language ranges and body highlights
 - floating output outline with progress markers for jumping across long transcripts
 - native folds for collapsing transcript sections
 - non-blocking adapter startup and session creation
@@ -68,6 +68,7 @@ This plugin provides an editor-native ACP chat surface:
 - async LSP definition picker with quickfix export for source-cursor navigation context
 - async LSP implementation picker with quickfix export for interface and abstract API context
 - async LSP type-definition picker with quickfix export for typed source context
+- async LSP workspace-symbol search with quickfix export and source previews
 - async LSP document-symbol picker with quickfix export for focused symbol context
 - Tree-sitter node picker for adding syntax-aware focused context
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
@@ -184,6 +185,8 @@ vim.g.acp_nvim_config = {
 - `:AcpImplementationsQuickfix` sends LSP implementations for the source cursor to quickfix
 - `:AcpTypeDefinitions` opens an LSP type-definition picker for the source cursor
 - `:AcpTypeDefinitionsQuickfix` sends LSP type definitions for the source cursor to quickfix
+- `:AcpWorkspaceSymbols [query]` opens an LSP workspace-symbol picker; without a query it uses the source cursor word
+- `:AcpWorkspaceSymbolsQuickfix [query]` sends LSP workspace symbols to quickfix
 - `:AcpSymbols` opens an LSP document-symbol picker for the source buffer
 - `:AcpSymbolsQuickfix` sends LSP document symbols for the source buffer to quickfix
 - `:AcpTreeSitter` opens a Tree-sitter node picker for the source cursor
@@ -237,13 +240,15 @@ In the prompt buffer:
 - `<leader>aG` opens source-buffer LSP definitions
 - `<leader>aI` opens source-buffer LSP implementations
 - `<leader>aT` opens source-buffer LSP type definitions
+- `<leader>aw` opens LSP workspace symbols for the source cursor word
 - `<leader>al` opens source-buffer LSP symbols
 - `<leader>aL` sends source-buffer LSP symbols to quickfix
 - `<leader>at` opens source-buffer Tree-sitter nodes
 
 In the output buffer:
 
-- the current line shows ghost-text action hints for references, code blocks, errors, and sections
+- the current line shows ghost-text action chips for references, code blocks, errors, and sections
+- fenced code blocks show injected-language badges, body highlights, and animated motion markers
 - `]]` jumps to the next transcript section
 - `[[` jumps to the previous transcript section
 - `]o` / `[o` jump between output references, code blocks, and problems
@@ -273,7 +278,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file, diagnostics, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
+- changed-file, diagnostics, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-workspace-symbol, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 

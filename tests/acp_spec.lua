@@ -20,6 +20,7 @@ local session_view = require("acp.session_view")
 local source_view = require("acp.source_view")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
+local workspace_symbols = require("acp.workspace_symbols")
 local Connection = require("acp.connection").Connection
 
 local tests = {}
@@ -129,6 +130,8 @@ test("setup registers public user commands", function()
 		"AcpImplementationsQuickfix",
 		"AcpTypeDefinitions",
 		"AcpTypeDefinitionsQuickfix",
+		"AcpWorkspaceSymbols",
+		"AcpWorkspaceSymbolsQuickfix",
 		"AcpSymbols",
 		"AcpSymbolsQuickfix",
 		"AcpTreeSitter",
@@ -581,6 +584,8 @@ test("output dashboard and section helpers are rendered", function()
 
 	eq(acp_output.animation_frame(1), "|")
 	eq(acp_output.animation_frame(5), "|")
+	eq(acp_output.motion_frame(1), "[>   ]")
+	eq(acp_output.motion_frame(9), "[>   ]")
 	local activity_badge, activity_hl = acp_output.activity_badge({
 		busy = true,
 		run_status = "streaming",
@@ -595,15 +600,18 @@ test("output dashboard and section helpers are rendered", function()
 	ok(activity_badge:find("1 code", 1, true))
 	ok(activity_badge:find("1 loc", 1, true))
 	ok(activity_badge:find("1 change", 1, true))
+	ok(activity_badge:find("[=>  ]", 1, true))
 	eq(activity_hl, "AcpOutputActivity")
 	local error_badge, error_hl = acp_output.activity_badge({ run_status = "error: failed" }, {}, 1)
 	ok(error_badge:find("error: failed", 1, true))
 	eq(error_hl, "AcpBadgeError")
 	local live_status, live_status_hl = acp_output.live_status_label({ run_status = "streaming" }, 2)
 	ok(live_status:find("/ live: streaming", 1, true))
+	ok(live_status:find("[=>  ]", 1, true))
 	eq(live_status_hl, "AcpOutputLive")
 	local busy_ghost = acp_output.ghost_text({ busy = true, run_status = "streaming" }, {}, 2)
 	ok(busy_ghost:find("streaming", 1, true))
+	ok(busy_ghost:find("[=>  ]", 1, true))
 	ok(busy_ghost:find("0 sections", 1, true))
 	ok(acp_output.ghost_text({ busy = false }, { "ACP: test", "" }):find("Ready", 1, true))
 	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("? menu", 1, true))
@@ -639,12 +647,21 @@ test("output dashboard and section helpers are rendered", function()
 	end
 	ok(table.concat(block_lens_text):find("Tree-sitter injection", 1, true))
 	eq(acp_output.injected_languages({ "Agent", "```lua", "print(1)", "```" })[1], "lua")
+	local injection_ranges = acp_output.injection_ranges({ "Agent", "```lua", "print(1)", "```" })
+	eq(injection_ranges[1].line1, 3)
+	eq(injection_ranges[1].line2, 3)
+	eq(injection_ranges[1].filetype, "lua")
 	local code_hint = acp_output.cursor_hint({ "Agent", "```lua", "print(1)", "```" }, 3, 0, {
 		language_injection = true,
 	})
 	ok(code_hint:find("code lua", 1, true))
 	ok(code_hint:find("Tree-sitter injection", 1, true))
 	ok(code_hint:find("]o/[o items", 1, true))
+	local code_hint_chunks = acp_output.cursor_hint_chunks({ "Agent", "```lua", "print(1)", "```" }, 3, 0, {
+		language_injection = true,
+	})
+	eq(code_hint_chunks[1][2], "AcpCodeBlockHeader")
+	eq(code_hint_chunks[3][2], "AcpInjectedLanguageActive")
 	local block_picker, line_blocks = acp_output.code_block_lines(blocks)
 	local block_text = table.concat(block_picker, "\n")
 	ok(block_text:find("ACP Output Code Blocks", 1, true))
@@ -1100,6 +1117,54 @@ test("LSP symbols are flattened and rendered for picker", function()
 	ok(qf_items[2].text:find("SYMBOL: run %(Function%)"))
 end)
 
+test("LSP workspace symbols are rendered for picker and quickfix", function()
+	local uri = vim.uri_from_fname("/tmp/acp-workspace-symbol.lua")
+	local normalized = workspace_symbols.normalize({
+		{
+			name = "WorkspaceValue",
+			kind = 13,
+			containerName = "Example",
+			location = {
+				uri = uri,
+				range = {
+					start = { line = 2, character = 4 },
+					["end"] = { line = 2, character = 18 },
+				},
+			},
+		},
+		{
+			name = "",
+			location = {
+				uri = uri,
+				range = {
+					start = { line = 0, character = 0 },
+					["end"] = { line = 0, character = 1 },
+				},
+			},
+		},
+	})
+
+	eq(#normalized, 1)
+	ok(workspace_symbols.display_path(normalized[1]):find("acp%-workspace%-symbol%.lua"))
+	local range = workspace_symbols.range(normalized[1])
+	eq(range.line1, 3)
+	eq(range.col1, 5)
+
+	local lines, line_symbols = workspace_symbols.picker_lines(normalized, { title = "ACP Workspace Symbols: Value" })
+	local text = table.concat(lines, "\n")
+	ok(text:find("ACP Workspace Symbols: Value", 1, true))
+	ok(text:find("WorkspaceValue  Variable", 1, true))
+	ok(text:find("Example", 1, true))
+	ok(text:find("Q for quickfix", 1, true))
+	eq(line_symbols[3].name, "WorkspaceValue")
+
+	local qf_items = workspace_symbols.quickfix_items(normalized)
+	eq(#qf_items, 1)
+	eq(qf_items[1].lnum, 3)
+	eq(qf_items[1].col, 5)
+	ok(qf_items[1].text:find("WORKSPACE SYMBOL", 1, true))
+end)
+
 test("config option picker lines render selectable options", function()
 	local lines, line_options = acp_config.picker_lines({
 		{
@@ -1283,6 +1348,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		ok(prompt_actions_text:find("Definitions quickfix", 1, true))
 		ok(prompt_actions_text:find("Implementations quickfix", 1, true))
 		ok(prompt_actions_text:find("Type definitions quickfix", 1, true))
+		ok(prompt_actions_text:find("Workspace symbols quickfix", 1, true))
 		ok(prompt_actions_text:find("Symbols quickfix", 1, true))
 		ok(prompt_actions_text:find("Search output", 1, true))
 		ok(prompt_actions_text:find("Output map", 1, true))
@@ -1661,13 +1727,21 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local code_header = false
 		local code_sign = false
 		local code_badge = false
+		local code_body_highlight = false
+		local code_body_motion = false
 		for _, mark in ipairs(marks) do
 			if mark[4] and mark[4].sign_text == "C>" then
 				code_sign = true
 			end
+			if mark[2] == code_line - 1 and mark[4] and mark[4].line_hl_group == "AcpInjectedCode" then
+				code_body_highlight = true
+			end
 			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
 				if chunk[1] and chunk[1]:find("lua->lua", 1, true) then
 					code_badge = true
+				end
+				if mark[2] == code_line - 1 and chunk[1] and chunk[1]:find("[>   ]", 1, true) then
+					code_body_motion = true
 				end
 			end
 			for _, virt_line in ipairs((mark[4] and mark[4].virt_lines) or {}) do
@@ -1688,7 +1762,11 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(code_header, "output code blocks should render a virtual header")
 		ok(code_sign, "output code blocks should render a sign marker")
 		ok(code_badge, "output code blocks should render a language injection badge")
+		ok(code_body_highlight, "output code bodies should render injected-language highlighting")
+		ok(code_body_motion, "output code bodies should render an animated injection badge")
 		eq(vim.b[output_buf].acp_injected_languages[1], "lua")
+		eq(vim.b[output_buf].acp_language_injections[1].filetype, "lua")
+		eq(vim.b[output_buf].acp_language_injections[1].line1, code_line)
 		vim.api.nvim_win_set_cursor(output_win, { code_line, 0 })
 		vim.cmd("doautocmd CursorMoved")
 		local code_hint_marks = vim.api.nvim_buf_get_extmarks(output_buf, hint_ns, 0, -1, { details = true })
@@ -2093,6 +2171,7 @@ test("actions command opens a session action palette", function()
 		local definitions_quickfix = false
 		local implementations_quickfix = false
 		local type_definitions_quickfix = false
+		local workspace_symbols_quickfix = false
 		local symbols_quickfix = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
@@ -2138,6 +2217,9 @@ test("actions command opens a session action palette", function()
 			if line:find("Type definitions quickfix", 1, true) then
 				type_definitions_quickfix = true
 			end
+			if line:find("Workspace symbols quickfix", 1, true) then
+				workspace_symbols_quickfix = true
+			end
 			if line:find("Symbols quickfix", 1, true) then
 				symbols_quickfix = true
 			end
@@ -2159,6 +2241,7 @@ test("actions command opens a session action palette", function()
 		ok(definitions_quickfix, "action palette should include definitions quickfix")
 		ok(implementations_quickfix, "action palette should include implementations quickfix")
 		ok(type_definitions_quickfix, "action palette should include type definitions quickfix")
+		ok(workspace_symbols_quickfix, "action palette should include workspace symbols quickfix")
 		ok(symbols_quickfix, "action palette should include symbols quickfix")
 		ok(close_session, "action palette should include close session")
 
@@ -2235,6 +2318,7 @@ test("chat marks captured source ranges and clears them on close", function()
 		ok(actions_text:find("Definitions quickfix", 1, true))
 		ok(actions_text:find("Implementations quickfix", 1, true))
 		ok(actions_text:find("Type definitions quickfix", 1, true))
+		ok(actions_text:find("Workspace symbols quickfix", 1, true))
 		ok(actions_text:find("Symbols quickfix", 1, true))
 		ok(actions_text:find("Search output", 1, true))
 		ok(actions_text:find("Output map", 1, true))
@@ -3168,6 +3252,108 @@ test("type definitions command drafts selected LSP type definition context", fun
 		ok(prompt:find("Type definition:", 1, true))
 		ok(prompt:find("Selection: lines 1-1", 1, true))
 		ok(prompt:find("---@class Person", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.fn.delete(path)
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("workspace symbols command drafts selected LSP workspace symbol context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	local path = vim.fn.tempname() .. ".lua"
+	vim.api.nvim_buf_set_name(source_buf, path)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local WorkspaceValue = 1",
+		"print(WorkspaceValue)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 6 })
+
+	local uri = vim.uri_from_bufnr(source_buf)
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "workspace/symbol")
+		eq(params.query, "WorkspaceValue")
+		callback({
+			[1] = {
+				result = {
+					{
+						name = "WorkspaceValue",
+						kind = 13,
+						containerName = "example",
+						location = {
+							uri = uri,
+							range = {
+								start = { line = 0, character = 6 },
+								["end"] = { line = 0, character = 20 },
+							},
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpWorkspaceSymbols")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-workspace-symbols")
+
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local symbol_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(symbol_qflist.title:find("ACP workspace symbols", 1, true))
+		eq(#symbol_qflist.items, 1)
+		eq(symbol_qflist.items[1].bufnr, source_buf)
+		eq(symbol_qflist.items[1].lnum, 1)
+		eq(symbol_qflist.items[1].col, 7)
+		ok(symbol_qflist.items[1].text:find("WORKSPACE SYMBOL", 1, true))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after workspace symbols quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpWorkspaceSymbolsQuickfix WorkspaceValue")
+		symbol_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(symbol_qflist.title:find("ACP workspace symbols", 1, true))
+		eq(#symbol_qflist.items, 1)
+		eq(symbol_qflist.items[1].lnum, 1)
+		eq(symbol_qflist.items[1].col, 7)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible before workspace symbol draft")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpWorkspaceSymbols WorkspaceValue")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-workspace-symbols")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP workspace symbol as context: WorkspaceValue %(Variable%)."))
+		ok(prompt:find("Symbol:", 1, true))
+		ok(prompt:find("Selection: lines 1-1", 1, true))
+		ok(prompt:find("local WorkspaceValue = 1", 1, true))
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all
