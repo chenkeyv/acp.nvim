@@ -8,6 +8,7 @@ local diagnostics = require("acp.diagnostics")
 local hover = require("acp.hover")
 local history = require("acp.history")
 local metadata = require("acp.metadata")
+local picker = require("acp.picker")
 local references = require("acp.references")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
@@ -1575,37 +1576,6 @@ local function session_picker_lines(list)
 	return lines, line_ids
 end
 
-local function session_picker_config(lines)
-	local width = 0
-	for _, line in ipairs(lines) do
-		width = math.max(width, #line)
-	end
-	width = math.max(50, math.min(width + 4, vim.o.columns - 4))
-	local height = math.max(8, math.min(#lines, vim.o.lines - 6))
-
-	return {
-		relative = "editor",
-		row = math.max(1, math.floor((vim.o.lines - height) / 2) - 1),
-		col = math.max(0, math.floor((vim.o.columns - width) / 2)),
-		width = width,
-		height = height,
-		style = "minimal",
-		border = "rounded",
-		title = " ACP sessions ",
-		title_pos = "left",
-		zindex = 65,
-	}
-end
-
-local function close_picker(winid, bufnr)
-	if valid_win(winid) then
-		pcall(vim.api.nvim_win_close, winid, true)
-	end
-	if valid_buf(bufnr) then
-		pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
-	end
-end
-
 local function open_session_picker()
 	local list = sorted_sessions()
 	if #list == 0 then
@@ -1614,33 +1584,19 @@ local function open_session_picker()
 	end
 
 	local lines, line_ids = session_picker_lines(list)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, "ACP://sessions")
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = "ACP://sessions",
 		filetype = "acp-sessions",
-		modifiable = true,
-		swapfile = false,
+		lines = lines,
+		title = " ACP sessions ",
+		submit_desc = "Focus ACP session",
+		close_desc = "Close ACP sessions",
+		on_submit = function(row, view)
+			local id = line_ids[row]
+			view.close()
+			focus_session(sessions[id])
+		end,
 	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local id = line_ids[vim.api.nvim_win_get_cursor(winid)[1]]
-		close_picker(winid, bufnr)
-		focus_session(sessions[id])
-	end, { buffer = bufnr, nowait = true, desc = "Focus ACP session" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP sessions" })
-	end
 
 	return true
 end
@@ -1665,41 +1621,29 @@ end
 
 local function open_restore_picker(adapter_name, connection, list)
 	local lines, line_sessions = restore_picker_lines(list)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/restore"):format(adapter_name))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = ("ACP://%s/restore"):format(adapter_name),
 		filetype = "acp-sessions",
-		modifiable = true,
-		swapfile = false,
-	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local session = line_sessions[vim.api.nvim_win_get_cursor(winid)[1]]
-		if not session then
-			return
-		end
-		close_picker(winid, bufnr)
-		M.open(adapter_name, {
-			mode = config.default_mode,
-			connection = connection,
-			restore_session = session,
-		})
-	end, { buffer = bufnr, nowait = true, desc = "Restore ACP adapter session" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
+		lines = lines,
+		title = " ACP restore ",
+		submit_desc = "Restore ACP adapter session",
+		close_desc = "Close ACP restore sessions",
+		on_submit = function(row, view)
+			local session = line_sessions[row]
+			if not session then
+				return
+			end
+			view.close()
+			M.open(adapter_name, {
+				mode = config.default_mode,
+				connection = connection,
+				restore_session = session,
+			})
+		end,
+		on_cancel = function()
 			connection:stop()
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP restore sessions" })
-	end
+		end,
+	})
 
 	return true
 end
@@ -1712,40 +1656,26 @@ local function open_command_picker(state)
 	end
 
 	local lines, line_commands = acp_commands.picker_lines(available_commands)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/commands"):format(state.adapter, state.id))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = ("ACP://%s/%d/commands"):format(state.adapter, state.id),
 		filetype = "acp-sessions",
-		modifiable = true,
-		swapfile = false,
+		lines = lines,
+		title = " ACP commands ",
+		submit_desc = "Draft ACP slash command",
+		close_desc = "Close ACP commands",
+		on_submit = function(row, view)
+			local command = line_commands[row]
+			local text = acp_commands.slash_text(command)
+			if not text then
+				return
+			end
+			view.close()
+			set_input_text(state, text)
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
 	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local command = line_commands[vim.api.nvim_win_get_cursor(winid)[1]]
-		local text = acp_commands.slash_text(command)
-		if not text then
-			return
-		end
-		close_picker(winid, bufnr)
-		set_input_text(state, text)
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end, { buffer = bufnr, nowait = true, desc = "Draft ACP slash command" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP commands" })
-	end
 
 	return true
 end
@@ -1760,102 +1690,74 @@ local function open_diagnostic_picker(state)
 	end
 
 	local lines, line_items = diagnostics.picker_lines(items)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/diagnostics"):format(state.adapter, state.id))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = ("ACP://%s/%d/diagnostics"):format(state.adapter, state.id),
 		filetype = "acp-diagnostics",
-		modifiable = true,
-		swapfile = false,
+		lines = lines,
+		title = " ACP diagnostics ",
+		submit_desc = "Draft ACP diagnostic fix",
+		close_desc = "Close ACP diagnostics",
+		on_submit = function(row, view)
+			local item = line_items[row]
+			if not item then
+				return
+			end
+			local prompt = diagnostic_item_prompt(state.source, item)
+			if not prompt then
+				notify("Failed to render diagnostic context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("diagnostic: %s"):format(diagnostics.severity_name(item.severity)))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
 	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local item = line_items[vim.api.nvim_win_get_cursor(winid)[1]]
-		if not item then
-			return
-		end
-		local prompt = diagnostic_item_prompt(state.source, item)
-		if not prompt then
-			notify("Failed to render diagnostic context", vim.log.levels.ERROR)
-			return
-		end
-		close_picker(winid, bufnr)
-		append_input_text(state, prompt)
-		if not state.busy then
-			set_run_status(state, ("diagnostic: %s"):format(diagnostics.severity_name(item.severity)))
-		end
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end, { buffer = bufnr, nowait = true, desc = "Draft ACP diagnostic fix" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP diagnostics" })
-	end
 
 	return true
 end
 
 local function open_config_value_picker(state, option)
 	local lines, line_values = acp_config.value_lines(option)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/config/%s"):format(state.adapter, state.id, option.id))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = ("ACP://%s/%d/config/%s"):format(state.adapter, state.id, option.id),
 		filetype = "acp-sessions",
-		modifiable = true,
-		swapfile = false,
-	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local choice = line_values[vim.api.nvim_win_get_cursor(winid)[1]]
-		if not choice then
-			return
-		end
-
-		close_picker(winid, bufnr)
-		local option_name = acp_config.option_label(option)
-		local value_name = acp_config.value_label(option, choice.value)
-		set_run_status(state, ("setting config: %s"):format(option_name))
-		local ok = state.connection:set_config_option_async(option.id, choice.value, function(success, result_or_err)
-			if not success then
-				set_run_status(state, ("error: %s"):format(result_or_err))
+		lines = lines,
+		title = " ACP config value ",
+		submit_desc = "Set ACP config option",
+		close_desc = "Close ACP config values",
+		on_submit = function(row, view)
+			local choice = line_values[row]
+			if not choice then
 				return
 			end
 
-			if type(result_or_err) == "table" and type(result_or_err.configOptions) == "table" then
-				state.config_options = result_or_err.configOptions
+			view.close()
+			local option_name = acp_config.option_label(option)
+			local value_name = acp_config.value_label(option, choice.value)
+			set_run_status(state, ("setting config: %s"):format(option_name))
+			local ok = state.connection:set_config_option_async(option.id, choice.value, function(success, result_or_err)
+				if not success then
+					set_run_status(state, ("error: %s"):format(result_or_err))
+					return
+				end
+
+				if type(result_or_err) == "table" and type(result_or_err.configOptions) == "table" then
+					state.config_options = result_or_err.configOptions
+				end
+				set_run_status(state, ("config: %s = %s"):format(option_name, value_name))
+				refresh_session_panels()
+			end)
+
+			if not ok then
+				set_run_status(state, "error: failed to set config option")
 			end
-			set_run_status(state, ("config: %s = %s"):format(option_name, value_name))
-			refresh_session_panels()
-		end)
-
-		if not ok then
-			set_run_status(state, "error: failed to set config option")
-		end
-	end, { buffer = bufnr, nowait = true, desc = "Set ACP config option" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP config values" })
-	end
+		end,
+	})
 
 	return true
 end
@@ -1885,36 +1787,22 @@ local function open_config_picker(state)
 	end
 
 	local lines, line_options = acp_config.picker_lines(state.config_options)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/config"):format(state.adapter, state.id))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = ("ACP://%s/%d/config"):format(state.adapter, state.id),
 		filetype = "acp-sessions",
-		modifiable = true,
-		swapfile = false,
+		lines = lines,
+		title = " ACP config ",
+		submit_desc = "Open ACP config values",
+		close_desc = "Close ACP config",
+		on_submit = function(row, view)
+			local option = line_options[row]
+			if not option then
+				return
+			end
+			view.close()
+			open_config_value_picker(state, option)
+		end,
 	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local option = line_options[vim.api.nvim_win_get_cursor(winid)[1]]
-		if not option then
-			return
-		end
-		close_picker(winid, bufnr)
-		open_config_value_picker(state, option)
-	end, { buffer = bufnr, nowait = true, desc = "Open ACP config values" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP config" })
-	end
 
 	return true
 end
@@ -1926,47 +1814,33 @@ local function open_code_action_picker(state, action_list)
 	end
 
 	local lines, line_actions = code_actions.picker_lines(action_list)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/code-actions"):format(state.adapter, state.id))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = ("ACP://%s/%d/code-actions"):format(state.adapter, state.id),
 		filetype = "acp-code-actions",
-		modifiable = true,
-		swapfile = false,
+		lines = lines,
+		title = " ACP code actions ",
+		submit_desc = "Draft ACP code action",
+		close_desc = "Close ACP code actions",
+		on_submit = function(row, view)
+			local action = line_actions[row]
+			if not action then
+				return
+			end
+			local prompt = code_action_prompt(state.source, action)
+			if not prompt then
+				notify("Failed to render LSP code action context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("code action: %s"):format(action.title))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
 	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local action = line_actions[vim.api.nvim_win_get_cursor(winid)[1]]
-		if not action then
-			return
-		end
-		local prompt = code_action_prompt(state.source, action)
-		if not prompt then
-			notify("Failed to render LSP code action context", vim.log.levels.ERROR)
-			return
-		end
-		close_picker(winid, bufnr)
-		append_input_text(state, prompt)
-		if not state.busy then
-			set_run_status(state, ("code action: %s"):format(action.title))
-		end
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end, { buffer = bufnr, nowait = true, desc = "Draft ACP code action" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP code actions" })
-	end
 
 	return true
 end
@@ -2010,47 +1884,33 @@ local function open_symbol_picker(state, symbol_list)
 	end
 
 	local lines, line_symbols = symbols.picker_lines(symbol_list)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/symbols"):format(state.adapter, state.id))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = ("ACP://%s/%d/symbols"):format(state.adapter, state.id),
 		filetype = "acp-symbols",
-		modifiable = true,
-		swapfile = false,
+		lines = lines,
+		title = " ACP symbols ",
+		submit_desc = "Add ACP symbol context",
+		close_desc = "Close ACP symbols",
+		on_submit = function(row, view)
+			local symbol = line_symbols[row]
+			if not symbol then
+				return
+			end
+			local prompt = symbol_prompt(state.source, symbol)
+			if not prompt then
+				notify("Failed to render LSP symbol context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("symbol context: %s"):format(symbol.name))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
 	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local symbol = line_symbols[vim.api.nvim_win_get_cursor(winid)[1]]
-		if not symbol then
-			return
-		end
-		local prompt = symbol_prompt(state.source, symbol)
-		if not prompt then
-			notify("Failed to render LSP symbol context", vim.log.levels.ERROR)
-			return
-		end
-		close_picker(winid, bufnr)
-		append_input_text(state, prompt)
-		if not state.busy then
-			set_run_status(state, ("symbol context: %s"):format(symbol.name))
-		end
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end, { buffer = bufnr, nowait = true, desc = "Add ACP symbol context" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP symbols" })
-	end
 
 	return true
 end
@@ -2062,47 +1922,33 @@ local function open_treesitter_picker(state, node_list)
 	end
 
 	local lines, line_nodes = treesitter.picker_lines(node_list)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/treesitter"):format(state.adapter, state.id))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = ("ACP://%s/%d/treesitter"):format(state.adapter, state.id),
 		filetype = "acp-treesitter",
-		modifiable = true,
-		swapfile = false,
+		lines = lines,
+		title = " ACP Tree-sitter ",
+		submit_desc = "Add ACP Tree-sitter context",
+		close_desc = "Close ACP Tree-sitter nodes",
+		on_submit = function(row, view)
+			local item = line_nodes[row]
+			if not item then
+				return
+			end
+			local prompt = treesitter_prompt(state.source, item)
+			if not prompt then
+				notify("Failed to render Tree-sitter node context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("tree-sitter context: %s"):format(item.type or "node"))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
 	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local item = line_nodes[vim.api.nvim_win_get_cursor(winid)[1]]
-		if not item then
-			return
-		end
-		local prompt = treesitter_prompt(state.source, item)
-		if not prompt then
-			notify("Failed to render Tree-sitter node context", vim.log.levels.ERROR)
-			return
-		end
-		close_picker(winid, bufnr)
-		append_input_text(state, prompt)
-		if not state.busy then
-			set_run_status(state, ("tree-sitter context: %s"):format(item.type or "node"))
-		end
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end, { buffer = bufnr, nowait = true, desc = "Add ACP Tree-sitter context" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP Tree-sitter nodes" })
-	end
 
 	return true
 end
@@ -2114,47 +1960,33 @@ local function open_reference_picker(state, reference_list)
 	end
 
 	local lines, line_references = references.picker_lines(reference_list)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/references"):format(state.adapter, state.id))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
+	picker.open({
+		name = ("ACP://%s/%d/references"):format(state.adapter, state.id),
 		filetype = "acp-references",
-		modifiable = true,
-		swapfile = false,
+		lines = lines,
+		title = " ACP references ",
+		submit_desc = "Add ACP reference context",
+		close_desc = "Close ACP references",
+		on_submit = function(row, view)
+			local reference = line_references[row]
+			if not reference then
+				return
+			end
+			local prompt, err = reference_prompt(reference)
+			if not prompt then
+				notify(err or "Failed to render LSP reference context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, "reference context added")
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
 	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-
-	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
-	vim.wo[winid].cursorline = true
-	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
-
-	vim.keymap.set("n", "<CR>", function()
-		local reference = line_references[vim.api.nvim_win_get_cursor(winid)[1]]
-		if not reference then
-			return
-		end
-		local prompt, err = reference_prompt(reference)
-		if not prompt then
-			notify(err or "Failed to render LSP reference context", vim.log.levels.ERROR)
-			return
-		end
-		close_picker(winid, bufnr)
-		append_input_text(state, prompt)
-		if not state.busy then
-			set_run_status(state, "reference context added")
-		end
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end, { buffer = bufnr, nowait = true, desc = "Add ACP reference context" })
-
-	for _, key in ipairs({ "q", "<Esc>" }) do
-		vim.keymap.set("n", key, function()
-			close_picker(winid, bufnr)
-		end, { buffer = bufnr, nowait = true, desc = "Close ACP references" })
-	end
 
 	return true
 end
