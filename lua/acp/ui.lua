@@ -162,11 +162,17 @@ local function refresh_output_highlights(state)
 					end_col = #line,
 					hl_group = "AcpCodeFence",
 					priority = 70,
+					sign_text = line_number == block.start_line and "C>" or "C<",
+					sign_hl_group = "AcpCodeBlockSign",
 				}
 				if line_number == block.start_line then
 					local prefix = state.output_language_injection and " inject:" or " lang:"
 					opts.virt_text = { { ("%s%s "):format(prefix, block.language), "AcpInjectedLanguage" } }
 					opts.virt_text_pos = "right_align"
+					opts.virt_lines = {
+						{ { output.code_block_header(block, state.output_language_injection), "AcpCodeBlockHeader" } },
+					}
+					opts.virt_lines_above = true
 				end
 				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, line_number - 1, 0, opts)
 			end
@@ -2569,6 +2575,15 @@ local function register_autocmds(state)
 		buffer = state.input_buf,
 		callback = function()
 			refresh_prompt_hints(state)
+		end,
+	})
+
+	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+		group = group,
+		buffer = state.output_buf,
+		callback = function()
+			refresh_output_highlights(state)
+			refresh_output_chrome(state)
 		end,
 	})
 

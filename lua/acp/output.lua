@@ -233,6 +233,8 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpGhostText", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputHint", { link = "AcpGhostText", default = true })
 	vim.api.nvim_set_hl(0, "AcpCodeFence", { fg = "#e0af68", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpCodeBlockHeader", { fg = "#1a1b26", bg = "#414868", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpCodeBlockSign", { link = "AcpCodeFence", default = true })
 	vim.api.nvim_set_hl(0, "AcpInjectedLanguage", { fg = "#1a1b26", bg = "#7aa2f7", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpSectionStats", { fg = "#1a1b26", bg = "#565f89", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
@@ -709,6 +711,18 @@ function M.code_block_text(block)
 		return nil
 	end
 	return table.concat(block.lines, "\n")
+end
+
+function M.code_block_header(block, injection_active)
+	block = block or {}
+	local language = clean(block.language) or "text"
+	if #language > 18 then
+		language = language:sub(1, 15) .. "..."
+	end
+	local line_count = tonumber(block.line_count) or 0
+	local count = ("%d line%s"):format(line_count, line_count == 1 and "" or "s")
+	local injection = injection_active and "Tree-sitter injection" or "fence detection"
+	return (" CODE %s | %s | %s | <Enter> open | <leader>aY yank "):format(language, count, injection)
 end
 
 function M.code_block_lines(blocks)

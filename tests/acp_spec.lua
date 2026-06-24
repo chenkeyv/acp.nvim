@@ -531,6 +531,12 @@ test("output dashboard and section helpers are rendered", function()
 	eq(block_at.language, "lua")
 	eq(block_at.lines[1], "print(1)")
 	eq(acp_output.code_block_text(block_at), "print(1)")
+	local block_header = acp_output.code_block_header(block_at, true)
+	ok(block_header:find("CODE lua", 1, true))
+	ok(block_header:find("1 line", 1, true))
+	ok(block_header:find("Tree-sitter injection", 1, true))
+	ok(block_header:find("<Enter> open", 1, true))
+	ok(block_header:find("<leader>aY yank", 1, true))
 	ok(acp_output.cursor_hint({ "Agent", "```lua", "print(1)", "```" }, 3, 0):find("]o/[o items", 1, true))
 	local block_picker, line_blocks = acp_output.code_block_lines(blocks)
 	local block_text = table.concat(block_picker, "\n")
@@ -1362,6 +1368,31 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(code_line, "output should contain a code block")
+		vim.api.nvim_exec_autocmds("TextChanged", { buffer = output_buf })
+		marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
+		local code_header = false
+		local code_sign = false
+		for _, mark in ipairs(marks) do
+			if mark[4] and mark[4].sign_text == "C>" then
+				code_sign = true
+			end
+			for _, virt_line in ipairs((mark[4] and mark[4].virt_lines) or {}) do
+				for _, chunk in ipairs(virt_line) do
+					if
+						chunk[1]
+						and chunk[1]:find("CODE lua", 1, true)
+						and (
+							chunk[1]:find("Tree-sitter injection", 1, true)
+							or chunk[1]:find("fence detection", 1, true)
+						)
+					then
+						code_header = true
+					end
+				end
+			end
+		end
+		ok(code_header, "output code blocks should render a virtual header")
+		ok(code_sign, "output code blocks should render a sign marker")
 		vim.api.nvim_win_set_cursor(output_win, { code_line, 0 })
 		vim.cmd("AcpOutputInspect")
 		local code_preview_win, code_preview = output_inspector_text("lua")

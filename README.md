@@ -29,10 +29,11 @@ This plugin provides an editor-native ACP chat surface:
 - hover-style `K` inspector for output references, code blocks, problems, and sections
 - cursor-aware code-block yank action that copies fenced output without Markdown fences
 - searchable output code-block picker with language-aware previews and scratch buffers
+- virtual code-block headers with language, line count, injection status, and action hints
 - searchable output location picker for jumping from transcript file references into source
 - quickfix export for transcript file references
 - Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
-- sign-column markers for transcript sections, run status, tools, files, and errors
+- sign-column markers for transcript sections, code blocks, run status, tools, files, and errors
 - per-section right-aligned summary badges for line, word, and code-block counts
 - native output diagnostics and location-list navigation for transcript errors and stderr
 - virtual section separators for scanning long output without changing transcript text
