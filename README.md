@@ -19,6 +19,7 @@ This plugin provides an editor-native ACP chat surface:
 - saved transcript replay into a new chat draft
 - adapter-backed session listing and restoration
 - async LSP code-action picker for drafting focused fix/refactor prompts
+- async LSP hover context insertion for source-cursor documentation
 - async LSP document-symbol picker for adding focused symbol context
 - Tree-sitter node picker for adding syntax-aware focused context
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
@@ -91,6 +92,7 @@ vim.g.acp_nvim_config = {
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
+- `:AcpHover` inserts LSP hover documentation for the source cursor
 - `:AcpSymbols` opens an LSP document-symbol picker for the source buffer
 - `:AcpTreeSitter` opens a Tree-sitter node picker for the source cursor
 - `:AcpHistory` opens saved transcript history
@@ -116,6 +118,7 @@ In the prompt buffer:
 - `<leader>a/` opens advertised ACP slash commands
 - `<leader>ao` opens advertised ACP config options
 - `<leader>aa` opens source-buffer LSP code actions
+- `<leader>ah` inserts source-buffer LSP hover documentation
 - `<leader>al` opens source-buffer LSP symbols
 - `<leader>at` opens source-buffer Tree-sitter nodes
 

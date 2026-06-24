@@ -5,6 +5,7 @@ local acp_commands = require("acp.commands")
 local acp_config = require("acp.config")
 local context = require("acp.context")
 local diagnostics = require("acp.diagnostics")
+local hover = require("acp.hover")
 local history = require("acp.history")
 local metadata = require("acp.metadata")
 local symbols = require("acp.symbols")
@@ -600,6 +601,25 @@ local function treesitter_prompt(source, item)
 	}, "\n")
 end
 
+local function hover_prompt(source, hover_text)
+	local rendered_context = context.render(source, {
+		treesitter_text_lines = 24,
+		selection_limit = 80,
+	})
+	if not rendered_context then
+		return nil
+	end
+
+	return table.concat({
+		"Use this LSP hover documentation as context.",
+		"",
+		"Hover:",
+		hover_text,
+		"",
+		rendered_context,
+	}, "\n")
+end
+
 local function escape_tabline(text)
 	return tostring(text):gsub("%%", "%%%%")
 end
@@ -963,6 +983,9 @@ local function register_keymaps(state)
 	local open_code_actions = function()
 		M.open_code_actions()
 	end
+	local add_hover = function()
+		M.add_hover()
+	end
 	local open_symbols = function()
 		M.open_symbols()
 	end
@@ -983,6 +1006,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
 		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
 		vim.keymap.set("n", "<leader>aa", open_code_actions, { buffer = bufnr, desc = "Open ACP LSP code actions" })
+		vim.keymap.set("n", "<leader>ah", add_hover, { buffer = bufnr, desc = "Add ACP LSP hover context" })
 		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
 		vim.keymap.set("n", "<leader>at", open_treesitter, { buffer = bufnr, desc = "Open ACP Tree-sitter nodes" })
 		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
@@ -1133,6 +1157,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpCodeActions", function()
 		M.open_code_actions()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpHover", function()
+		M.add_hover()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpSymbols", function()
@@ -2073,6 +2101,47 @@ function M.open_code_actions()
 			return
 		end
 		open_code_action_picker(state, action_list)
+	end)
+end
+
+function M.add_hover()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading hover")
+	end
+	hover.request(state.source, function(hover_text, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		if not hover_text or hover_text == "" then
+			notify("No LSP hover documentation found for the source cursor", vim.log.levels.WARN)
+			return
+		end
+
+		local prompt = hover_prompt(state.source, hover_text)
+		if not prompt then
+			notify("Failed to render LSP hover context", vim.log.levels.ERROR)
+			return
+		end
+		append_input_text(state, prompt)
+		if not state.busy then
+			set_run_status(state, "hover context added")
+		end
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
 	end)
 end
 

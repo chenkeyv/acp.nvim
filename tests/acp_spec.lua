@@ -6,6 +6,7 @@ local acp_config = require("acp.config")
 local acp_context = require("acp.context")
 local acp_diagnostics = require("acp.diagnostics")
 local file_review = require("acp.file_review")
+local hover = require("acp.hover")
 local history = require("acp.history")
 local permission = require("acp.permission")
 local symbols = require("acp.symbols")
@@ -80,6 +81,7 @@ test("setup registers public user commands", function()
 		"AcpCommands",
 		"AcpConfig",
 		"AcpCodeActions",
+		"AcpHover",
 		"AcpSymbols",
 		"AcpTreeSitter",
 		"AcpHistory",
@@ -91,6 +93,25 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("LSP hover markdown content is normalized", function()
+	local text = hover.text({
+		contents = {
+			{
+				language = "lua",
+				value = "local value: string",
+			},
+			"Second paragraph",
+			{
+				kind = "markdown",
+				value = "**docs**",
+			},
+		},
+	})
+
+	eq(text, "local value: string\nSecond paragraph\n**docs**")
+	eq(hover.text({ contents = {} }), nil)
 end)
 
 test("Tree-sitter nodes are collected and rendered for picker", function()
@@ -585,6 +606,65 @@ test("code actions command drafts selected LSP action context", function()
 
 	vim.lsp.buf_request_all = original_buf_request_all
 	vim.diagnostic.reset(ns, source_buf)
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("hover command drafts LSP hover context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = missing",
+		"print(value)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 6 })
+
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/hover")
+		eq(params.position.line, 0)
+		eq(params.position.character, 6)
+		callback({
+			[1] = {
+				result = {
+					contents = {
+						kind = "markdown",
+						value = "`value`: any",
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpHover")
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP hover documentation as context.", 1, true))
+		ok(prompt:find("Hover:", 1, true))
+		ok(prompt:find("`value`: any", 1, true))
+		ok(prompt:find("Context", 1, true))
+		ok(prompt:find("Line: local value = missing", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
 	end
