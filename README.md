@@ -11,7 +11,7 @@ This plugin provides an editor-native ACP chat surface:
 - native session close controls from commands, actions, and the session sidebar
 - command-style ACP action palette for discovering session and global workflows
 - searchable floating pickers for actions, sessions, output, history, diagnostics, LSP, and Tree-sitter workflows
-- source preview windows for diagnostics, symbols, references, code actions, and Tree-sitter pickers
+- source preview windows for diagnostics, LSP location, symbol, code-action, and Tree-sitter pickers
 - plain output buffer for streamed agent responses
 - visual output dashboard with source, model, context window, and key workflow hints
 - animated dashboard activity badge with run status and live transcript counts
@@ -64,6 +64,7 @@ This plugin provides an editor-native ACP chat surface:
 - async LSP hover context insertion for source-cursor documentation
 - async LSP references picker with quickfix export for focused usage context
 - async LSP definition picker with quickfix export for source-cursor navigation context
+- async LSP implementation picker with quickfix export for interface and abstract API context
 - async LSP document-symbol picker with quickfix export for focused symbol context
 - Tree-sitter node picker for adding syntax-aware focused context
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
@@ -172,6 +173,8 @@ vim.g.acp_nvim_config = {
 - `:AcpReferencesQuickfix` sends LSP references for the source cursor to quickfix
 - `:AcpDefinitions` opens an LSP definition picker for the source cursor
 - `:AcpDefinitionsQuickfix` sends LSP definitions for the source cursor to quickfix
+- `:AcpImplementations` opens an LSP implementation picker for the source cursor
+- `:AcpImplementationsQuickfix` sends LSP implementations for the source cursor to quickfix
 - `:AcpSymbols` opens an LSP document-symbol picker for the source buffer
 - `:AcpSymbolsQuickfix` sends LSP document symbols for the source buffer to quickfix
 - `:AcpTreeSitter` opens a Tree-sitter node picker for the source cursor
@@ -221,6 +224,7 @@ In the prompt buffer:
 - `<leader>ar` opens source-buffer LSP references
 - `<leader>aR` sends source-buffer LSP references to quickfix
 - `<leader>aG` opens source-buffer LSP definitions
+- `<leader>aI` opens source-buffer LSP implementations
 - `<leader>al` opens source-buffer LSP symbols
 - `<leader>aL` sends source-buffer LSP symbols to quickfix
 - `<leader>at` opens source-buffer Tree-sitter nodes
@@ -257,7 +261,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file, diagnostics, LSP-reference, LSP-definition, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
+- changed-file, diagnostics, LSP-reference, LSP-definition, LSP-implementation, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 

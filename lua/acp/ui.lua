@@ -2336,6 +2336,12 @@ local function prompt_action_items()
 	add("Definitions quickfix", "Send source-buffer LSP definitions to quickfix", ":AcpDefinitionsQuickfix", "LSP", function()
 		M.open_definitions_quickfix()
 	end)
+	add("Implementations", "Pick LSP implementations as focused context", "<leader>aI", "LSP", function()
+		M.open_implementations()
+	end)
+	add("Implementations quickfix", "Send source-buffer LSP implementations to quickfix", ":AcpImplementationsQuickfix", "LSP", function()
+		M.open_implementations_quickfix()
+	end)
 	add("Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 		M.open_symbols()
 	end)
@@ -2437,7 +2443,7 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "")
 	table.insert(lines, "Context Sources")
 	table.insert(lines, "- Source selection and cursor context")
-	table.insert(lines, "- LSP diagnostics, code actions, hover, references, symbols")
+	table.insert(lines, "- LSP diagnostics, code actions, hover, references, definitions, implementations, symbols")
 	table.insert(lines, "- Tree-sitter nodes around the source cursor")
 	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
 
@@ -2714,14 +2720,36 @@ local function reference_prompt(reference)
 	})
 end
 
-local function definition_prompt(definition)
-	return location_prompt(definition, {
+local lsp_location_specs = {
+	definition = {
+		method = "textDocument/definition",
+		plural = "definitions",
 		noun = "Definition",
+		label = "DEFINITION",
+		picker_title = "ACP Definitions",
+		filetype = "acp-definitions",
+		name_suffix = "definitions",
 		instruction = "Use this LSP definition as context.",
 		range_error = "LSP definition has no range",
 		render_error = "Failed to render LSP definition context",
-	})
-end
+		unavailable = "Neovim LSP definition requests are unavailable",
+		unsupported = "No attached LSP client supports definitions",
+	},
+	implementation = {
+		method = "textDocument/implementation",
+		plural = "implementations",
+		noun = "Implementation",
+		label = "IMPLEMENTATION",
+		picker_title = "ACP Implementations",
+		filetype = "acp-implementations",
+		name_suffix = "implementations",
+		instruction = "Use this LSP implementation as context.",
+		range_error = "LSP implementation has no range",
+		render_error = "Failed to render LSP implementation context",
+		unavailable = "Neovim LSP implementation requests are unavailable",
+		unsupported = "No attached LSP client supports implementations",
+	},
+}
 
 local function escape_tabline(text)
 	return tostring(text):gsub("%%", "%%%%")
@@ -3209,6 +3237,9 @@ local function register_keymaps(state)
 	local open_definitions = function()
 		M.open_definitions()
 	end
+	local open_implementations = function()
+		M.open_implementations()
+	end
 	local open_symbols = function()
 		M.open_symbols()
 	end
@@ -3249,6 +3280,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ar", open_references, { buffer = bufnr, desc = "Open ACP LSP references" })
 		vim.keymap.set("n", "<leader>aR", open_references_quickfix, { buffer = bufnr, desc = "Open ACP LSP references quickfix" })
 		vim.keymap.set("n", "<leader>aG", open_definitions, { buffer = bufnr, desc = "Open ACP LSP definitions" })
+		vim.keymap.set("n", "<leader>aI", open_implementations, { buffer = bufnr, desc = "Open ACP LSP implementations" })
 		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
 		vim.keymap.set("n", "<leader>aL", open_symbols_quickfix, { buffer = bufnr, desc = "Open ACP LSP symbols quickfix" })
 		vim.keymap.set("n", "<leader>at", open_treesitter, { buffer = bufnr, desc = "Open ACP Tree-sitter nodes" })
@@ -3542,6 +3574,14 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpDefinitionsQuickfix", function()
 		M.open_definitions_quickfix()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpImplementations", function()
+		M.open_implementations()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpImplementationsQuickfix", function()
+		M.open_implementations_quickfix()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpSymbols", function()
@@ -3972,6 +4012,12 @@ local function action_palette_items(state)
 		add_action(items, "Definitions quickfix", "Send source-buffer LSP definitions to quickfix", ":AcpDefinitionsQuickfix", "LSP", function()
 			M.open_definitions_quickfix()
 		end)
+		add_action(items, "Implementations", "Pick LSP implementations as focused context", "<leader>aI", "LSP", function()
+			M.open_implementations()
+		end)
+		add_action(items, "Implementations quickfix", "Send source-buffer LSP implementations to quickfix", ":AcpImplementationsQuickfix", "LSP", function()
+			M.open_implementations_quickfix()
+		end)
 		add_action(items, "Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 			M.open_symbols()
 		end)
@@ -4190,6 +4236,14 @@ local function source_action_items(state)
 	add("Definitions quickfix", "Send LSP definitions from the source cursor to quickfix", ":AcpDefinitionsQuickfix", "LSP", function()
 		focus_session(state)
 		M.open_definitions_quickfix()
+	end)
+	add("Implementations", "Pick LSP implementations from the source cursor", "<leader>aI", "LSP", function()
+		focus_session(state)
+		M.open_implementations()
+	end)
+	add("Implementations quickfix", "Send LSP implementations from the source cursor to quickfix", ":AcpImplementationsQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_implementations_quickfix()
 	end)
 	add("Symbols", "Pick LSP document symbols from the source buffer", "<leader>al", "LSP", function()
 		focus_session(state)
@@ -4993,7 +5047,7 @@ local function open_reference_picker(state, reference_list)
 	return true
 end
 
-local function open_definitions_quickfix(state, definition_list)
+local function open_lsp_location_quickfix(state, spec, location_list)
 	if not state or not state.source or not valid_buf(state.source.bufnr) then
 		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
 		return false
@@ -5001,35 +5055,35 @@ local function open_definitions_quickfix(state, definition_list)
 
 	local function open_items(list)
 		if not list or #list == 0 then
-			notify("No LSP definitions found for the source cursor", vim.log.levels.WARN)
+			notify(("No LSP %s found for the source cursor"):format(spec.plural), vim.log.levels.WARN)
 			return false
 		end
 
-		local items = references.quickfix_items(list, { label = "DEFINITION" })
+		local items = references.quickfix_items(list, { label = spec.label })
 		if #items == 0 then
-			notify("No quickfix-ready LSP definitions found", vim.log.levels.WARN)
+			notify(("No quickfix-ready LSP %s found"):format(spec.plural), vim.log.levels.WARN)
 			return false
 		end
 
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP definitions #%s"):format(tostring(state.id or "?")),
+			title = ("ACP %s #%s"):format(spec.plural, tostring(state.id or "?")),
 			items = items,
 		})
 		vim.cmd("copen")
 		if not state.busy then
-			set_run_status(state, "definitions quickfix")
+			set_run_status(state, ("%s quickfix"):format(spec.plural))
 		end
 		return true
 	end
 
-	if definition_list then
-		return open_items(definition_list)
+	if location_list then
+		return open_items(location_list)
 	end
 
 	if not state.busy then
-		set_run_status(state, "loading definitions quickfix")
+		set_run_status(state, ("loading %s quickfix"):format(spec.plural))
 	end
-	request_lsp_locations(state.source, "textDocument/definition", function(list, err)
+	request_lsp_locations(state.source, spec.method, function(list, err)
 		if err then
 			if not state.busy then
 				set_run_status(state, ("error: %s"):format(err))
@@ -5039,52 +5093,52 @@ local function open_definitions_quickfix(state, definition_list)
 		end
 		open_items(list)
 	end, {
-		unavailable = "Neovim LSP definition requests are unavailable",
-		unsupported = "No attached LSP client supports definitions",
+		unavailable = spec.unavailable,
+		unsupported = spec.unsupported,
 	})
 	return true
 end
 
-local function open_definition_picker(state, definition_list)
-	if not definition_list or #definition_list == 0 then
-		notify("No LSP definitions found for the source cursor", vim.log.levels.WARN)
+local function open_lsp_location_picker(state, spec, location_list)
+	if not location_list or #location_list == 0 then
+		notify(("No LSP %s found for the source cursor"):format(spec.plural), vim.log.levels.WARN)
 		return false
 	end
 
-	local lines, line_definitions = references.picker_lines(definition_list, { title = "ACP Definitions" })
+	local lines, line_locations = references.picker_lines(location_list, { title = spec.picker_title })
 	local view = picker.open({
-		name = ("ACP://%s/%d/definitions"):format(state.adapter, state.id),
-		filetype = "acp-definitions",
+		name = ("ACP://%s/%d/%s"):format(state.adapter, state.id, spec.name_suffix),
+		filetype = spec.filetype,
 		lines = lines,
-		title = " ACP definitions ",
-		submit_desc = "Add ACP definition context",
-		close_desc = "Close ACP definitions",
+		title = (" ACP %s "):format(spec.plural),
+		submit_desc = ("Add ACP %s context"):format(spec.noun:lower()),
+		close_desc = ("Close ACP %s"):format(spec.plural),
 		preview = function(row)
-			local definition = line_definitions[row]
-			if not definition then
+			local location = line_locations[row]
+			if not location then
 				return nil
 			end
-			local bufnr = references.bufnr(definition)
+			local bufnr = references.bufnr(location)
 			return source_preview(
 				bufnr,
-				references.range(definition),
-				(" Definition %s "):format(references.display_path(definition))
+				references.range(location),
+				(" %s %s "):format(spec.noun, references.display_path(location))
 			)
 		end,
 		on_submit = function(row, view)
-			local definition = line_definitions[row]
-			if not definition then
+			local location = line_locations[row]
+			if not location then
 				return
 			end
-			local prompt, err = definition_prompt(definition)
+			local prompt, err = location_prompt(location, spec)
 			if not prompt then
-				notify(err or "Failed to render LSP definition context", vim.log.levels.ERROR)
+				notify(err or spec.render_error, vim.log.levels.ERROR)
 				return
 			end
 			view.close()
 			append_input_text(state, prompt)
 			if not state.busy then
-				set_run_status(state, "definition context added")
+				set_run_status(state, ("%s context added"):format(spec.noun:lower()))
 			end
 			if valid_win(state.input_win) then
 				vim.api.nvim_set_current_win(state.input_win)
@@ -5094,8 +5148,8 @@ local function open_definition_picker(state, definition_list)
 
 	vim.keymap.set("n", "Q", function()
 		view.close()
-		open_definitions_quickfix(state, definition_list)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP definitions quickfix" })
+		open_lsp_location_quickfix(state, spec, location_list)
+	end, { buffer = view.bufnr, nowait = true, desc = ("Open ACP %s quickfix"):format(spec.plural) })
 
 	return true
 end
@@ -5574,7 +5628,8 @@ function M.open_definitions()
 	if not state.busy then
 		set_run_status(state, "loading definitions")
 	end
-	request_lsp_locations(state.source, "textDocument/definition", function(definition_list, err)
+	local spec = lsp_location_specs.definition
+	request_lsp_locations(state.source, spec.method, function(definition_list, err)
 		if err then
 			if not state.busy then
 				set_run_status(state, ("error: %s"):format(err))
@@ -5582,10 +5637,10 @@ function M.open_definitions()
 			notify(err, vim.log.levels.WARN)
 			return
 		end
-		open_definition_picker(state, definition_list)
+		open_lsp_location_picker(state, spec, definition_list)
 	end, {
-		unavailable = "Neovim LSP definition requests are unavailable",
-		unsupported = "No attached LSP client supports definitions",
+		unavailable = spec.unavailable,
+		unsupported = spec.unsupported,
 	})
 end
 
@@ -5595,7 +5650,45 @@ function M.open_definitions_quickfix()
 		return
 	end
 
-	open_definitions_quickfix(state)
+	open_lsp_location_quickfix(state, lsp_location_specs.definition)
+end
+
+function M.open_implementations()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading implementations")
+	end
+	local spec = lsp_location_specs.implementation
+	request_lsp_locations(state.source, spec.method, function(implementation_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_lsp_location_picker(state, spec, implementation_list)
+	end, {
+		unavailable = spec.unavailable,
+		unsupported = spec.unsupported,
+	})
+end
+
+function M.open_implementations_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_lsp_location_quickfix(state, lsp_location_specs.implementation)
 end
 
 function M.open_symbols()
