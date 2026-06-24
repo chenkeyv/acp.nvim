@@ -205,7 +205,7 @@ function M.dashboard_lines(state, opts)
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
 		summary_label(opts.stats),
-		"Keys: K inspect | <leader>ax search | gf refs | <leader>ay yank | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>ak actions",
+		"Keys: ? actions | K inspect | <leader>ax search | gf refs | <leader>ay yank | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code",
 		"",
 	}
 end
@@ -844,16 +844,16 @@ function M.cursor_hint(lines, lnum, col, opts)
 	end
 
 	if M.file_reference_at(lines, line_number, col, { cwd = opts.cwd }) then
-		return "actions: K inspect | <Enter> open ref | gf source | <leader>ai draft"
+		return "actions: ? menu | K inspect | <Enter> open ref | gf source"
 	end
 	if M.code_block_at(lines, line_number) then
-		return "actions: K inspect | <Enter> open code | <leader>aY yank code | <leader>ab blocks"
+		return "actions: ? menu | K inspect | <Enter> open code | <leader>aY yank code"
 	end
 	if line:match("^Status:%s+error") or line:match("^stderr:") or line:match("^Terminal output truncated") then
-		return "actions: K inspect | <leader>ae problems | <leader>ai draft"
+		return "actions: ? menu | K inspect | <leader>ae problems | <leader>ai draft"
 	end
 	if M.is_section(line) then
-		return "actions: K inspect | <leader>ai draft | <leader>ay yank | [[/]] sections"
+		return "actions: ? menu | K inspect | <leader>ai draft | <leader>ay yank"
 	end
 	return nil
 end

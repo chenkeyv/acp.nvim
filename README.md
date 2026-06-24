@@ -22,6 +22,7 @@ This plugin provides an editor-native ACP chat surface:
 - follow-up prompt drafting from the current output section
 - direct `gf` navigation from transcript file references into source
 - context-aware `<Enter>` action for opening transcript references and code blocks
+- cursor-aware output action picker for item-specific transcript workflows
 - hover-style `K` inspector for output references, code blocks, problems, and sections
 - cursor-aware code-block yank action that copies fenced output without Markdown fences
 - searchable output code-block picker with language-aware previews and scratch buffers
@@ -128,6 +129,7 @@ vim.g.acp_nvim_config = {
 - `:AcpOutputDraft` inserts the current output section as follow-up prompt context
 - `:AcpOutputOpen` opens the local file reference or code block under the output cursor
 - `:AcpOutputInspect` opens a floating preview for the output item under the cursor
+- `:AcpOutputActions` opens cursor-aware actions for the current output item
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
 - `:AcpCodeBlockYank` yanks the fenced code block under the output cursor
 - `:AcpOutputLocations` opens local file references from the current output with source previews
@@ -190,6 +192,7 @@ In the output buffer:
 - `za` toggles the fold under the cursor
 - `zM` closes all transcript folds
 - `zR` opens all transcript folds
+- `?` opens cursor-aware actions for the current output item
 - `<Enter>` opens the local file reference or code block under the cursor
 - `K` previews the reference, code block, problem, or section under the cursor
 - `gf` opens the local file reference under the cursor

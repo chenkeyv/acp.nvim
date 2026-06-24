@@ -1575,6 +1575,110 @@ local function open_output_context_at_cursor(state)
 	return false
 end
 
+local function output_action_items(state, context_info)
+	local items = {}
+	if not (state and context_info) then
+		return items
+	end
+
+	local function add(label, detail, key, run)
+		table.insert(items, {
+			label = label,
+			detail = detail,
+			key = key,
+			scope = "output",
+			run = run,
+		})
+	end
+
+	add("Inspect item", "Open a floating preview for the output item under the cursor", "K", function()
+		inspect_output_at_cursor(state)
+	end)
+	if context_info.reference then
+		add("Open reference", "Jump to the local file reference under the cursor", "gf", function()
+			open_output_reference_at_cursor(state)
+		end)
+	end
+	if context_info.reference or context_info.code_block then
+		add("Open item", "Open the reference or code block under the cursor", "<Enter>", function()
+			open_output_context_at_cursor(state)
+		end)
+	end
+	if context_info.code_block then
+		add("Yank code block", "Copy the fenced code block without Markdown fences", "<leader>aY", function()
+			yank_output_code_block(state)
+		end)
+		add("Code blocks", "Browse fenced code blocks from this transcript", "<leader>ab", function()
+			open_output_code_blocks(state)
+		end)
+	end
+	if output.problem_diagnostic_at(context_info.lines, context_info.cursor[1]) then
+		add("Output problems", "Open transcript errors and stderr in the location list", "<leader>ae", function()
+			open_output_problems(state)
+		end)
+	end
+
+	add("Draft section", "Insert the current output section as follow-up prompt context", "<leader>ai", function()
+		draft_output_section(state)
+	end)
+	add("Yank section", "Copy the current output section into the unnamed register", "<leader>ay", function()
+		yank_output_section(state)
+	end)
+	add("Search output", "Search every non-empty transcript line", "<leader>ax", function()
+		open_output_search(state)
+	end)
+	add("Output outline", "Jump across transcript sections", "<leader>av", function()
+		open_output_outline(state)
+	end)
+	return items
+end
+
+local function open_output_actions(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local context_info = output_cursor_context(state)
+	if not context_info then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	local items = output_action_items(state, context_info)
+	if #items == 0 then
+		notify("No ACP output actions found", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_actions = actions.picker_lines(items)
+	local origin_win = context_info.winid
+	picker.open({
+		name = ("ACP://%s/%d/output-actions"):format(state.adapter, state.id),
+		filetype = "acp-output-actions",
+		lines = lines,
+		title = " ACP output actions ",
+		submit_desc = "Run ACP output action",
+		close_desc = "Close ACP output actions",
+		preview = function()
+			return output_inspector_preview(context_info)
+		end,
+		on_submit = function(row, view)
+			local action = line_actions[row]
+			if not action then
+				return
+			end
+
+			view.close()
+			if valid_win(origin_win) then
+				vim.api.nvim_set_current_win(origin_win)
+			end
+			action.run()
+		end,
+	})
+	return true
+end
+
 local function source_range(source)
 	if source and source.range then
 		return source.range
@@ -2210,6 +2314,9 @@ local function register_keymaps(state)
 	local inspect_output = function()
 		inspect_output_at_cursor(state)
 	end
+	local open_output_action_menu = function()
+		open_output_actions(state)
+	end
 	local open_problems = function()
 		open_output_problems(state)
 	end
@@ -2280,6 +2387,7 @@ local function register_keymaps(state)
 		jump_output_section(state, 1)
 	end, { buffer = state.output_buf, desc = "Next ACP output section" })
 	vim.keymap.set("n", "<CR>", open_context, { buffer = state.output_buf, desc = "Open ACP output item" })
+	vim.keymap.set("n", "?", open_output_action_menu, { buffer = state.output_buf, desc = "Open ACP output actions" })
 	vim.keymap.set("n", "K", inspect_output, { buffer = state.output_buf, desc = "Inspect ACP output item" })
 	vim.keymap.set("n", "gf", open_reference, { buffer = state.output_buf, desc = "Open ACP output file reference" })
 	vim.keymap.set("n", "<leader>az", "za", { buffer = state.output_buf, desc = "Toggle ACP output fold" })
@@ -2442,6 +2550,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutputInspect", function()
 		M.inspect_output()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputActions", function()
+		M.open_output_actions()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
@@ -2841,6 +2953,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Inspect output item", "Preview the transcript item under the output cursor", "K", "session", function()
 			M.inspect_output()
+		end)
+		add_action(items, "Output actions", "Show cursor-aware actions for the output item", "?", "session", function()
+			M.open_output_actions()
 		end)
 		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
 			M.open_code_blocks()
@@ -3602,6 +3717,15 @@ function M.inspect_output()
 	end
 
 	inspect_output_at_cursor(state)
+end
+
+function M.open_output_actions()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_actions(state)
 end
 
 function M.open_code_blocks()
