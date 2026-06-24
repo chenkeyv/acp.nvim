@@ -136,6 +136,14 @@ local function short_label(value, limit)
 	return label
 end
 
+local function flatten_chunks(chunks)
+	local text = {}
+	for _, chunk in ipairs(chunks or {}) do
+		table.insert(text, chunk[1] or "")
+	end
+	return table.concat(text)
+end
+
 local function position_percent(line, total)
 	total = tonumber(total) or 0
 	if total <= 0 then
@@ -304,6 +312,9 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpOutputIdle", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulse", { link = "IncSearch", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulseSoft", { link = "Search", default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputSkyline", { fg = "#1a1b26", bg = "#c0caf5", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputSkylineDim", { link = "Comment", default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputSpark", { fg = "#ff9e64", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpInjectedCode", { link = "Visual", default = true })
 end
 
@@ -923,28 +934,49 @@ function M.live_status_label(state, frame)
 end
 
 function M.ghost_text(state, lines, frame)
+	return flatten_chunks(M.ghost_text_chunks(state, lines, frame))
+end
+
+function M.ghost_text_chunks(state, lines, frame)
 	lines = lines or {}
 	local stats = M.transcript_stats(lines)
 	if state and state.busy then
-		return ("%s %s %s | %d sections | %d code | %d refs"):format(
-			M.animation_frame(frame),
-			M.motion_frame(frame),
-			clean(state.run_status) or "working",
-			stats.sections or 0,
-			stats.code_blocks or 0,
-			stats.locations or 0
-		)
+		return {
+			{ ("%s %s "):format(M.animation_frame(frame), M.motion_frame(frame)), "AcpOutputLive" },
+			{ clean(state.run_status) or "working", "AcpOutputActivity" },
+			{ " | ", "AcpOutputSkylineDim" },
+			{ "FLOW ", "AcpOutputSkyline" },
+			{ M.skyline(lines, { width = 18 }), "AcpOutputRail" },
+			{
+				(" | %d sections | %d code | %d refs"):format(
+					stats.sections or 0,
+					stats.code_blocks or 0,
+					stats.locations or 0
+				),
+				"AcpGhostText",
+			},
+		}
 	end
 
 	if #M.sections(lines) <= 1 then
-		return "Ready - draft in prompt | ? actions | <leader>ax search"
+		return {
+			{ "Ready", "AcpOutputSkyline" },
+			{ " - draft in prompt | ? actions | <leader>ax search", "AcpGhostText" },
+		}
 	end
 
-	return ("Idle - %d sections | %d code | %d refs | [[/]] sections | <leader>av outline"):format(
-		stats.sections or 0,
-		stats.code_blocks or 0,
-		stats.locations or 0
-	)
+	return {
+		{ "Idle ", "AcpOutputIdle" },
+		{ M.skyline(lines, { width = 18 }), "AcpOutputRail" },
+		{
+			(" | %d sections | %d code | %d refs | [[/]] sections | <leader>av outline"):format(
+				stats.sections or 0,
+				stats.code_blocks or 0,
+				stats.locations or 0
+			),
+			"AcpGhostText",
+		},
+	}
 end
 
 function M.filetype_for_language(language)
@@ -1038,6 +1070,13 @@ function M.code_block_lens(block, injection_active, frame)
 	local count = ("%d line%s"):format(line_count, line_count == 1 and "" or "s")
 	local injection = injection_active and "Tree-sitter injection" or "fence detection"
 	local state = block.closed == false and ("live " .. M.animation_frame(frame)) or "ready"
+	local body_line1 = (block.start_line or 1) + 1
+	local body_line2 = block.closed == false and (block.end_line or body_line1) or ((block.end_line or body_line1) - 1)
+	if body_line2 < body_line1 then
+		body_line1 = block.start_line or 1
+		body_line2 = block.end_line or body_line1
+	end
+	local scope = ("L%d-%d"):format(body_line1, body_line2)
 	local injection_hl = injection_active and "AcpInjectedLanguageActive" or "AcpInjectedLanguage"
 	local state_hl = block.closed == false and "AcpOutputLive" or "AcpCodeBlockLensMuted"
 	return {
@@ -1045,6 +1084,7 @@ function M.code_block_lens(block, injection_active, frame)
 		{ language, "AcpInjectedLanguage" },
 		{ (" -> %s "):format(filetype), "AcpCodeBlockHeader" },
 		{ ("| %s | "):format(count), "AcpCodeBlockLensMuted" },
+		{ ("%s | "):format(scope), "AcpOutputSkylineDim" },
 		{ injection, injection_hl },
 		{ (" | %s | "):format(state), state_hl },
 		{ "<Enter> open | <leader>aY yank ", "AcpOutputHint" },
@@ -1092,6 +1132,29 @@ function M.injection_ranges(lines)
 		})
 	end
 	return ranges
+end
+
+function M.injection_badge_chunks(block, injection_active, frame)
+	block = block or {}
+	local filetype = clean(block.filetype) or M.filetype_for_language(block.language)
+	local line1 = (block.start_line or 1) + 1
+	local line2 = block.closed == false and (block.end_line or line1) or ((block.end_line or line1) - 1)
+	if line2 < line1 then
+		line1 = block.start_line or 1
+		line2 = block.end_line or line1
+	end
+	local injection_hl = injection_active and "AcpInjectedLanguageActive" or "AcpInjectedLanguage"
+	local injection_label = injection_active and "TS" or "fence"
+	return {
+		{ (" %s "):format(M.motion_frame(frame)), "AcpOutputMotion" },
+		{ " INJECT ", injection_hl },
+		{ ("%s "):format(filetype), "AcpInjectedLanguage" },
+		{ ("%s L%d-%d "):format(injection_label, line1, line2), "AcpOutputSkylineDim" },
+	}
+end
+
+function M.injection_badge(block, injection_active, frame)
+	return flatten_chunks(M.injection_badge_chunks(block, injection_active, frame))
 end
 
 function M.code_block_lines(blocks)
@@ -1429,12 +1492,99 @@ function M.next_output_item(lines, current, direction, opts)
 	return nil
 end
 
-local function flatten_chunks(chunks)
-	local text = {}
-	for _, chunk in ipairs(chunks or {}) do
-		table.insert(text, chunk[1] or "")
+local skyline_priority = {
+	["."] = 0,
+	S = 1,
+	R = 2,
+	C = 3,
+	E = 4,
+	[">"] = 5,
+}
+
+local function skyline_mark(cells, total, line, token)
+	local width = #cells
+	if width == 0 then
+		return
 	end
-	return table.concat(text)
+	local position = 1
+	if total > 1 then
+		position = math.floor((((tonumber(line) or 1) - 1) / (total - 1)) * (width - 1) + 1.5)
+	end
+	position = math.max(1, math.min(width, position))
+	local current = cells[position] or "."
+	if (skyline_priority[token] or 0) >= (skyline_priority[current] or 0) then
+		cells[position] = token
+	end
+end
+
+function M.skyline(lines, opts)
+	opts = opts or {}
+	lines = lines or {}
+	local width = math.max(8, tonumber(opts.width) or 24)
+	local cells = {}
+	for index = 1, width do
+		cells[index] = "."
+	end
+
+	local total = #lines
+	if total == 0 then
+		return "[" .. table.concat(cells) .. "]"
+	end
+
+	for _, section in ipairs(M.sections(lines)) do
+		skyline_mark(cells, total, section.line, "S")
+	end
+	for _, item in ipairs(M.output_items(lines, opts)) do
+		local token = item.kind == "problem" and "E" or item.kind == "code" and "C" or item.kind == "reference" and "R" or "."
+		skyline_mark(cells, total, item.line, token)
+	end
+	if opts.current_line then
+		skyline_mark(cells, total, opts.current_line, ">")
+	end
+
+	return "[" .. table.concat(cells) .. "]"
+end
+
+function M.skyline_chunks(lines, opts)
+	opts = opts or {}
+	lines = lines or {}
+	local stats = M.transcript_stats(lines, {
+		cwd = opts.cwd,
+		change_count = opts.change_count,
+		start_line = opts.start_line,
+	})
+	local languages = M.injected_languages(lines)
+	local language_items = {}
+	for index = 1, math.min(#languages, 3) do
+		table.insert(language_items, languages[index])
+	end
+	local language_label = #language_items > 0 and table.concat(language_items, ",") or "none"
+	local status = clean(opts.run_status) or (opts.busy and "working" or "idle")
+	local status_hl = opts.busy and "AcpOutputLive" or "AcpOutputIdle"
+	if #status > 24 then
+		status = status:sub(1, 21) .. "..."
+	end
+	local injection = opts.language_injection and "Tree-sitter" or "fence"
+	return {
+		{ " FLOW ", "AcpOutputSkyline" },
+		{ M.skyline(lines, { width = opts.width or 24, current_line = opts.current_line, cwd = opts.cwd }), "AcpOutputRail" },
+		{ (" %s "):format(M.animation_frame(opts.frame)), "AcpOutputSpark" },
+		{
+			("sections %d | code %d | refs %d | changes %d | "):format(
+				stats.sections or 0,
+				stats.code_blocks or 0,
+				stats.locations or 0,
+				stats.changes or 0
+			),
+			"AcpOutputSkylineDim",
+		},
+		{ ("inject %s:%s | "):format(injection, language_label), opts.language_injection and "AcpInjectedLanguageActive" or "AcpInjectedLanguage" },
+		{ status, status_hl },
+	}
+end
+
+function M.skyline_text(lines, opts)
+	return flatten_chunks(M.skyline_chunks(lines, opts))
 end
 
 function M.cursor_hint_chunks(lines, lnum, col, opts)

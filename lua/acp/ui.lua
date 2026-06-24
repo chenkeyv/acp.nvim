@@ -171,6 +171,23 @@ local function refresh_output_highlights(state)
 				opts.virt_lines = { { { style.separator, style.separator_hl_group or style.line_hl_group or "AcpOutputMeta" } } }
 				opts.virt_lines_above = true
 			end
+			if line:match("^Keys:") then
+				opts.virt_lines = opts.virt_lines or {}
+				table.insert(
+					opts.virt_lines,
+					output.skyline_chunks(lines, {
+						width = 28,
+						frame = state.output_animation_frame,
+						cwd = state.cwd,
+						change_count = changes.count(state),
+						start_line = dashboard_count + 1,
+						language_injection = state.output_language_injection,
+						run_status = state.run_status,
+						busy = state.busy,
+					})
+				)
+				opts.virt_lines_above = false
+			end
 			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, index - 1, 0, opts)
 		end
 	end
@@ -210,11 +227,7 @@ local function refresh_output_highlights(state)
 					priority = 8,
 				}
 				if line_number == body_start then
-					local injection_label = state.output_language_injection and " Tree-sitter " or " fence "
-					opts.virt_text = {
-						{ (" %s %s "):format(output.motion_frame(state.output_animation_frame), block.filetype or "text"), "AcpOutputMotion" },
-						{ injection_label, state.output_language_injection and "AcpInjectedLanguageActive" or "AcpInjectedLanguage" },
-					}
+					opts.virt_text = output.injection_badge_chunks(block, state.output_language_injection, state.output_animation_frame)
 					opts.virt_text_pos = "right_align"
 				end
 				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, line_number - 1, 0, opts)
@@ -251,12 +264,12 @@ local function refresh_output_highlights(state)
 		end
 	end
 
-	local ghost = output.ghost_text(state, lines, state.output_animation_frame)
+	local ghost = output.ghost_text_chunks(state, lines, state.output_animation_frame)
 	if ghost and #lines > 0 then
 		local row = #lines - 1
 		local col = #(lines[#lines] or "")
 		pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, row, col, {
-			virt_text = { { ghost, "AcpGhostText" } },
+			virt_text = ghost,
 			virt_text_pos = "eol",
 			hl_mode = "combine",
 			priority = 90,

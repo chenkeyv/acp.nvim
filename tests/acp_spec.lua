@@ -606,6 +606,21 @@ test("output dashboard and section helpers are rendered", function()
 	eq(acp_output.animation_frame(5), "|")
 	eq(acp_output.motion_frame(1), "[>   ]")
 	eq(acp_output.motion_frame(9), "[>   ]")
+	local skyline_lines = { "ACP: test", "You", "hello", "Agent", "```lua", "print(1)", "```" }
+	local skyline = acp_output.skyline(skyline_lines, { width = 12, current_line = 6 })
+	ok(skyline:find("S", 1, true))
+	ok(skyline:find("C", 1, true))
+	ok(skyline:find(">", 1, true))
+	local skyline_text = acp_output.skyline_text(skyline_lines, {
+		width = 12,
+		frame = 2,
+		language_injection = true,
+		run_status = "streaming",
+		busy = true,
+	})
+	ok(skyline_text:find("FLOW", 1, true))
+	ok(skyline_text:find("inject Tree%-sitter:lua", 1, false))
+	ok(skyline_text:find("streaming", 1, true))
 	local activity_badge, activity_hl = acp_output.activity_badge({
 		busy = true,
 		run_status = "streaming",
@@ -633,6 +648,9 @@ test("output dashboard and section helpers are rendered", function()
 	ok(busy_ghost:find("streaming", 1, true))
 	ok(busy_ghost:find("[=>  ]", 1, true))
 	ok(busy_ghost:find("0 sections", 1, true))
+	ok(busy_ghost:find("FLOW", 1, true))
+	local ghost_chunks = acp_output.ghost_text_chunks({ busy = false }, { "ACP: test", "You", "hello", "Agent", "done" }, 1)
+	eq(ghost_chunks[2][2], "AcpOutputRail")
 	ok(acp_output.ghost_text({ busy = false }, { "ACP: test", "" }):find("Ready", 1, true))
 	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("? menu", 1, true))
 	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("<leader>ay yank", 1, true))
@@ -656,6 +674,7 @@ test("output dashboard and section helpers are rendered", function()
 	ok(block_header:find("CODE lua", 1, true))
 	ok(block_header:find("lua -> lua", 1, true))
 	ok(block_header:find("1 line", 1, true))
+	ok(block_header:find("L3-3", 1, true))
 	ok(block_header:find("Tree-sitter injection", 1, true))
 	ok(block_header:find("ready", 1, true))
 	ok(block_header:find("<Enter> open", 1, true))
@@ -666,6 +685,10 @@ test("output dashboard and section helpers are rendered", function()
 		table.insert(block_lens_text, chunk[1])
 	end
 	ok(table.concat(block_lens_text):find("Tree-sitter injection", 1, true))
+	local injection_badge = acp_output.injection_badge(block_at, true, 2)
+	ok(injection_badge:find("INJECT", 1, true))
+	ok(injection_badge:find("lua", 1, true))
+	ok(injection_badge:find("TS L3-3", 1, true))
 	eq(acp_output.injected_languages({ "Agent", "```lua", "print(1)", "```" })[1], "lua")
 	local injection_ranges = acp_output.injection_ranges({ "Agent", "```lua", "print(1)", "```" })
 	eq(injection_ranges[1].line1, 3)
@@ -1887,6 +1910,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local ghost_text = false
 		local session_sign = false
 		local activity_badge = false
+		local skyline_hud = false
 		for _, mark in ipairs(marks) do
 			if mark[4] and mark[4].line_hl_group == "AcpOutputHeader" then
 				highlighted_header = true
@@ -1894,6 +1918,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			if mark[4] and mark[4].sign_text == "S>" then
 				session_sign = true
 			end
+			skyline_hud = skyline_hud or has_virt_line(mark, "FLOW")
 			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
 				if chunk[1] and chunk[1]:find("Ready", 1, true) then
 					ghost_text = true
@@ -1907,6 +1932,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(session_sign, "output session sign should be rendered")
 		ok(ghost_text, "output ghost text should be rendered")
 		ok(activity_badge, "output header should render activity badge")
+		ok(skyline_hud, "output should render the skyline ghost HUD")
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "hello output" })
 		vim.cmd("AcpSend")
@@ -2118,6 +2144,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local code_badge = false
 		local code_body_highlight = false
 		local code_body_motion = false
+		local code_injection_badge = false
 		for _, mark in ipairs(marks) do
 			if mark[4] and mark[4].sign_text == "C>" then
 				code_sign = true
@@ -2131,6 +2158,9 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 				end
 				if mark[2] == code_line - 1 and chunk[1] and chunk[1]:find("[>   ]", 1, true) then
 					code_body_motion = true
+				end
+				if mark[2] == code_line - 1 and chunk[1] and chunk[1]:find("INJECT", 1, true) then
+					code_injection_badge = true
 				end
 			end
 			for _, virt_line in ipairs((mark[4] and mark[4].virt_lines) or {}) do
@@ -2153,6 +2183,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(code_badge, "output code blocks should render a language injection badge")
 		ok(code_body_highlight, "output code bodies should render injected-language highlighting")
 		ok(code_body_motion, "output code bodies should render an animated injection badge")
+		ok(code_injection_badge, "output code bodies should render an injection-state badge")
 		eq(vim.b[output_buf].acp_injected_languages[1], "lua")
 		eq(vim.b[output_buf].acp_language_injections[1].filetype, "lua")
 		eq(vim.b[output_buf].acp_language_injections[1].line1, code_line)

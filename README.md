@@ -24,6 +24,7 @@ This plugin provides an editor-native ACP chat surface:
 - unified output item picker for references, code blocks, and problems with previews
 - searchable output transcript picker with progress, context previews, and jump-to-line navigation
 - persistent floating output map with progress rails, summary counts, and live section/problem/code/reference navigation
+- ambient output skyline HUD with animated transcript shape, injection, status, and problem signals
 - current-section yank action with a short visual pulse in the output buffer
 - follow-up prompt drafting from the current output section
 - direct `gf` navigation from transcript file references into source
@@ -47,7 +48,7 @@ This plugin provides an editor-native ACP chat surface:
 - virtual section separators for scanning long output without changing transcript text
 - ghost-text output hints with live transcript counts, motion badges, and animated busy status
 - cursor-sensitive ghost-text action chips for references, code blocks, errors, and sections
-- optional Tree-sitter Markdown/code-fence language injection with injected-language ranges and body highlights
+- optional Tree-sitter Markdown/code-fence language injection with injected-language ranges, body highlights, and animated injection badges
 - floating output outline with progress markers for jumping across long transcripts
 - native folds for collapsing transcript sections
 - non-blocking adapter startup and session creation
