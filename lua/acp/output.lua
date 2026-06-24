@@ -205,7 +205,7 @@ function M.dashboard_lines(state, opts)
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
 		summary_label(opts.stats),
-		"Keys: <leader>ax search | gf refs | <leader>ay yank | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>ak actions",
+		"Keys: K inspect | <leader>ax search | gf refs | <leader>ay yank | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code | <leader>ak actions",
 		"",
 	}
 end
@@ -824,6 +824,16 @@ function M.problem_diagnostics(lines)
 	return items
 end
 
+function M.problem_diagnostic_at(lines, lnum)
+	local target = (tonumber(lnum) or 1) - 1
+	for _, item in ipairs(M.problem_diagnostics(lines)) do
+		if item.lnum == target then
+			return item
+		end
+	end
+	return nil
+end
+
 function M.cursor_hint(lines, lnum, col, opts)
 	opts = opts or {}
 	lines = lines or {}
@@ -834,16 +844,16 @@ function M.cursor_hint(lines, lnum, col, opts)
 	end
 
 	if M.file_reference_at(lines, line_number, col, { cwd = opts.cwd }) then
-		return "actions: <Enter> open ref | gf source | <leader>ai draft"
+		return "actions: K inspect | <Enter> open ref | gf source | <leader>ai draft"
 	end
 	if M.code_block_at(lines, line_number) then
-		return "actions: <Enter> open code | <leader>aY yank code | <leader>ab blocks"
+		return "actions: K inspect | <Enter> open code | <leader>aY yank code | <leader>ab blocks"
 	end
 	if line:match("^Status:%s+error") or line:match("^stderr:") or line:match("^Terminal output truncated") then
-		return "actions: <leader>ae problems | <leader>ai draft"
+		return "actions: K inspect | <leader>ae problems | <leader>ai draft"
 	end
 	if M.is_section(line) then
-		return "actions: <leader>ai draft | <leader>ay yank | [[/]] sections"
+		return "actions: K inspect | <leader>ai draft | <leader>ay yank | [[/]] sections"
 	end
 	return nil
 end

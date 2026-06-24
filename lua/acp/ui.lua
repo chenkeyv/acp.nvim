@@ -659,6 +659,68 @@ local function code_block_title(block)
 	return (" %s lines %d-%d "):format(block.language or "code", block.start_line or 1, block.end_line or 1)
 end
 
+local function close_output_inspector(state)
+	if not state then
+		return
+	end
+
+	if valid_win(state.output_inspector_win) then
+		pcall(vim.api.nvim_win_close, state.output_inspector_win, true)
+	end
+	if valid_buf(state.output_inspector_buf) then
+		pcall(vim.api.nvim_buf_delete, state.output_inspector_buf, { force = true })
+	end
+	state.output_inspector_win = nil
+	state.output_inspector_buf = nil
+end
+
+local function open_output_inspector_float(state, preview)
+	if not (state and preview and preview.lines and #preview.lines > 0) then
+		return false
+	end
+
+	close_output_inspector(state)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	pcall(vim.api.nvim_buf_set_name, bufnr, ("ACP Inspect://%s/%s"):format(state.adapter or "adapter", tostring(state.id or "?")))
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = preview.filetype or "acp",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, preview.lines)
+	vim.bo[bufnr].modifiable = false
+	vim.b[bufnr].acp_output_inspector = state.output_buf
+
+	local winid = vim.api.nvim_open_win(bufnr, false, picker.window_config(preview.lines, {
+		min_width = 48,
+		min_height = 4,
+		padding = 4,
+		title = preview.title or " ACP output inspect ",
+		zindex = 86,
+	}))
+	vim.wo[winid].cursorline = true
+	vim.wo[winid].number = true
+	vim.wo[winid].relativenumber = false
+	vim.wo[winid].wrap = false
+	pcall(vim.api.nvim_win_set_cursor, winid, { math.max(1, preview.cursor_line or 1), 0 })
+
+	state.output_inspector_buf = bufnr
+	state.output_inspector_win = winid
+	if state.group and valid_buf(state.output_buf) then
+		vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufLeave" }, {
+			group = state.group,
+			buffer = state.output_buf,
+			once = true,
+			callback = function()
+				close_output_inspector(state)
+			end,
+		})
+	end
+	return true
+end
+
 local function open_output_code_block_buffer(state, block)
 	if not state or not block or not block.lines then
 		return false
@@ -1361,6 +1423,77 @@ local function output_cursor_context(state)
 	}
 end
 
+local function output_section_preview(context_info)
+	local section_lines, range = output.section_lines(context_info.lines, context_info.cursor[1])
+	if not section_lines then
+		return nil
+	end
+
+	return {
+		lines = section_lines,
+		filetype = "acp",
+		title = (" ACP %s: %s "):format(range.kind or "section", range.title or "Output"),
+		cursor_line = math.max(1, context_info.cursor[1] - range.line1 + 1),
+	}
+end
+
+local function output_problem_preview(context_info)
+	local diagnostic = output.problem_diagnostic_at(context_info.lines, context_info.cursor[1])
+	if not diagnostic then
+		return nil
+	end
+
+	local line = context_info.lines[context_info.cursor[1]] or ""
+	return {
+		lines = {
+			line,
+			"",
+			diagnostic.message or "ACP output problem",
+		},
+		filetype = "acp",
+		title = " ACP output problem ",
+		cursor_line = 1,
+	}
+end
+
+local function output_inspector_preview(context_info)
+	if context_info.reference then
+		return file_reference_preview(context_info.reference)
+	end
+
+	if context_info.code_block then
+		local block = context_info.code_block
+		return {
+			lines = block.lines,
+			filetype = block.filetype,
+			title = code_block_title(block),
+			cursor_line = math.max(1, math.min(#block.lines, context_info.cursor[1] - block.start_line)),
+		}
+	end
+
+	return output_problem_preview(context_info) or output_section_preview(context_info)
+end
+
+local function inspect_output_at_cursor(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local context_info = output_cursor_context(state)
+	if not context_info then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	local preview = output_inspector_preview(context_info)
+	if not preview then
+		notify("No ACP output preview found under the cursor", vim.log.levels.WARN)
+		return false
+	end
+	return open_output_inspector_float(state, preview)
+end
+
 local function yank_output_code_block(state)
 	if not state or not valid_buf(state.output_buf) then
 		notify("No ACP output buffer is available", vim.log.levels.WARN)
@@ -1969,6 +2102,7 @@ local function unregister(state)
 	state.closed = true
 	state.connection:stop()
 	stop_output_animation(state)
+	close_output_inspector(state)
 	clear_source_marks(state)
 	session_panel_lines[state.session_panel_buf] = nil
 	states[state.session_panel_buf] = nil
@@ -2073,6 +2207,9 @@ local function register_keymaps(state)
 	local open_context = function()
 		open_output_context_at_cursor(state)
 	end
+	local inspect_output = function()
+		inspect_output_at_cursor(state)
+	end
 	local open_problems = function()
 		open_output_problems(state)
 	end
@@ -2143,6 +2280,7 @@ local function register_keymaps(state)
 		jump_output_section(state, 1)
 	end, { buffer = state.output_buf, desc = "Next ACP output section" })
 	vim.keymap.set("n", "<CR>", open_context, { buffer = state.output_buf, desc = "Open ACP output item" })
+	vim.keymap.set("n", "K", inspect_output, { buffer = state.output_buf, desc = "Inspect ACP output item" })
 	vim.keymap.set("n", "gf", open_reference, { buffer = state.output_buf, desc = "Open ACP output file reference" })
 	vim.keymap.set("n", "<leader>az", "za", { buffer = state.output_buf, desc = "Toggle ACP output fold" })
 	vim.keymap.set({ "n", "i" }, "<M-p>", previous_prompt, { buffer = state.input_buf, desc = "Previous ACP prompt" })
@@ -2300,6 +2438,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutputOpen", function()
 		M.open_output_context()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputInspect", function()
+		M.inspect_output()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
@@ -2696,6 +2838,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Open output item", "Open a transcript file reference or code block under the cursor", "<CR>", "session", function()
 			M.open_output_context()
+		end)
+		add_action(items, "Inspect output item", "Preview the transcript item under the output cursor", "K", "session", function()
+			M.inspect_output()
 		end)
 		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
 			M.open_code_blocks()
@@ -3448,6 +3593,15 @@ function M.open_output_context()
 	end
 
 	open_output_context_at_cursor(state)
+end
+
+function M.inspect_output()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	inspect_output_at_cursor(state)
 end
 
 function M.open_code_blocks()

@@ -92,6 +92,7 @@ test("setup registers public user commands", function()
 		"AcpOutputYank",
 		"AcpOutputDraft",
 		"AcpOutputOpen",
+		"AcpOutputInspect",
 		"AcpCodeBlocks",
 		"AcpCodeBlockYank",
 		"AcpOutputLocations",
@@ -344,6 +345,7 @@ test("output dashboard and section helpers are rendered", function()
 	ok(text:find("Session: #7 | Mode: window", 1, true))
 	ok(text:find("Model: test-model | Context: 1k", 1, true))
 	ok(text:find("Transcript: 0 sections | 0 code | 0 locs | 0 changes", 1, true))
+	ok(text:find("K inspect", 1, true))
 	ok(text:find("[[/]] sections", 1, true))
 	ok(text:find("<leader>ax search", 1, true))
 	ok(text:find("<leader>ab code", 1, true))
@@ -493,6 +495,7 @@ test("output dashboard and section helpers are rendered", function()
 	ok(problem_items[1].message:find("failed to start session", 1, true))
 	eq(problem_items[2].message, "stderr: permission denied")
 	eq(problem_items[3].severity, vim.diagnostic.severity.WARN)
+	eq(acp_output.problem_diagnostic_at({ "Status: error: failed" }, 1).message, "error: failed")
 	ok(acp_output.cursor_hint({ "Status: error: failed" }, 1, 0):find("problems", 1, true))
 	local stats = acp_output.transcript_stats({
 		"ACP: test",
@@ -1000,6 +1003,20 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			return false
 		end
 
+		local function output_inspector_text(filetype)
+			for _, winid in ipairs(vim.api.nvim_list_wins()) do
+				local preview_bufnr = vim.api.nvim_win_get_buf(winid)
+				if
+					preview_bufnr ~= output_buf
+					and vim.b[preview_bufnr].acp_output_inspector == output_buf
+					and (not filetype or vim.bo[preview_bufnr].filetype == filetype)
+				then
+					return winid, table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
+				end
+			end
+			return nil, nil
+		end
+
 		local ns = vim.api.nvim_create_namespace("acp.nvim.output")
 		local marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
 		local highlighted_header = false
@@ -1061,6 +1078,20 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(#output_diagnostics, 1)
 		eq(output_diagnostics[1].severity, vim.diagnostic.severity.ERROR)
 		ok(output_diagnostics[1].message:find("failed to start session", 1, true))
+		local problem_line
+		for index, output_line in ipairs(lines) do
+			if output_line:find("Status: error", 1, true) then
+				problem_line = index
+				break
+			end
+		end
+		ok(problem_line, "output should contain a problem line")
+		vim.api.nvim_set_current_win(output_win)
+		vim.api.nvim_win_set_cursor(output_win, { problem_line, 0 })
+		vim.cmd("AcpOutputInspect")
+		local problem_preview_win, problem_preview = output_inspector_text("acp")
+		ok(problem_preview and problem_preview:find("failed to start session", 1, true), "output inspector should preview problems")
+		pcall(vim.api.nvim_win_close, problem_preview_win, true)
 		vim.api.nvim_set_current_win(output_win)
 		vim.cmd("AcpOutputProblems")
 		local loclist = vim.fn.getloclist(output_win, { title = 1, items = 1 })
@@ -1184,6 +1215,10 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		end
 		ok(code_line, "output should contain a code block")
 		vim.api.nvim_win_set_cursor(output_win, { code_line, 0 })
+		vim.cmd("AcpOutputInspect")
+		local code_preview_win, code_preview = output_inspector_text("lua")
+		ok(code_preview and code_preview:find("print('from acp')", 1, true), "output inspector should preview code blocks")
+		pcall(vim.api.nvim_win_close, code_preview_win, true)
 		unnamed_register = vim.fn.getreg('"')
 		unnamed_register_type = vim.fn.getregtype('"')
 		vim.cmd("AcpCodeBlockYank")
@@ -1246,6 +1281,10 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		end
 		ok(ref_line, "output should contain a file reference")
 		vim.api.nvim_win_set_cursor(output_win, { ref_line, ref_col })
+		vim.cmd("AcpOutputInspect")
+		local ref_preview_win, ref_preview = output_inspector_text("lua")
+		ok(ref_preview and ref_preview:find("local M = {}", 1, true), "output inspector should preview file references")
+		pcall(vim.api.nvim_win_close, ref_preview_win, true)
 		vim.cmd("AcpOutputOpen")
 		location_buf = vim.api.nvim_get_current_buf()
 		ok(vim.api.nvim_buf_get_name(location_buf):find("lua/acp/output.lua", 1, true))
@@ -1373,16 +1412,21 @@ test("actions command opens a session action palette", function()
 		eq(vim.bo[action_buf].filetype, "acp-actions")
 		local action_lines = vim.api.nvim_buf_get_lines(action_buf, 0, -1, false)
 		local output_outline_row
+		local inspect_output = false
 		local yank_code_block = false
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
 				output_outline_row = index
+			end
+			if line:find("Inspect output item", 1, true) then
+				inspect_output = true
 			end
 			if line:find("Yank code block", 1, true) then
 				yank_code_block = true
 			end
 		end
 		ok(output_outline_row, "action palette should include output outline")
+		ok(inspect_output, "action palette should include output inspect")
 		ok(yank_code_block, "action palette should include code block yank")
 
 		vim.api.nvim_win_set_cursor(0, { output_outline_row, 0 })
