@@ -110,6 +110,7 @@ test("setup registers public user commands", function()
 		"AcpOutputQuickfix",
 		"AcpOutputProblems",
 		"AcpDiagnostics",
+		"AcpDiagnosticsQuickfix",
 		"AcpCommands",
 		"AcpConfig",
 		"AcpCodeActions",
@@ -750,8 +751,25 @@ test("diagnostic picker lines render source and code", function()
 
 	ok(text:find("2:5 ERROR [lua_ls] (undefined-global)", 1, true))
 	ok(text:find("undefined global missing", 1, true))
+	ok(text:find("Q for quickfix", 1, true))
 	eq(line_items[3].message, "undefined global missing")
 	eq(line_items[4].message, "undefined global missing")
+	local qf_items = acp_diagnostics.quickfix_items(42, {
+		{
+			lnum = 1,
+			col = 4,
+			end_lnum = 1,
+			end_col = 11,
+			severity = vim.diagnostic.severity.ERROR,
+			source = "lua_ls",
+			code = "undefined-global",
+			message = "undefined global missing",
+		},
+	})
+	eq(qf_items[1].bufnr, 42)
+	eq(qf_items[1].lnum, 2)
+	eq(qf_items[1].col, 5)
+	ok(qf_items[1].text:find("ERROR [lua_ls] (undefined-global): undefined global missing", 1, true))
 
 	local range = acp_diagnostics.range({
 		lnum = 2,
@@ -1848,6 +1866,7 @@ test("actions command opens a session action palette", function()
 		local inspect_output = false
 		local output_actions = false
 		local yank_code_block = false
+		local diagnostics_quickfix = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
@@ -1868,6 +1887,9 @@ test("actions command opens a session action palette", function()
 			if line:find("Yank code block", 1, true) then
 				yank_code_block = true
 			end
+			if line:find("Diagnostics quickfix", 1, true) then
+				diagnostics_quickfix = true
+			end
 			if line:find("Close session", 1, true) then
 				close_session = true
 			end
@@ -1878,6 +1900,7 @@ test("actions command opens a session action palette", function()
 		ok(inspect_output, "action palette should include output inspect")
 		ok(output_actions, "action palette should include output actions")
 		ok(yank_code_block, "action palette should include code block yank")
+		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
 		ok(close_session, "action palette should include close session")
 
 		vim.api.nvim_win_set_cursor(0, { output_outline_row, 0 })
@@ -2038,7 +2061,28 @@ test("diagnostics command drafts selected diagnostic context", function()
 		end
 		ok(preview_found, "diagnostics picker should show a source preview")
 
-		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qflist.title:find("ACP diagnostics", 1, true))
+		eq(#qflist.items, 1)
+		eq(qflist.items[1].bufnr, source_buf)
+		ok(qflist.items[1].text:find("undefined global missing", 1, true))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after diagnostics quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpDiagnosticsQuickfix")
+		qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qflist.title:find("ACP diagnostics", 1, true))
+		eq(#qflist.items, 1)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpDiagnostics")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		eq(vim.api.nvim_get_current_buf(), input_buf)
 

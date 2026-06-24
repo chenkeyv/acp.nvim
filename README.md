@@ -72,6 +72,7 @@ This plugin provides an editor-native ACP chat surface:
 - source-buffer action lens for focusing the linked chat and adding source/LSP/Tree-sitter context
 - context and review draft commands for source/Visual-mode workflows
 - LSP diagnostic fix drafts from the current buffer or visual range
+- quickfix export for source diagnostics from ACP diagnostic workflows
 - floating permission chooser with numbered actions
 - floating terminal command approval with live output in tool calls
 - floating batch file-write review with diff previews before applying agent edits
@@ -159,6 +160,7 @@ vim.g.acp_nvim_config = {
 - `:AcpOutputQuickfix` sends local file references from the current output to quickfix
 - `:AcpOutputProblems` opens transcript errors and stderr as native diagnostics in the location list
 - `:AcpDiagnostics` opens a picker for source-buffer diagnostics
+- `:AcpDiagnosticsQuickfix` sends source-buffer diagnostics to quickfix
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
@@ -201,6 +203,7 @@ In the prompt buffer:
 - `<leader>ag` opens output file references
 - `<leader>ae` opens output errors/stderr in the location list
 - `<leader>ad` opens source-buffer diagnostics
+- `<leader>aD` sends source-buffer diagnostics to quickfix
 - `<leader>af` previews the current session's changed files
 - `<leader>a/` opens advertised ACP slash commands
 - `<leader>ao` opens advertised ACP config options
@@ -233,6 +236,7 @@ In the output buffer:
 - `<leader>aY` yanks the code block under the cursor
 - `<leader>ag` opens output file references
 - `<leader>ae` opens output errors/stderr in the location list
+- `<leader>aD` sends source-buffer diagnostics to quickfix
 - `<leader>ak` opens the ACP action palette
 - `<leader>az` toggles the fold under the cursor
 
@@ -241,7 +245,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file, output-location, and output-item pickers use `Q` to export rows to quickfix
+- changed-file, diagnostics, output-location, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 

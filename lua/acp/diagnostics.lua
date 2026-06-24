@@ -186,8 +186,27 @@ function M.picker_lines(items)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to draft a fix, or q/<Esc> to close.")
+	table.insert(lines, "Press <Enter> to draft a fix, Q for quickfix, or q/<Esc> to close.")
 	return lines, line_items
+end
+
+function M.quickfix_items(bufnr, items)
+	local qf_items = {}
+	for _, item in ipairs(items or {}) do
+		local severity = M.severity_name(item.severity)
+		local source = item.source and item.source ~= "" and (" [" .. item.source .. "]") or ""
+		local code = item.code and item.code ~= "" and (" (" .. tostring(item.code) .. ")") or ""
+		table.insert(qf_items, {
+			bufnr = bufnr,
+			lnum = (item.lnum or 0) + 1,
+			col = (item.col or 0) + 1,
+			end_lnum = (item.end_lnum or item.lnum or 0) + 1,
+			end_col = (item.end_col or item.col or 0) + 1,
+			type = severity:sub(1, 1),
+			text = ("%s%s%s: %s"):format(severity, source, code, clean(item.message)),
+		})
+	end
+	return qf_items
 end
 
 return M

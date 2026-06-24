@@ -2077,6 +2077,9 @@ local function prompt_action_items()
 	add("Source diagnostics", "Draft a focused fix from source diagnostics", "<leader>ad", "LSP", function()
 		M.open_diagnostics()
 	end)
+	add("Diagnostics quickfix", "Send source diagnostics to quickfix", "<leader>aD", "LSP", function()
+		M.open_diagnostics_quickfix()
+	end)
 	add("Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
 		M.open_code_actions()
 	end)
@@ -2901,6 +2904,9 @@ local function register_keymaps(state)
 	local open_diagnostics = function()
 		M.open_diagnostics()
 	end
+	local open_diagnostics_quickfix = function()
+		M.open_diagnostics_quickfix()
+	end
 	local open_commands = function()
 		M.open_commands()
 	end
@@ -2945,6 +2951,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
 		vim.keymap.set("n", "<leader>ae", open_problems, { buffer = bufnr, desc = "Open ACP output problems" })
 		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
+		vim.keymap.set("n", "<leader>aD", open_diagnostics_quickfix, { buffer = bufnr, desc = "Open ACP diagnostics quickfix" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Preview ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
 		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
@@ -3204,6 +3211,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpDiagnostics", function()
 		M.open_diagnostics()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpDiagnosticsQuickfix", function()
+		M.open_diagnostics_quickfix()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpCommands", function()
@@ -3626,6 +3637,9 @@ local function action_palette_items(state)
 		add_action(items, "Diagnostics", "Draft a focused fix from source diagnostics", "<leader>ad", "LSP", function()
 			M.open_diagnostics()
 		end)
+		add_action(items, "Diagnostics quickfix", "Send source diagnostics to quickfix", "<leader>aD", "LSP", function()
+			M.open_diagnostics_quickfix()
+		end)
 		add_action(items, "Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
 			M.open_code_actions()
 		end)
@@ -3822,6 +3836,10 @@ local function source_action_items(state)
 	add("Source diagnostics", "Draft a focused fix from diagnostics in the marked source", "<leader>ad", "LSP", function()
 		focus_session(state)
 		M.open_diagnostics()
+	end)
+	add("Diagnostics quickfix", "Send diagnostics in the marked source to quickfix", "<leader>aD", "LSP", function()
+		focus_session(state)
+		M.open_diagnostics_quickfix()
 	end)
 	add("Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
 		focus_session(state)
@@ -4081,6 +4099,28 @@ local function open_command_picker(state)
 	return true
 end
 
+local function open_diagnostics_quickfix(state, items)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	items = items or diagnostics.items(state.source.bufnr, {
+		range = state.source.range,
+	})
+	if #items == 0 then
+		notify("No diagnostics found for the source buffer or range", vim.log.levels.WARN)
+		return false
+	end
+
+	vim.fn.setqflist({}, " ", {
+		title = ("ACP diagnostics #%s"):format(tostring(state.id or "?")),
+		items = diagnostics.quickfix_items(state.source.bufnr, items),
+	})
+	vim.cmd("copen")
+	return true
+end
+
 local function open_diagnostic_picker(state)
 	local items = diagnostics.items(state.source and state.source.bufnr, {
 		range = state.source and state.source.range,
@@ -4091,7 +4131,8 @@ local function open_diagnostic_picker(state)
 	end
 
 	local lines, line_items = diagnostics.picker_lines(items)
-	picker.open({
+	local view
+	view = picker.open({
 		name = ("ACP://%s/%d/diagnostics"):format(state.adapter, state.id),
 		filetype = "acp-diagnostics",
 		lines = lines,
@@ -4129,6 +4170,10 @@ local function open_diagnostic_picker(state)
 			end
 		end,
 	})
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		open_diagnostics_quickfix(state, items)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP diagnostics quickfix" })
 
 	return true
 end
@@ -4779,6 +4824,15 @@ function M.open_diagnostics()
 	end
 
 	open_diagnostic_picker(state)
+end
+
+function M.open_diagnostics_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_diagnostics_quickfix(state)
 end
 
 function M.open_commands()
