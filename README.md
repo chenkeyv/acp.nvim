@@ -16,6 +16,7 @@ This plugin provides an editor-native ACP chat surface:
 - LSP diagnostic fix drafts from the current buffer or visual range
 - floating permission chooser with numbered actions
 - floating file-write review with a diff preview before applying agent edits
+- quickfix navigation for files changed during an ACP session
 - floating Markdown input prompt for completion-friendly editing
 - `codex-acp` and `claude-agent-acp` adapter presets
 - basic ACP JSON-RPC, session, prompt, permission, and file read/write support
@@ -70,6 +71,7 @@ vim.g.acp_nvim_config = {
 - `:AcpSend` sends the current prompt
 - `:AcpStop` stops the current agent process
 - `:AcpSessions` focuses the sessions side panel
+- `:AcpChanges` opens a quickfix list of files changed in the current ACP session
 - `:AcpHistory` opens saved transcript history
 - `:AcpAddContext` inserts source-buffer context into the current prompt
 - `:AcpFixDiagnostics [adapter]` opens chat with a diagnostics-focused draft prompt
@@ -85,6 +87,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<leader>ac` inserts source-buffer context into the prompt
+- `<leader>af` opens the current session's changed files in quickfix
 
 The chat-opening commands accept a line range, so opening ACP from Visual mode
 preserves the selected lines for `:AcpAddContext`.
@@ -115,5 +118,5 @@ NVIM_LOG_FILE=/tmp/acp.nvim-nvim.log nvim --headless -u tests/minimal_init.lua -
 
 ## Status
 
-This is an early minimal ACP client. Terminal operations, adapter-backed session
-restoration, and multi-file review workflows are not implemented yet.
+This is an early ACP client. Terminal operations, adapter-backed session
+restoration, and batch pre-apply review workflows are not implemented yet.

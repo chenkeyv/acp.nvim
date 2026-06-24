@@ -1,4 +1,5 @@
 local Connection = require("acp.connection").Connection
+local changes = require("acp.changes")
 local context = require("acp.context")
 local diagnostics = require("acp.diagnostics")
 local history = require("acp.history")
@@ -200,10 +201,12 @@ local function sorted_sessions()
 end
 
 local function session_status(state)
-	if state.busy then
-		return state.run_status or "running"
+	local status = state.run_status or (state.busy and "running" or "idle")
+	local count = changes.count(state)
+	if count > 0 then
+		return ("%s  %d change(s)"):format(status, count)
 	end
-	return state.run_status or "idle"
+	return status
 end
 
 local function render_session_panel(state)
@@ -752,10 +755,14 @@ local function register_keymaps(state)
 	local add_context = function()
 		M.add_context()
 	end
+	local open_changes = function()
+		M.open_changes()
+	end
 
 	for _, bufnr in ipairs({ state.output_buf, state.input_buf }) do
 		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
+		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
 	end
 
 	vim.keymap.set("n", "<leader>ac", add_context, { buffer = state.input_buf, desc = "Add ACP editor context" })
@@ -847,6 +854,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpSessions", function()
 		M.focus_sessions()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpChanges", function()
+		M.open_changes()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpHistory", function()
@@ -1015,6 +1026,18 @@ function M.add_context()
 	end
 end
 
+function M.open_changes()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	if not changes.open_quickfix(state) then
+		notify("No ACP file changes recorded for this session", vim.log.levels.WARN)
+		return
+	end
+end
+
 function M.send()
 	local state = current_state()
 	if not state then
@@ -1067,8 +1090,11 @@ function M.send()
 			append_lines(state, { "", ("Tool update: %s"):format(update.status or update.title or "updated"), "" })
 		end,
 		file_written = function(path)
-			set_run_status(state, ("wrote %s"):format(vim.fn.fnamemodify(path, ":.")))
-			append_lines(state, { "", ("Wrote %s"):format(vim.fn.fnamemodify(path, ":.")), "" })
+			local entry = changes.record(state, path)
+			local display = entry and entry.display or vim.fn.fnamemodify(path, ":.")
+			set_run_status(state, ("wrote %s"):format(display))
+			append_lines(state, { "", ("Wrote %s"):format(display), "Use :AcpChanges to review changed files.", "" })
+			refresh_session_panels()
 		end,
 		session_info = function(update)
 			if update.title and update.title ~= "" then

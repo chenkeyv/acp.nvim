@@ -1,4 +1,5 @@
 local jsonrpc = require("acp.jsonrpc")
+local acp_changes = require("acp.changes")
 local acp_context = require("acp.context")
 local acp_diagnostics = require("acp.diagnostics")
 local file_review = require("acp.file_review")
@@ -66,6 +67,7 @@ test("setup registers public user commands", function()
 		"AcpSend",
 		"AcpStop",
 		"AcpSessions",
+		"AcpChanges",
 		"AcpHistory",
 		"AcpAddContext",
 		"AcpFixDiagnostics",
@@ -73,6 +75,40 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("changes module records unique written files for quickfix", function()
+	local root = vim.fn.tempname()
+	vim.fn.mkdir(vim.fs.joinpath(root, "nested"), "p")
+	local first = vim.fs.joinpath(root, "example.txt")
+	local second = vim.fs.joinpath(root, "nested", "other.txt")
+	vim.fn.writefile({ "one" }, first)
+	vim.fn.writefile({ "two" }, second)
+
+	local state = {
+		id = 12,
+		connection = {
+			cwd = root,
+		},
+	}
+	acp_changes.record(state, first)
+	acp_changes.record(state, first)
+	acp_changes.record(state, second)
+
+	eq(acp_changes.count(state), 2)
+	local items = acp_changes.items(state)
+	eq(items[1].filename, vim.fs.normalize(first))
+	eq(items[1].text, "ACP wrote example.txt (2 writes)")
+	eq(items[2].filename, vim.fs.normalize(second))
+	eq(items[2].text, "ACP wrote nested/other.txt")
+
+	ok(acp_changes.open_quickfix(state), "quickfix should open for recorded changes")
+	local qf = vim.fn.getqflist({ title = 1, items = 1 })
+	eq(qf.title, "ACP changes #12")
+	eq(#qf.items, 2)
+	vim.cmd("cclose")
+
+	vim.fn.delete(root, "rf")
 end)
 
 test("history saves transcript metadata and lists entries", function()
