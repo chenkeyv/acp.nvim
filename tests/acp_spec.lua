@@ -94,6 +94,7 @@ test("setup registers public user commands", function()
 		"AcpChanges",
 		"AcpChangesQuickfix",
 		"AcpOutput",
+		"AcpOutputMap",
 		"AcpOutputSearch",
 		"AcpOutputItems",
 		"AcpOutputItemsQuickfix",
@@ -656,6 +657,29 @@ test("output dashboard and section helpers are rendered", function()
 	eq(item_qf[1].bufnr, 99)
 	eq(item_qf[1].lnum, 1)
 	ok(item_qf[1].text:find("PROBLEM", 1, true))
+	local map_entries = acp_output.output_map_entries({
+		"Status: error: failed",
+		"Agent",
+		"```lua",
+		"print(1)",
+		"```",
+		ref_line,
+	}, {})
+	eq(map_entries[1].kind, "section")
+	eq(map_entries[2].kind, "problem")
+	eq(map_entries[4].kind, "code")
+	local map_lines, line_entries = acp_output.output_map_lines(map_entries, {
+		current_line = 4,
+		total_lines = 6,
+	})
+	local map_text = table.concat(map_lines, "\n")
+	ok(map_text:find("ACP Output Map", 1, true))
+	ok(map_text:find("PROBLEM", 1, true))
+	ok(map_text:find("CODE", 1, true))
+	ok(map_text:find("REFERENCE", 1, true))
+	ok(map_text:find(">    3", 1, true))
+	ok(map_text:find("<Enter> to jump", 1, true))
+	eq(line_entries[6].kind, "code")
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 1).kind, "code")
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 6, -1).kind, "code")
 	local current_problem = acp_output.current_output_item({
@@ -1134,6 +1158,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		ok(prompt_actions_text:find("Source diagnostics", 1, true))
 		ok(prompt_actions_text:find("Tree-sitter nodes", 1, true))
 		ok(prompt_actions_text:find("Search output", 1, true))
+		ok(prompt_actions_text:find("Output map", 1, true))
 
 		local prompt_preview = false
 		for _, winid in ipairs(vim.api.nvim_list_wins()) do
@@ -1673,6 +1698,34 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(ref_highlight, "output references should be highlighted inline")
 		ok(ref_sign, "output references should render a sign marker")
 		ok(ref_badge, "output references should render a badge")
+		vim.cmd("AcpOutputMap")
+		local map_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[map_buf].filetype, "acp-output-map")
+		local output_map = vim.api.nvim_buf_get_lines(map_buf, 0, -1, false)
+		local output_map_text = table.concat(output_map, "\n")
+		ok(output_map_text:find("ACP Output Map", 1, true))
+		ok(output_map_text:find("PROBLEM", 1, true))
+		ok(output_map_text:find("CODE", 1, true))
+		ok(output_map_text:find("REFERENCE", 1, true))
+		local map_code_row
+		for index, map_line in ipairs(output_map) do
+			if map_line:find("CODE", 1, true) then
+				map_code_row = index
+				break
+			end
+		end
+		ok(map_code_row, "output map should include code rows")
+		vim.api.nvim_win_set_cursor(0, { map_code_row, 0 })
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_win(), output_win)
+		eq(vim.api.nvim_buf_get_lines(output_buf, vim.api.nvim_win_get_cursor(output_win)[1] - 1, vim.api.nvim_win_get_cursor(output_win)[1], false)[1], "```lua")
+		vim.cmd("AcpOutputMap")
+		eq(vim.api.nvim_get_current_buf(), map_buf)
+		keys = vim.api.nvim_replace_termcodes("q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		ok(not vim.api.nvim_buf_is_valid(map_buf), "output map should close with q")
+		vim.api.nvim_set_current_win(output_win)
 		vim.cmd("AcpOutputItems")
 		picker_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[picker_buf].filetype, "acp-output-items")
@@ -1900,6 +1953,7 @@ test("actions command opens a session action palette", function()
 		eq(vim.bo[action_buf].filetype, "acp-actions")
 		local action_lines = vim.api.nvim_buf_get_lines(action_buf, 0, -1, false)
 		local output_outline_row
+		local output_map = false
 		local output_items = false
 		local output_items_quickfix = false
 		local inspect_output = false
@@ -1910,6 +1964,9 @@ test("actions command opens a session action palette", function()
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
 				output_outline_row = index
+			end
+			if line:find("Output map", 1, true) then
+				output_map = true
 			end
 			if line:find("Output items", 1, true) then
 				output_items = true
@@ -1934,6 +1991,7 @@ test("actions command opens a session action palette", function()
 			end
 		end
 		ok(output_outline_row, "action palette should include output outline")
+		ok(output_map, "action palette should include output map")
 		ok(output_items, "action palette should include output items")
 		ok(output_items_quickfix, "action palette should include output item quickfix")
 		ok(inspect_output, "action palette should include output inspect")
@@ -2010,6 +2068,7 @@ test("chat marks captured source ranges and clears them on close", function()
 		ok(actions_text:find("Refresh source", 1, true))
 		ok(actions_text:find("Tree-sitter nodes", 1, true))
 		ok(actions_text:find("Search output", 1, true))
+		ok(actions_text:find("Output map", 1, true))
 
 		local preview_found = false
 		for _, winid in ipairs(vim.api.nvim_list_wins()) do

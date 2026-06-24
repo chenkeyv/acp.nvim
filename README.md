@@ -23,6 +23,7 @@ This plugin provides an editor-native ACP chat surface:
 - cursor-aware current-item highlighting for references, code blocks, and problems
 - unified output item picker for references, code blocks, and problems with previews
 - searchable output transcript picker with progress, context previews, and jump-to-line navigation
+- persistent floating output map for live section, problem, code, and reference navigation
 - current-section yank action with a short visual pulse in the output buffer
 - follow-up prompt drafting from the current output section
 - direct `gf` navigation from transcript file references into source
@@ -145,6 +146,7 @@ vim.g.acp_nvim_config = {
 - `:AcpChanges` opens a previewed picker of files changed in the current ACP session
 - `:AcpChangesQuickfix` opens a quickfix list of files changed in the current ACP session
 - `:AcpOutput` opens a floating outline of the current output transcript
+- `:AcpOutputMap` opens a persistent floating output map for sections and transcript items
 - `:AcpOutputSearch` opens every non-empty output line with context previews
 - `:AcpOutputItems` opens references, code blocks, and problems from the current output
 - `:AcpOutputItemsQuickfix` sends output references, code blocks, and problems to quickfix
@@ -194,6 +196,7 @@ In the prompt buffer:
 - `<C-Space>` opens native ACP prompt completion
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
+- `<leader>am` opens a persistent output map
 - `<leader>aO` opens output references, code blocks, and problems
 - `<leader>ay` yanks the current output section
 - `<leader>ai` inserts the current output section as follow-up prompt context
@@ -228,6 +231,7 @@ In the output buffer:
 - `K` previews the reference, code block, problem, or section under the cursor
 - `gf` opens the local file reference under the cursor
 - `<leader>ax` searches output transcript lines
+- `<leader>am` opens a persistent output map
 - `<leader>aO` opens output references, code blocks, and problems
 - `<leader>ay` yanks the current output section
 - `<leader>ai` inserts the current output section as follow-up prompt context

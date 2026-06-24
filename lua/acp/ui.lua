@@ -61,10 +61,12 @@ local output_current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current
 local output_item_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_item")
 local output_hint_ns = vim.api.nvim_create_namespace("acp.nvim.output.hints")
 local output_pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
+local output_map_ns = vim.api.nvim_create_namespace("acp.nvim.output.map")
 local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
 local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 local session_panel_ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
 local source_ns = vim.api.nvim_create_namespace("acp.nvim.source")
+local output_map_lines = {}
 
 local function notify(message, level)
 	vim.notify(message, level or vim.log.levels.INFO, { title = "ACP" })
@@ -77,6 +79,9 @@ end
 local function valid_win(winid)
 	return winid and vim.api.nvim_win_is_valid(winid)
 end
+
+local set_buf_options
+local refresh_output_chrome
 
 local function define_highlights()
 	output.define_highlights()
@@ -320,6 +325,222 @@ local function refresh_output_cursor_hint(state)
 	})
 end
 
+local function set_output_map_lines(bufnr, lines)
+	if not valid_buf(bufnr) then
+		return
+	end
+
+	vim.bo[bufnr].modifiable = true
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+end
+
+local function output_map_config(state, line_count)
+	if not valid_win(state.output_win) then
+		return nil
+	end
+
+	local output_width = vim.api.nvim_win_get_width(state.output_win)
+	local output_height = vim.api.nvim_win_get_height(state.output_win)
+	local available_width = math.max(12, output_width - 2)
+	local width = math.min(available_width, math.max(28, math.min(46, math.floor(output_width * 0.42))))
+	local max_height = math.max(3, output_height - 2)
+	local height = math.max(3, math.min(max_height, math.max(6, line_count or 0)))
+	return {
+		relative = "win",
+		win = state.output_win,
+		anchor = "NE",
+		row = 0,
+		col = output_width,
+		width = width,
+		height = height,
+		style = "minimal",
+		border = "rounded",
+		title = " ACP output map ",
+		title_pos = "left",
+		zindex = 60,
+	}
+end
+
+local function output_map_highlight(entry)
+	if not entry then
+		return "AcpOutputMeta"
+	end
+	if entry.kind == "problem" then
+		return "AcpStatusError"
+	end
+	if entry.kind == "code" then
+		return "AcpCodeFence"
+	end
+	if entry.kind == "reference" then
+		return "AcpOutputReferenceBadge"
+	end
+	return "AcpOutputMeta"
+end
+
+local function refresh_output_map_highlights(state)
+	if not valid_buf(state.output_map_buf) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(state.output_map_buf, output_map_ns, 0, -1)
+	local entries = output_map_lines[state.output_map_buf] or {}
+	local lines = vim.api.nvim_buf_get_lines(state.output_map_buf, 0, -1, false)
+	for index, line in ipairs(lines) do
+		local entry = entries[index]
+		local opts = { priority = 80 }
+		if index == 1 then
+			opts.line_hl_group = "AcpOutputHeader"
+		elseif entry then
+			opts.line_hl_group = output_map_highlight(entry)
+			if line:sub(1, 1) == ">" then
+				opts.virt_text = { { " CURRENT ", "AcpOutputTimeline" } }
+				opts.virt_text_pos = "right_align"
+			end
+		elseif line:match("^Press ") then
+			opts.line_hl_group = "AcpOutputHint"
+		end
+		pcall(vim.api.nvim_buf_set_extmark, state.output_map_buf, output_map_ns, index - 1, 0, opts)
+	end
+end
+
+local function refresh_output_map(state)
+	if not (state and valid_buf(state.output_map_buf)) then
+		return
+	end
+
+	local output_lines = valid_buf(state.output_buf) and vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false) or {}
+	local current_line
+	if valid_win(state.output_win) and vim.api.nvim_win_get_buf(state.output_win) == state.output_buf then
+		current_line = vim.api.nvim_win_get_cursor(state.output_win)[1]
+	end
+	local entries = output.output_map_entries(output_lines, { cwd = state.cwd })
+	local lines, line_entries = output.output_map_lines(entries, {
+		current_line = current_line,
+		total_lines = #output_lines,
+	})
+	output_map_lines[state.output_map_buf] = line_entries
+	set_output_map_lines(state.output_map_buf, lines)
+	refresh_output_map_highlights(state)
+	if valid_win(state.output_map_win) then
+		local map_config = output_map_config(state, #lines)
+		if map_config then
+			pcall(vim.api.nvim_win_set_config, state.output_map_win, map_config)
+		end
+	end
+end
+
+local function close_output_map(state)
+	if not state then
+		return
+	end
+
+	local bufnr = state.output_map_buf
+	if valid_win(state.output_map_win) then
+		pcall(vim.api.nvim_win_close, state.output_map_win, true)
+	end
+	if valid_buf(bufnr) then
+		states[bufnr] = nil
+		output_map_lines[bufnr] = nil
+		pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+	end
+	state.output_map_win = nil
+	state.output_map_buf = nil
+end
+
+local function jump_output_map_entry(state)
+	if not state or not valid_buf(state.output_map_buf) then
+		return false
+	end
+
+	local row = vim.api.nvim_win_get_cursor(0)[1]
+	local entry = output_map_lines[state.output_map_buf] and output_map_lines[state.output_map_buf][row]
+	if not entry then
+		return false
+	end
+
+	local winid = valid_win(state.output_win) and state.output_win or vim.fn.bufwinid(state.output_buf)
+	if not valid_win(winid) then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	vim.api.nvim_set_current_win(winid)
+	pcall(vim.api.nvim_win_set_cursor, winid, { entry.line or 1, math.max(0, (entry.col or 1) - 1) })
+	refresh_output_chrome(state)
+	return true
+end
+
+local function open_output_map(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+	if not valid_win(state.output_win) then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	if not valid_buf(state.output_map_buf) then
+		state.output_map_buf = vim.api.nvim_create_buf(false, true)
+		states[state.output_map_buf] = state
+		vim.api.nvim_buf_set_name(state.output_map_buf, ("ACP://%s/%d/output-map"):format(state.adapter, state.id))
+		set_buf_options(state.output_map_buf, {
+			bufhidden = "wipe",
+			buftype = "nofile",
+			filetype = "acp-output-map",
+			modifiable = true,
+			swapfile = false,
+		})
+		vim.keymap.set("n", "q", function()
+			close_output_map(state)
+		end, { buffer = state.output_map_buf, desc = "Close ACP output map" })
+		vim.keymap.set("n", "<Esc>", function()
+			close_output_map(state)
+		end, { buffer = state.output_map_buf, desc = "Close ACP output map" })
+		vim.keymap.set("n", "<CR>", function()
+			jump_output_map_entry(state)
+		end, { buffer = state.output_map_buf, desc = "Jump to ACP output map entry" })
+		if state.group then
+			local map_buf = state.output_map_buf
+			vim.api.nvim_create_autocmd("BufWipeout", {
+				group = state.group,
+				buffer = map_buf,
+				callback = function()
+					output_map_lines[map_buf] = nil
+					states[map_buf] = nil
+					if state.output_map_buf == map_buf then
+						state.output_map_buf = nil
+					end
+					state.output_map_win = nil
+				end,
+			})
+		end
+	end
+
+	refresh_output_map(state)
+	if valid_win(state.output_map_win) then
+		vim.api.nvim_set_current_win(state.output_map_win)
+		return true
+	end
+
+	local map_config = output_map_config(state, vim.api.nvim_buf_line_count(state.output_map_buf))
+	if not map_config then
+		return false
+	end
+	state.output_map_win = vim.api.nvim_open_win(state.output_map_buf, true, map_config)
+	vim.wo[state.output_map_win].cursorline = true
+	vim.wo[state.output_map_win].wrap = false
+	vim.wo[state.output_map_win].number = false
+	vim.wo[state.output_map_win].relativenumber = false
+	vim.wo[state.output_map_win].signcolumn = "no"
+	pcall(function()
+		vim.wo[state.output_map_win].winfixbuf = true
+	end)
+	refresh_output_map_highlights(state)
+	return true
+end
+
 local function pulse_output_section(state, range)
 	if not (state and range and valid_buf(state.output_buf)) then
 		return
@@ -377,7 +598,7 @@ local function save_output_history(state)
 	end
 end
 
-local function set_buf_options(bufnr, opts)
+function set_buf_options(bufnr, opts)
 	for key, value in pairs(opts) do
 		vim.bo[bufnr][key] = value
 	end
@@ -414,6 +635,7 @@ local function set_output_lines(state, start, stop, lines)
 	refresh_current_output_section(state)
 	refresh_current_output_item(state)
 	refresh_output_cursor_hint(state)
+	refresh_output_map(state)
 	save_output_history(state)
 	if refresh_output_dashboard and not state.refreshing_output_dashboard and start ~= 0 then
 		refresh_output_dashboard(state)
@@ -547,7 +769,7 @@ function refresh_output_dashboard(state)
 	state.refreshing_output_dashboard = false
 end
 
-local function refresh_output_chrome(state)
+function refresh_output_chrome(state)
 	if not valid_win(state.output_win) then
 		return
 	end
@@ -563,6 +785,7 @@ local function refresh_output_chrome(state)
 	refresh_current_output_section(state)
 	refresh_current_output_item(state)
 	refresh_output_cursor_hint(state)
+	refresh_output_map(state)
 	local title = output.window_title(state, {
 		change_count = changes.count(state),
 		current_section = current_section,
@@ -2012,6 +2235,9 @@ local function output_action_items(state, context_info)
 	add("Search output", "Search every non-empty transcript line", "<leader>ax", function()
 		open_output_search(state)
 	end)
+	add("Output map", "Keep a live transcript map beside the output", "<leader>am", function()
+		open_output_map(state)
+	end)
 	add("Output outline", "Jump across transcript sections", "<leader>av", function()
 		open_output_outline(state)
 	end)
@@ -2115,6 +2341,9 @@ local function prompt_action_items()
 	end)
 	add("Search output", "Search every non-empty transcript line with context preview", "<leader>ax", "output", function()
 		M.open_output_search()
+	end)
+	add("Output map", "Keep a live transcript map beside the output", "<leader>am", "output", function()
+		M.open_output_map()
 	end)
 	add("Output items", "Browse references, code blocks, and problems in one picker", "<leader>aO", "output", function()
 		M.open_output_items()
@@ -2778,6 +3007,7 @@ local function unregister(state)
 	state.connection:stop()
 	stop_output_animation(state)
 	close_output_inspector(state)
+	close_output_map(state)
 	clear_source_marks(state)
 	unlink_source_state(state)
 	session_panel_lines[state.session_panel_buf] = nil
@@ -2868,6 +3098,9 @@ local function register_keymaps(state)
 	local open_output = function()
 		open_output_outline(state)
 	end
+	local open_map = function()
+		open_output_map(state)
+	end
 	local open_search = function()
 		open_output_search(state)
 	end
@@ -2954,6 +3187,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 		vim.keymap.set("n", "<leader>av", open_output, { buffer = bufnr, desc = "Open ACP output outline" })
+		vim.keymap.set("n", "<leader>am", open_map, { buffer = bufnr, desc = "Open ACP output map" })
 		vim.keymap.set("n", "<leader>ax", open_search, { buffer = bufnr, desc = "Search ACP output" })
 		vim.keymap.set("n", "<leader>aO", open_output_item_picker, { buffer = bufnr, desc = "Browse ACP output items" })
 		vim.keymap.set("n", "<leader>ay", yank_section, { buffer = bufnr, desc = "Yank current ACP output section" })
@@ -3159,6 +3393,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutput", function()
 		M.open_output()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputMap", function()
+		M.open_output_map()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpOutputSearch", function()
@@ -3601,6 +3839,9 @@ local function action_palette_items(state)
 		add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "session", function()
 			M.open_output()
 		end)
+		add_action(items, "Output map", "Keep a live transcript map beside the output", "<leader>am", "session", function()
+			M.open_output_map()
+		end)
 		add_action(items, "Search output", "Search every non-empty transcript line with context preview", "<leader>ax", "session", function()
 			M.open_output_search()
 		end)
@@ -3876,6 +4117,10 @@ local function source_action_items(state)
 	add("Search output", "Search the linked ACP transcript with previews", "<leader>ax", "output", function()
 		focus_session(state)
 		M.open_output_search()
+	end)
+	add("Output map", "Keep a live transcript map beside the linked output", "<leader>am", "output", function()
+		focus_session(state)
+		M.open_output_map()
 	end)
 	add("Output items", "Browse references, code blocks, and problems in the linked transcript", "<leader>aO", "output", function()
 		focus_session(state)
@@ -4679,6 +4924,15 @@ function M.open_output()
 	end
 
 	open_output_outline(state)
+end
+
+function M.open_output_map()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_map(state)
 end
 
 function M.open_output_search()

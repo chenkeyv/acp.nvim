@@ -724,6 +724,79 @@ function M.outline_lines(sections, opts)
 	return lines, line_sections
 end
 
+local map_kind_priority = {
+	section = 1,
+	problem = 2,
+	code = 3,
+	reference = 4,
+}
+
+function M.output_map_entries(lines, opts)
+	opts = opts or {}
+	lines = lines or {}
+	local entries = {}
+	local total = #lines
+
+	for _, section in ipairs(M.sections(lines)) do
+		table.insert(entries, {
+			kind = "section",
+			line = section.line,
+			col = 1,
+			label = ("%s: %s"):format(section.kind or "SECTION", section.title or "section"),
+			total_lines = total,
+		})
+	end
+
+	for _, item in ipairs(M.output_items(lines, opts)) do
+		table.insert(entries, {
+			kind = item.kind or "item",
+			line = item.line or 1,
+			line2 = item.line2,
+			col = item.col or 1,
+			label = item.label or item.kind or "item",
+			total_lines = total,
+		})
+	end
+
+	table.sort(entries, function(left, right)
+		if left.line == right.line then
+			return (map_kind_priority[left.kind] or 9) < (map_kind_priority[right.kind] or 9)
+		end
+		return left.line < right.line
+	end)
+	return entries
+end
+
+function M.output_map_lines(entries, opts)
+	opts = opts or {}
+	local lines = { "ACP Output Map", "" }
+	local line_entries = {}
+	local current_line = tonumber(opts.current_line)
+	local total = tonumber(opts.total_lines)
+
+	for _, entry in ipairs(entries or {}) do
+		total = total or entry.total_lines
+		local label = clean(entry.label) or entry.kind or "item"
+		if #label > 44 then
+			label = label:sub(1, 41) .. "..."
+		end
+		local line1 = tonumber(entry.line) or 1
+		local line2 = tonumber(entry.line2) or line1
+		local marker = current_line and current_line >= line1 and current_line <= line2 and ">" or " "
+		local progress = position_percent(line1, total) or "   ?"
+		table.insert(lines, ("%s %4d  %s  %-9s  %s"):format(marker, line1, progress, (entry.kind or "item"):upper(), label))
+		line_entries[#lines] = entry
+	end
+
+	if #lines == 2 then
+		table.insert(lines, "No transcript map entries yet")
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Press <Enter> to jump, or q/<Esc> to close.")
+	return lines, line_entries
+end
+
 function M.animation_frame(index)
 	local number = tonumber(index) or 1
 	return animation_frames[((number - 1) % #animation_frames) + 1]
@@ -1181,6 +1254,7 @@ function M.output_items(lines, opts)
 		table.insert(items, {
 			kind = "code",
 			line = block.start_line or 1,
+			line2 = block.end_line or block.start_line or 1,
 			col = 1,
 			label = ("%s code block"):format(block.language or "text"),
 			total_lines = #lines,
