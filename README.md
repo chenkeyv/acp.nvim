@@ -27,7 +27,7 @@ This plugin provides an editor-native ACP chat surface:
 - inline reference highlights with `R>` signs and right-aligned badges
 - context-aware `<Enter>` action for opening transcript references and code blocks
 - cursor-aware output action picker for item-specific transcript workflows
-- hover-style `K` inspector for output references, code blocks, problems, and sections
+- hover-style `K` inspector for output references, code blocks, problems, and sections with winbar status and close keymaps
 - cursor-aware code-block yank action that copies fenced output without Markdown fences
 - searchable output code-block picker with language-aware previews and scratch buffers
 - code-block scratch buffers with winbar actions, Tree-sitter/filetype status, and yank/close keymaps

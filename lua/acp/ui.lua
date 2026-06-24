@@ -797,6 +797,12 @@ local function code_block_scratch_winbar(block, syntax)
 	)
 end
 
+local function output_inspector_winbar(preview, syntax)
+	local title = preview and preview.title and preview.title:gsub("^%s+", ""):gsub("%s+$", "") or "ACP output inspect"
+	local filetype = preview and preview.filetype or "acp"
+	return (" %s | %s | %s | q close "):format(title, filetype, syntax or "filetype")
+end
+
 local function close_output_inspector(state)
 	if not state then
 		return
@@ -830,6 +836,15 @@ local function open_output_inspector_float(state, preview)
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, preview.lines)
 	vim.bo[bufnr].modifiable = false
 	vim.b[bufnr].acp_output_inspector = state.output_buf
+	local syntax = "filetype"
+	if vim.treesitter and vim.treesitter.start and preview.filetype and preview.filetype ~= "acp" and preview.filetype ~= "text" then
+		local ok = pcall(vim.treesitter.start, bufnr, preview.filetype)
+		syntax = ok and "treesitter" or "filetype"
+	end
+	vim.b[bufnr].acp_output_inspector_syntax = syntax
+	vim.keymap.set("n", "q", function()
+		close_output_inspector(state)
+	end, { buffer = bufnr, desc = "Close ACP output inspector" })
 
 	local winid = vim.api.nvim_open_win(bufnr, false, picker.window_config(preview.lines, {
 		min_width = 48,
@@ -841,7 +856,9 @@ local function open_output_inspector_float(state, preview)
 	vim.wo[winid].cursorline = true
 	vim.wo[winid].number = true
 	vim.wo[winid].relativenumber = false
+	vim.wo[winid].signcolumn = "yes:1"
 	vim.wo[winid].wrap = false
+	vim.wo[winid].winbar = output_inspector_winbar(preview, syntax):gsub("%%", "%%%%")
 	pcall(vim.api.nvim_win_set_cursor, winid, { math.max(1, preview.cursor_line or 1), 0 })
 
 	state.output_inspector_buf = bufnr

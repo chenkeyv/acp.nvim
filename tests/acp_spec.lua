@@ -1249,6 +1249,18 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.cmd("AcpOutputInspect")
 		local problem_preview_win, problem_preview = output_inspector_text("acp")
 		ok(problem_preview and problem_preview:find("failed to start session", 1, true), "output inspector should preview problems")
+		ok(vim.wo[problem_preview_win].winbar:find("ACP output problem", 1, true))
+		ok(vim.wo[problem_preview_win].winbar:find("q close", 1, true))
+		eq(vim.b[vim.api.nvim_win_get_buf(problem_preview_win)].acp_output_inspector_syntax, "filetype")
+		local problem_keymaps = vim.api.nvim_buf_get_keymap(vim.api.nvim_win_get_buf(problem_preview_win), "n")
+		local problem_has_close = false
+		for _, keymap in ipairs(problem_keymaps) do
+			if keymap.lhs == "q" then
+				problem_has_close = true
+				break
+			end
+		end
+		ok(problem_has_close, "output inspector should map q to close")
 		pcall(vim.api.nvim_win_close, problem_preview_win, true)
 		vim.api.nvim_set_current_win(output_win)
 		vim.cmd("AcpOutputActions")
@@ -1410,6 +1422,11 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.cmd("AcpOutputInspect")
 		local code_preview_win, code_preview = output_inspector_text("lua")
 		ok(code_preview and code_preview:find("print('from acp')", 1, true), "output inspector should preview code blocks")
+		ok(vim.wo[code_preview_win].winbar:find("lua lines", 1, true))
+		ok(
+			vim.b[vim.api.nvim_win_get_buf(code_preview_win)].acp_output_inspector_syntax == "treesitter"
+				or vim.b[vim.api.nvim_win_get_buf(code_preview_win)].acp_output_inspector_syntax == "filetype"
+		)
 		pcall(vim.api.nvim_win_close, code_preview_win, true)
 		unnamed_register = vim.fn.getreg('"')
 		unnamed_register_type = vim.fn.getregtype('"')
@@ -1538,6 +1555,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.cmd("AcpOutputInspect")
 		local ref_preview_win, ref_preview = output_inspector_text("lua")
 		ok(ref_preview and ref_preview:find("local M = {}", 1, true), "output inspector should preview file references")
+		ok(vim.wo[ref_preview_win].winbar:find("lua/acp/output.lua:1", 1, true))
 		pcall(vim.api.nvim_win_close, ref_preview_win, true)
 		vim.cmd("AcpOutputOpen")
 		location_buf = vim.api.nvim_get_current_buf()
