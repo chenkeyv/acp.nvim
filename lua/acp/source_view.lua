@@ -1,3 +1,5 @@
+local document_colors = require("acp.document_colors")
+
 local M = {}
 
 local severity_order = {
@@ -91,6 +93,57 @@ local function highlight_marks(source, highlights)
 	return marks
 end
 
+local function color_marks(source, colors)
+	if not (source and valid_buf(source.bufnr)) then
+		return {}
+	end
+
+	local line_count = vim.api.nvim_buf_line_count(source.bufnr)
+	local marks = {}
+	for _, item in ipairs(colors or {}) do
+		local range = document_colors.range(item)
+		if range and range.line1 and range.line2 then
+			local line1 = math.max(1, math.min(range.line1, line_count))
+			local line2 = math.max(1, math.min(range.line2, line_count))
+			if line2 < line1 then
+				line1, line2 = line2, line1
+			end
+			local color_hl = document_colors.highlight_group(item)
+			for line = line1, line2 do
+				local text = vim.api.nvim_buf_get_lines(source.bufnr, line - 1, line, false)[1] or ""
+				local line_length = #text
+				local start_col = line == line1 and math.max(0, (range.col1 or 1) - 1) or 0
+				start_col = math.min(start_col, line_length)
+				local end_col = line == line2 and math.max(start_col + 1, (range.col2 or start_col + 2) - 1) or line_length
+				end_col = math.min(end_col, line_length)
+				if end_col > start_col then
+					table.insert(marks, {
+						line = line,
+						col = start_col,
+						opts = {
+							end_col = end_col,
+							hl_group = "AcpSourceColorRange",
+							priority = 76,
+						},
+					})
+				end
+			end
+			table.insert(marks, {
+				line = line1,
+				col = 0,
+				opts = {
+					virt_text = { { (" COLOR %s "):format(document_colors.label(item)), color_hl } },
+					virt_text_pos = "right_align",
+					sign_text = "C>",
+					sign_hl_group = color_hl,
+					priority = 86,
+				},
+			})
+		end
+	end
+	return marks
+end
+
 function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpSourceContext", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpSourceLabel", { link = "Comment", default = true })
@@ -99,6 +152,7 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpSourceHighlightText", { link = "LspReferenceText", default = true })
 	vim.api.nvim_set_hl(0, "AcpSourceHighlightRead", { link = "LspReferenceRead", default = true })
 	vim.api.nvim_set_hl(0, "AcpSourceHighlightWrite", { link = "LspReferenceWrite", default = true })
+	vim.api.nvim_set_hl(0, "AcpSourceColorRange", { link = "Visual", default = true })
 end
 
 function M.marks(state)
@@ -123,9 +177,11 @@ function M.marks(state)
 	local lens_diagnostics = diagnostics and ("diagnostics " .. diagnostics .. "  ") or ""
 	local highlight_count = #(state.source_highlights or {})
 	local lens_highlights = highlight_count > 0 and ("highlights " .. highlight_count .. "  ") or ""
+	local color_count = #(state.source_colors or {})
+	local lens_colors = color_count > 0 and ("colors " .. color_count .. "  ") or ""
 	local lens = (" ACP #%s source context  %s:AcpSourceActions focus/add/refresh/LSP/Tree-sitter "):format(
 		tostring(state.id or "?"),
-		lens_diagnostics .. lens_highlights
+		lens_diagnostics .. lens_highlights .. lens_colors
 	)
 	local marks = {}
 	for line = start_line, end_line do
@@ -149,6 +205,9 @@ function M.marks(state)
 		marks[1].opts.sign_hl_group = "AcpSourceLabel"
 	end
 	for _, mark in ipairs(highlight_marks(source, state.source_highlights)) do
+		table.insert(marks, mark)
+	end
+	for _, mark in ipairs(color_marks(source, state.source_colors)) do
 		table.insert(marks, mark)
 	end
 	return marks

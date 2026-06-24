@@ -40,6 +40,12 @@ local workflows = {
 		info = "Open LSP code lenses as focused ACP context.",
 	},
 	{
+		id = "document_colors",
+		trigger = "@colors",
+		menu = "LSP",
+		info = "Open LSP document colors as visual source context.",
+	},
+	{
 		id = "rename",
 		trigger = "@rename",
 		menu = "LSP",

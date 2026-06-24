@@ -2373,6 +2373,15 @@ local function prompt_action_items()
 	add("Code lens quickfix", "Send source-buffer LSP code lenses to quickfix", ":AcpCodeLensQuickfix", "LSP", function()
 		M.open_code_lens_quickfix()
 	end)
+	add("Document colors", "Show source-buffer LSP document colors as visual swatches", ":AcpDocumentColors", "LSP", function()
+		M.open_document_colors()
+	end)
+	add("Document colors quickfix", "Send source-buffer LSP document colors to quickfix", ":AcpDocumentColorsQuickfix", "LSP", function()
+		M.open_document_colors_quickfix()
+	end)
+	add("Clear document colors", "Clear source-buffer LSP document-color swatches", ":AcpClearDocumentColors", "LSP", function()
+		M.clear_document_colors()
+	end)
 	add("Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
 		M.rename_symbol()
 	end)
@@ -3746,6 +3755,18 @@ function M.setup(opts)
 		M.open_code_lens_quickfix()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpDocumentColors", function()
+		M.open_document_colors()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpDocumentColorsQuickfix", function()
+		M.open_document_colors_quickfix()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpClearDocumentColors", function()
+		M.clear_document_colors()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpRename", function()
 		M.rename_symbol()
 	end, {})
@@ -4290,6 +4311,15 @@ local function action_palette_items(state)
 		add_action(items, "Code lens quickfix", "Send source-buffer LSP code lenses to quickfix", ":AcpCodeLensQuickfix", "LSP", function()
 			M.open_code_lens_quickfix()
 		end)
+		add_action(items, "Document colors", "Show source-buffer LSP document colors as visual swatches", ":AcpDocumentColors", "LSP", function()
+			M.open_document_colors()
+		end)
+		add_action(items, "Document colors quickfix", "Send source-buffer LSP document colors to quickfix", ":AcpDocumentColorsQuickfix", "LSP", function()
+			M.open_document_colors_quickfix()
+		end)
+		add_action(items, "Clear document colors", "Clear source-buffer LSP document-color swatches", ":AcpClearDocumentColors", "LSP", function()
+			M.clear_document_colors()
+		end)
 		add_action(items, "Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
 			M.rename_symbol()
 		end)
@@ -4626,6 +4656,18 @@ local function source_action_items(state)
 	add("LSP highlights", "Show LSP read/write highlights from the source cursor", "<leader>aH", "LSP", function()
 		focus_session(state)
 		M.open_highlights()
+	end)
+	add("Document colors", "Show LSP document colors as source swatches", ":AcpDocumentColors", "LSP", function()
+		focus_session(state)
+		M.open_document_colors()
+	end)
+	add("Document colors quickfix", "Send LSP document colors to quickfix", ":AcpDocumentColorsQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_document_colors_quickfix()
+	end)
+	add("Clear document colors", "Clear LSP document-color swatches", ":AcpClearDocumentColors", "LSP", function()
+		focus_session(state)
+		M.clear_document_colors()
 	end)
 	add("Clear highlights", "Clear LSP highlight marks in the source buffer", ":AcpClearHighlights", "LSP", function()
 		focus_session(state)
@@ -6239,6 +6281,159 @@ function M.open_code_lens_quickfix()
 	M._open_code_lens_quickfix(state)
 end
 
+function M._open_document_color_picker(state, color_list)
+	local document_colors = require("acp.document_colors")
+	if not color_list or #color_list == 0 then
+		notify("No LSP document colors found for the source buffer", vim.log.levels.WARN)
+		return false
+	end
+
+	state.source_colors = color_list
+	refresh_source_marks(state)
+
+	local lines, line_colors = document_colors.picker_lines(color_list)
+	local view
+	view = picker.open({
+		name = ("ACP://%s/%d/document-colors"):format(state.adapter, state.id),
+		filetype = "acp-document-colors",
+		lines = lines,
+		title = " ACP document colors ",
+		submit_desc = "Add ACP document-color context",
+		close_desc = "Close ACP document colors",
+		preview = function(row)
+			local item = line_colors[row]
+			if not item then
+				return nil
+			end
+			return source_preview(
+				state.source.bufnr,
+				document_colors.range(item),
+				(" Document color %s "):format(document_colors.label(item))
+			)
+		end,
+		on_submit = function(row, view)
+			local item = line_colors[row]
+			if not item then
+				return
+			end
+			local prompt, err = document_colors.prompt(state.source, item)
+			if not prompt then
+				notify(err or "Failed to render LSP document-color context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("document color: %s"):format(document_colors.label(item)))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
+	})
+
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		M._open_document_colors_quickfix(state, color_list)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP document colors quickfix" })
+
+	return true
+end
+
+function M._open_document_colors_quickfix(state, color_list)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	local document_colors = require("acp.document_colors")
+	local function open_items(items)
+		if not items or #items == 0 then
+			notify("No LSP document colors found for the source buffer", vim.log.levels.WARN)
+			return false
+		end
+
+		state.source_colors = items
+		refresh_source_marks(state)
+		vim.fn.setqflist({}, " ", {
+			title = ("ACP document colors #%s"):format(tostring(state.id or "?")),
+			items = document_colors.quickfix_items(state.source.bufnr, items),
+		})
+		vim.cmd("copen")
+		if not state.busy then
+			set_run_status(state, "document colors quickfix")
+		end
+		return true
+	end
+
+	if color_list then
+		return open_items(color_list)
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading document colors quickfix")
+	end
+	document_colors.request(state.source, function(items, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_items(items)
+	end)
+	return true
+end
+
+function M.open_document_colors()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local document_colors = require("acp.document_colors")
+	if not state.busy then
+		set_run_status(state, "loading document colors")
+	end
+	document_colors.request(state.source, function(color_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		M._open_document_color_picker(state, color_list)
+	end)
+end
+
+function M.open_document_colors_quickfix()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	M._open_document_colors_quickfix(state)
+end
+
+function M.clear_document_colors()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	state.source_colors = nil
+	refresh_source_marks(state)
+	if not state.busy then
+		set_run_status(state, "document colors cleared")
+	end
+end
+
 function M.rename_symbol()
 	local state = current_state()
 	if not state then
@@ -7326,6 +7521,9 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		code_lens = function()
 			M.open_code_lens()
+		end,
+		document_colors = function()
+			M.open_document_colors()
 		end,
 		rename = function()
 			M.rename_symbol()

@@ -4,6 +4,7 @@ local call_hierarchy = require("acp.call_hierarchy")
 local acp_changes = require("acp.changes")
 local code_actions = require("acp.code_actions")
 local code_lens = require("acp.code_lens")
+local document_colors = require("acp.document_colors")
 local acp_commands = require("acp.commands")
 local acp_config = require("acp.config")
 local acp_context = require("acp.context")
@@ -129,6 +130,9 @@ test("setup registers public user commands", function()
 		"AcpCodeActions",
 		"AcpCodeLens",
 		"AcpCodeLensQuickfix",
+		"AcpDocumentColors",
+		"AcpDocumentColorsQuickfix",
+		"AcpClearDocumentColors",
 		"AcpRename",
 		"AcpSmartContext",
 		"AcpHover",
@@ -385,6 +389,7 @@ test("source view renders LSP document highlights", function()
 	local bufnr = vim.api.nvim_create_buf(true, true)
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
 		"local value = 1",
+		"local color = '#FF8000'",
 		"value = value + 1",
 	})
 
@@ -398,10 +403,21 @@ test("source view renders LSP document highlights", function()
 			{
 				kind = 3,
 				range = {
-					line1 = 2,
-					line2 = 2,
+					line1 = 3,
+					line2 = 3,
 					col1 = 1,
 					col2 = 6,
+				},
+			},
+		},
+		source_colors = {
+			{
+				color = { red = 1, green = 0.5, blue = 0, alpha = 1 },
+				range = {
+					line1 = 2,
+					line2 = 2,
+					col1 = 16,
+					col2 = 23,
 				},
 			},
 		},
@@ -409,17 +425,32 @@ test("source view renders LSP document highlights", function()
 
 	local lens = marks[1].opts.virt_lines[1][1][1]
 	ok(lens:find("highlights 1", 1, true))
+	ok(lens:find("colors 1", 1, true))
 	local highlight_mark
+	local color_range_mark
+	local color_badge_mark
 	for _, mark in ipairs(marks) do
 		if mark.opts.hl_group == "AcpSourceHighlightWrite" then
 			highlight_mark = mark
-			break
+		end
+		if mark.opts.hl_group == "AcpSourceColorRange" then
+			color_range_mark = mark
+		end
+		for _, chunk in ipairs(mark.opts.virt_text or {}) do
+			if chunk[1] and chunk[1]:find("COLOR #FF8000", 1, true) then
+				color_badge_mark = mark
+			end
 		end
 	end
 	ok(highlight_mark, "source highlights should render a write mark")
-	eq(highlight_mark.line, 2)
+	eq(highlight_mark.line, 3)
 	eq(highlight_mark.col, 0)
 	eq(highlight_mark.opts.end_col, 5)
+	ok(color_range_mark, "source document colors should render a range mark")
+	eq(color_range_mark.line, 2)
+	eq(color_range_mark.opts.end_col, 22)
+	ok(color_badge_mark, "source document colors should render a swatch badge")
+	eq(color_badge_mark.opts.sign_text, "C>")
 
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
@@ -1228,6 +1259,67 @@ test("LSP document highlights are normalized for source marks", function()
 	eq(lsp_highlights.kind_name(items[2].kind), "text")
 end)
 
+test("LSP document colors are normalized and rendered", function()
+	local items = document_colors.normalize({
+		{
+			range = {
+				start = { line = 2, character = 10 },
+				["end"] = { line = 2, character = 17 },
+			},
+			color = {
+				red = 0.2,
+				green = 0.4,
+				blue = 0.6,
+				alpha = 1,
+			},
+		},
+		{
+			range = {
+				start = { line = 0, character = 1 },
+				["end"] = { line = 0, character = 8 },
+			},
+			color = {
+				red = 1,
+				green = 0.5,
+				blue = 0,
+				alpha = 0.5,
+			},
+		},
+	})
+
+	eq(#items, 2)
+	eq(document_colors.label(items[1]), "#FF8000 alpha 0.50")
+	eq(document_colors.hex(items[2].color), "#336699")
+	eq(document_colors.range(items[2]).line1, 3)
+
+	local lines, line_items = document_colors.picker_lines(items)
+	local text = table.concat(lines, "\n")
+	ok(text:find("ACP Document Colors", 1, true))
+	ok(text:find("#FF8000 alpha 0.50", 1, true))
+	ok(text:find("Q for quickfix", 1, true))
+	eq(line_items[3], items[1])
+
+	local qf_items = document_colors.quickfix_items(42, items)
+	eq(qf_items[1].bufnr, 42)
+	eq(qf_items[1].lnum, 1)
+	ok(qf_items[2].text:find("DOCUMENT COLOR: #336699", 1, true))
+
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_name(bufnr, vim.fn.tempname() .. ".lua")
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"local color = '#FF8000'",
+		"local other = '#336699'",
+		"return color .. other",
+	})
+	vim.bo[bufnr].filetype = "lua"
+	local prompt = document_colors.prompt({ bufnr = bufnr }, items[1])
+	ok(prompt:find("Use this LSP document color as context: #FF8000 alpha 0.50.", 1, true))
+	ok(prompt:find("Document color:", 1, true))
+	ok(prompt:find("Selection: lines 1-1", 1, true))
+	ok(prompt:find("local color = '#FF8000'", 1, true))
+	pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+end)
+
 test("Tree-sitter nodes are collected and rendered for picker", function()
 	local root = {}
 	function root:type()
@@ -1770,6 +1862,9 @@ test("slash command completion items are rendered for completefunc", function()
 	local code_lens_item = prompt_completion.items(commands, "@code-l")[1]
 	eq(code_lens_item.word, "@code-lens")
 	eq(prompt_completion.action_id(code_lens_item), "code_lens")
+	local colors_item = prompt_completion.items(commands, "@col")[1]
+	eq(colors_item.word, "@colors")
+	eq(prompt_completion.action_id(colors_item), "document_colors")
 	local rename_item = prompt_completion.items(commands, "@ren")[1]
 	eq(rename_item.word, "@rename")
 	eq(prompt_completion.action_id(rename_item), "rename")
@@ -2774,6 +2869,9 @@ test("actions command opens a session action palette", function()
 		local workspace_diagnostics_quickfix = false
 		local code_lens_action = false
 		local code_lens_quickfix = false
+		local document_colors_action = false
+		local document_colors_quickfix = false
+		local clear_document_colors = false
 		local rename_action = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
@@ -2815,6 +2913,15 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Code lens quickfix", 1, true) then
 				code_lens_quickfix = true
+			end
+			if line:find("Document colors", 1, true) then
+				document_colors_action = true
+			end
+			if line:find("Document colors quickfix", 1, true) then
+				document_colors_quickfix = true
+			end
+			if line:find("Clear document colors", 1, true) then
+				clear_document_colors = true
 			end
 			if line:find("Rename symbol", 1, true) then
 				rename_action = true
@@ -2881,6 +2988,9 @@ test("actions command opens a session action palette", function()
 		ok(smart_context_action, "action palette should include smart context")
 		ok(code_lens_action, "action palette should include code lens")
 		ok(code_lens_quickfix, "action palette should include code lens quickfix")
+		ok(document_colors_action, "action palette should include document colors")
+		ok(document_colors_quickfix, "action palette should include document colors quickfix")
+		ok(clear_document_colors, "action palette should include clear document colors")
 		ok(rename_action, "action palette should include rename")
 		ok(signature_help, "action palette should include signature help")
 		ok(inlay_hints_action, "action palette should include inlay hints")
@@ -4061,6 +4171,141 @@ test("highlights command renders and clears LSP document highlights", function()
 		for _, mark in ipairs(marks) do
 			local details = mark[4] or {}
 			ok(details.hl_group ~= "AcpSourceHighlightWrite", "AcpClearHighlights should clear LSP highlight marks")
+		end
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("document colors command renders swatches, quickfix, and prompt context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local color = '#336699'",
+		"return color",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 15 })
+
+	local uri = vim.uri_from_bufnr(source_buf)
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/documentColor")
+		eq(params.textDocument.uri, uri)
+		callback({
+			[1] = {
+				result = {
+					{
+						range = {
+							start = { line = 0, character = 15 },
+							["end"] = { line = 0, character = 22 },
+						},
+						color = {
+							red = 0.2,
+							green = 0.4,
+							blue = 0.6,
+							alpha = 1,
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local input_win
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		input_win = vim.api.nvim_get_current_win()
+		vim.cmd("AcpDocumentColors")
+
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-document-colors")
+		local picker_text = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+		ok(picker_text:find("ACP Document Colors", 1, true))
+		ok(picker_text:find("#336699", 1, true))
+
+		local ns = vim.api.nvim_create_namespace("acp.nvim.source")
+		local marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
+		local color_range_found = false
+		local color_badge_found = false
+		local lens_found = false
+		for _, mark in ipairs(marks) do
+			local details = mark[4] or {}
+			if details.hl_group == "AcpSourceColorRange" then
+				color_range_found = true
+				eq(mark[2] + 1, 1)
+				eq(mark[3], 15)
+				eq(details.end_col, 22)
+			end
+			for _, chunk in ipairs(details.virt_text or {}) do
+				if chunk[1] and chunk[1]:find("COLOR #336699", 1, true) then
+					color_badge_found = true
+					eq(details.sign_text, "C>")
+				end
+			end
+			for _, line in ipairs(details.virt_lines or {}) do
+				for _, chunk in ipairs(line) do
+					if chunk[1] and chunk[1]:find("colors 1", 1, true) then
+						lens_found = true
+					end
+				end
+			end
+		end
+		ok(color_range_found, "AcpDocumentColors should render the color range")
+		ok(color_badge_found, "AcpDocumentColors should render a color swatch badge")
+		ok(lens_found, "source lens should include document color count")
+
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local qf = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qf.title:find("ACP document colors", 1, true))
+		eq(#qf.items, 1)
+		ok(qf.items[1].text:find("DOCUMENT COLOR: #336699", 1, true))
+		vim.cmd("cclose")
+
+		if input_win and vim.api.nvim_win_is_valid(input_win) then
+			vim.api.nvim_set_current_win(input_win)
+		end
+		vim.cmd("AcpDocumentColorsQuickfix")
+		qf = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qf.title:find("ACP document colors", 1, true))
+		eq(#qf.items, 1)
+		vim.cmd("cclose")
+
+		if input_win and vim.api.nvim_win_is_valid(input_win) then
+			vim.api.nvim_set_current_win(input_win)
+		end
+		vim.cmd("AcpDocumentColors")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP document color as context: #336699.", 1, true))
+		ok(prompt:find("Document color:", 1, true))
+		ok(prompt:find("Selection: lines 1-1", 1, true))
+		ok(prompt:find("local color = '#336699'", 1, true))
+
+		vim.cmd("AcpClearDocumentColors")
+		marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
+		for _, mark in ipairs(marks) do
+			local details = mark[4] or {}
+			ok(details.hl_group ~= "AcpSourceColorRange", "AcpClearDocumentColors should clear color marks")
 		end
 	end)
 
