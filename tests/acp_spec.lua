@@ -1,5 +1,6 @@
 local jsonrpc = require("acp.jsonrpc")
 local acp_changes = require("acp.changes")
+local acp_commands = require("acp.commands")
 local acp_context = require("acp.context")
 local acp_diagnostics = require("acp.diagnostics")
 local file_review = require("acp.file_review")
@@ -72,6 +73,7 @@ test("setup registers public user commands", function()
 		"AcpStop",
 		"AcpSessions",
 		"AcpChanges",
+		"AcpCommands",
 		"AcpHistory",
 		"AcpRestore",
 		"AcpHistoryDraft",
@@ -81,6 +83,52 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("slash command picker lines and draft text are rendered", function()
+	local lines, line_commands = acp_commands.picker_lines({
+		{
+			name = "plan",
+			description = "Create a plan",
+			input = {
+				hint = "task",
+			},
+		},
+		{
+			name = "test",
+			description = "Run tests",
+		},
+	})
+	local text = table.concat(lines, "\n")
+
+	ok(text:find("/plan", 1, true))
+	ok(text:find("Create a plan", 1, true))
+	ok(text:find("input: task", 1, true))
+	ok(text:find("/test", 1, true))
+	eq(acp_commands.slash_text(line_commands[3]), "/plan ")
+	eq(acp_commands.slash_text(line_commands[6]), "/test")
+end)
+
+test("available commands updates are forwarded to active handlers", function()
+	local connection = Connection.new({
+		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 10 },
+		cwd = vim.fn.getcwd(),
+	})
+	local received
+	connection.active_handlers = {
+		available_commands = function(commands)
+			received = commands
+		end,
+	}
+
+	connection:handle_session_update({
+		sessionUpdate = "available_commands_update",
+		availableCommands = {
+			{ name = "plan", description = "Create a plan" },
+		},
+	})
+
+	eq(received[1].name, "plan")
 end)
 
 test("prompt history recalls sent prompts and restores draft", function()

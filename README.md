@@ -11,6 +11,7 @@ This plugin provides an editor-native ACP chat surface:
 - output-visible run status for active prompts, tools, and completion
 - Neovim highlight groups for readable transcript sections
 - non-blocking adapter startup and session creation
+- floating slash-command picker for adapter-advertised commands
 - per-session prompt history recall
 - plain-text transcript history under Neovim state
 - saved transcript replay into a new chat draft
@@ -82,6 +83,7 @@ vim.g.acp_nvim_config = {
 - `:AcpStop` stops the current agent process
 - `:AcpSessions` focuses the sessions side panel or opens a floating session picker
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
+- `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpHistory` opens saved transcript history
 - `:AcpRestore [adapter]` lists adapter-backed sessions and restores the selected session
 - `:AcpHistoryDraft [adapter]` opens saved transcript history and drafts a new chat from the selected transcript
@@ -101,6 +103,7 @@ In the prompt buffer:
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>af` opens the current session's changed files in quickfix
+- `<leader>a/` opens advertised ACP slash commands
 
 The chat-opening and draft commands accept a line range, so opening ACP from
 Visual mode preserves the selected lines for `:AcpAddContext`,

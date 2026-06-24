@@ -758,6 +758,8 @@ function Connection:handle_session_update(update)
 		self.active_handlers.session_info(update)
 	elseif update.sessionUpdate == "usage_update" and self.active_handlers.usage then
 		self.active_handlers.usage(update)
+	elseif update.sessionUpdate == "available_commands_update" and self.active_handlers.available_commands then
+		self.active_handlers.available_commands(update.availableCommands or {})
 	end
 end
 

@@ -1,5 +1,6 @@
 local Connection = require("acp.connection").Connection
 local changes = require("acp.changes")
+local acp_commands = require("acp.commands")
 local context = require("acp.context")
 local diagnostics = require("acp.diagnostics")
 local history = require("acp.history")
@@ -864,6 +865,9 @@ local function register_keymaps(state)
 	local open_changes = function()
 		M.open_changes()
 	end
+	local open_commands = function()
+		M.open_commands()
+	end
 	local previous_prompt = function()
 		M.prompt_previous()
 	end
@@ -875,6 +879,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
+		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
 		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
 		vim.keymap.set("n", "<leader>an", next_prompt, { buffer = bufnr, desc = "Next ACP prompt" })
 	end
@@ -1010,6 +1015,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpChanges", function()
 		M.open_changes()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCommands", function()
+		M.open_commands()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpHistory", function()
@@ -1164,6 +1173,11 @@ local function chat_handlers(state, opts)
 			if metadata.apply_session(state, update) then
 				refresh_prompt_chrome(state)
 			end
+		end,
+		available_commands = function(commands)
+			state.available_commands = commands
+			set_run_status(state, ("%d command(s) available"):format(#commands))
+			refresh_session_panels()
 		end,
 		stderr = function(text)
 			state.stream_role = nil
@@ -1454,6 +1468,52 @@ local function open_restore_picker(adapter_name, connection, list)
 	return true
 end
 
+local function open_command_picker(state)
+	local available_commands = state.available_commands or {}
+	if #available_commands == 0 then
+		notify("No ACP commands advertised for this session", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_commands = acp_commands.picker_lines(available_commands)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/commands"):format(state.adapter, state.id))
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-sessions",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+
+	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
+	vim.wo[winid].cursorline = true
+	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
+
+	vim.keymap.set("n", "<CR>", function()
+		local command = line_commands[vim.api.nvim_win_get_cursor(winid)[1]]
+		local text = acp_commands.slash_text(command)
+		if not text then
+			return
+		end
+		close_picker(winid, bufnr)
+		set_input_text(state, text)
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
+	end, { buffer = bufnr, nowait = true, desc = "Draft ACP slash command" })
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			close_picker(winid, bufnr)
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP commands" })
+	end
+
+	return true
+end
+
 function M.select_session()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local line = vim.api.nvim_win_get_cursor(0)[1]
@@ -1539,6 +1599,15 @@ function M.open_changes()
 		notify("No ACP file changes recorded for this session", vim.log.levels.WARN)
 		return
 	end
+end
+
+function M.open_commands()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_command_picker(state)
 end
 
 function M.prompt_previous()
