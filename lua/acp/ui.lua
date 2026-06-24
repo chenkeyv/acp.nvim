@@ -58,6 +58,7 @@ local next_session_id = 1
 local session_panel_lines = {}
 local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
 local output_current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_section")
+local output_item_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_item")
 local output_hint_ns = vim.api.nvim_create_namespace("acp.nvim.output.hints")
 local output_pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
 local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
@@ -246,6 +247,34 @@ local function refresh_current_output_section(state)
 	end
 end
 
+local function refresh_current_output_item(state)
+	if not valid_buf(state.output_buf) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(state.output_buf, output_item_ns, 0, -1)
+	if not valid_win(state.output_win) or vim.api.nvim_win_get_buf(state.output_win) ~= state.output_buf then
+		return
+	end
+
+	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local item = output.current_output_item(lines, cursor[1], cursor[2], { cwd = state.cwd })
+	if not item then
+		return
+	end
+
+	local line_count = #lines
+	local line1 = math.max(1, math.min(item.line or cursor[1], line_count))
+	local line2 = math.max(line1, math.min(item.line2 or item.line or cursor[1], line_count))
+	for line = line1, line2 do
+		pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_item_ns, line - 1, 0, {
+			line_hl_group = "AcpCurrentItem",
+			priority = 20,
+		})
+	end
+end
+
 local function refresh_output_cursor_hint(state)
 	if not valid_buf(state.output_buf) then
 		return
@@ -366,6 +395,7 @@ local function set_output_lines(state, start, stop, lines)
 	vim.bo[state.output_buf].modifiable = false
 	refresh_output_highlights(state)
 	refresh_current_output_section(state)
+	refresh_current_output_item(state)
 	refresh_output_cursor_hint(state)
 	save_output_history(state)
 	if refresh_output_dashboard and not state.refreshing_output_dashboard and start ~= 0 then
@@ -514,6 +544,7 @@ local function refresh_output_chrome(state)
 		current_item = output.current_output_item(lines, cursor[1], cursor[2], { cwd = state.cwd })
 	end
 	refresh_current_output_section(state)
+	refresh_current_output_item(state)
 	refresh_output_cursor_hint(state)
 	local title = output.window_title(state, {
 		change_count = changes.count(state),

@@ -266,6 +266,7 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpOutputReferenceBadge", { fg = "#1a1b26", bg = "#2ac3de", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpSectionStats", { fg = "#1a1b26", bg = "#565f89", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
+	vim.api.nvim_set_hl(0, "AcpCurrentItem", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputActivity", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputIdle", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulse", { link = "IncSearch", default = true })
@@ -976,6 +977,7 @@ function M.current_output_item(lines, lnum, col, opts)
 			target = {
 				kind = "code",
 				line = block.start_line or line_number,
+				line2 = block.end_line or block.start_line or line_number,
 				col = 1,
 			}
 		elseif M.problem_diagnostic_at(lines, line_number) then
@@ -999,6 +1001,7 @@ function M.current_output_item(lines, lnum, col, opts)
 				total = #items,
 				kind = item.kind,
 				line = item.line,
+				line2 = target.line2 or item.line,
 				col = item.col,
 				label = item.label,
 			}

@@ -626,6 +626,7 @@ test("output dashboard and section helpers are rendered", function()
 	}, 4, 0, {})
 	eq(current_code.kind, "code")
 	eq(current_code.index, 2)
+	eq(current_code.line2, 5)
 	local current_reference = acp_output.current_output_item({
 		"Status: error: failed",
 		"Agent",
@@ -1580,9 +1581,20 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(vim.api.nvim_buf_get_lines(output_buf, item_line - 1, item_line, false)[1], "```lua")
 		ok(vim.wo[output_win].winbar:find("item 2/", 1, true))
 		ok(vim.wo[output_win].winbar:find("CODE", 1, true))
+		local current_item_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_item")
+		local item_marks = vim.api.nvim_buf_get_extmarks(output_buf, current_item_ns, 0, -1, { details = true })
+		local highlighted_code_lines = 0
+		for _, mark in ipairs(item_marks) do
+			if mark[4] and mark[4].line_hl_group == "AcpCurrentItem" then
+				highlighted_code_lines = highlighted_code_lines + 1
+			end
+		end
+		eq(highlighted_code_lines, 3)
 		vim.cmd("AcpOutputNextItem")
 		eq(vim.api.nvim_win_get_cursor(output_win)[1], ref_line)
 		ok(vim.wo[output_win].winbar:find("REFERENCE", 1, true))
+		item_marks = vim.api.nvim_buf_get_extmarks(output_buf, current_item_ns, 0, -1, { details = true })
+		eq(#item_marks, 1)
 		vim.cmd("AcpOutputPrevItem")
 		item_line = vim.api.nvim_win_get_cursor(output_win)[1]
 		eq(vim.api.nvim_buf_get_lines(output_buf, item_line - 1, item_line, false)[1], "```lua")

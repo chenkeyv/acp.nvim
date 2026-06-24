@@ -20,6 +20,7 @@ This plugin provides an editor-native ACP chat surface:
 - live output winbar/title with status, model, context, item position, and changed-file counts
 - cursor-aware output breadcrumb showing the active transcript section
 - cursor-aware current-section highlighting in the output buffer
+- cursor-aware current-item highlighting for references, code blocks, and problems
 - searchable output transcript picker with context previews and jump-to-line navigation
 - current-section yank action with a short visual pulse in the output buffer
 - follow-up prompt drafting from the current output section
