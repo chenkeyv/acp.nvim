@@ -28,6 +28,12 @@ local workflows = {
 		info = "Insert LSP hover documentation for the source cursor.",
 	},
 	{
+		id = "signature",
+		trigger = "@signature",
+		menu = "LSP",
+		info = "Insert LSP signature help for the source cursor.",
+	},
+	{
 		id = "references",
 		trigger = "@references",
 		menu = "LSP",

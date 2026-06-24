@@ -2348,6 +2348,9 @@ local function prompt_action_items()
 	add("Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
 		M.add_hover()
 	end)
+	add("Signature help", "Insert LSP signature help for the source cursor", ":AcpSignature", "LSP", function()
+		M.add_signature()
+	end)
 	add("Callers", "Pick incoming LSP call hierarchy entries as focused context", ":AcpCallers", "LSP", function()
 		M.open_callers()
 	end)
@@ -2505,7 +2508,7 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "- Source selection and cursor context")
 	table.insert(
 		lines,
-		"- LSP diagnostics, code actions, hover, call hierarchy, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
+		"- LSP diagnostics, code actions, hover, signature help, call hierarchy, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
 	)
 	table.insert(lines, "- Tree-sitter nodes around the source cursor")
 	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
@@ -3681,6 +3684,10 @@ function M.setup(opts)
 		M.add_hover()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpSignature", function()
+		M.add_signature()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpCallers", function()
 		M.open_callers()
 	end, {})
@@ -4173,6 +4180,9 @@ local function action_palette_items(state)
 		add_action(items, "Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
 			M.add_hover()
 		end)
+		add_action(items, "Signature help", "Insert LSP signature help into the prompt", ":AcpSignature", "LSP", function()
+			M.add_signature()
+		end)
 		add_action(items, "Callers", "Pick incoming LSP call hierarchy entries as focused context", ":AcpCallers", "LSP", function()
 			M.open_callers()
 		end)
@@ -4430,6 +4440,10 @@ local function source_action_items(state)
 	add("Hover context", "Insert LSP hover documentation from the source cursor", "<leader>ah", "LSP", function()
 		focus_session(state)
 		M.add_hover()
+	end)
+	add("Signature help", "Insert LSP signature help from the source cursor", ":AcpSignature", "LSP", function()
+		focus_session(state)
+		M.add_signature()
 	end)
 	add("Callers", "Pick incoming LSP call hierarchy entries from the source cursor", ":AcpCallers", "LSP", function()
 		focus_session(state)
@@ -5839,6 +5853,48 @@ function M.add_hover()
 	end)
 end
 
+function M.add_signature()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local signature = require("acp.signature")
+	if not state.busy then
+		set_run_status(state, "loading signature help")
+	end
+	signature.request(state.source, function(signature_text, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		if not signature_text or signature_text == "" then
+			notify("No LSP signature help found for the source cursor", vim.log.levels.WARN)
+			return
+		end
+
+		local prompt = signature.prompt(state.source, signature_text)
+		if not prompt then
+			notify("Failed to render LSP signature help context", vim.log.levels.ERROR)
+			return
+		end
+		append_input_text(state, prompt)
+		if not state.busy then
+			set_run_status(state, "signature help added")
+		end
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
+	end)
+end
+
 function M.open_call_hierarchy(direction)
 	local state = current_state()
 	if not state then
@@ -6469,6 +6525,9 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		hover = function()
 			M.add_hover()
+		end,
+		signature = function()
+			M.add_signature()
 		end,
 		references = function()
 			M.open_references()

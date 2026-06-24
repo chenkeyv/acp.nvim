@@ -19,6 +19,7 @@ local prompt_completion = require("acp.prompt_completion")
 local prompt_view = require("acp.prompt_view")
 local references = require("acp.references")
 local session_view = require("acp.session_view")
+local signature = require("acp.signature")
 local source_view = require("acp.source_view")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
@@ -120,6 +121,7 @@ test("setup registers public user commands", function()
 		"AcpConfig",
 		"AcpCodeActions",
 		"AcpHover",
+		"AcpSignature",
 		"AcpCallers",
 		"AcpCallersQuickfix",
 		"AcpCallees",
@@ -946,6 +948,39 @@ test("LSP hover markdown content is normalized", function()
 	eq(hover.text({ contents = {} }), nil)
 end)
 
+test("LSP signature help is normalized", function()
+	local text = signature.text({
+		activeSignature = 0,
+		activeParameter = 1,
+		signatures = {
+			{
+				label = "join(left: string, right: string): string",
+				documentation = {
+					value = "Join two strings.",
+				},
+				parameters = {
+					{
+						label = "left",
+						documentation = "First value.",
+					},
+					{
+						label = "right",
+						documentation = {
+							value = "Second value.",
+						},
+					},
+				},
+			},
+		},
+	})
+
+	ok(text:find("Signature: join%(left: string, right: string%): string"))
+	ok(text:find("Documentation:\nJoin two strings.", 1, true))
+	ok(text:find("- left\n  First value.", 1, true))
+	ok(text:find("* right\n  Second value.", 1, true))
+	eq(signature.text({ signatures = {} }), nil)
+end)
+
 test("LSP document highlights are normalized for source marks", function()
 	local items = lsp_highlights.normalize({
 		{
@@ -1354,6 +1389,9 @@ test("slash command completion items are rendered for completefunc", function()
 	local code_action_item = prompt_completion.items(commands, "@code")[1]
 	eq(code_action_item.word, "@code-actions")
 	eq(code_action_item.menu, "LSP")
+	local signature_item = prompt_completion.items(commands, "@sig")[1]
+	eq(signature_item.word, "@signature")
+	eq(prompt_completion.action_id(signature_item), "signature")
 	local caller_item = prompt_completion.items(commands, "@caller")[1]
 	eq(caller_item.word, "@callers")
 	eq(prompt_completion.action_id(caller_item), "callers")
@@ -2307,6 +2345,7 @@ test("actions command opens a session action palette", function()
 		local output_actions = false
 		local yank_code_block = false
 		local diagnostics_quickfix = false
+		local signature_help = false
 		local lsp_highlight_action = false
 		local callers_quickfix = false
 		local callees_quickfix = false
@@ -2342,6 +2381,9 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Diagnostics quickfix", 1, true) then
 				diagnostics_quickfix = true
+			end
+			if line:find("Signature help", 1, true) then
+				signature_help = true
 			end
 			if line:find("LSP highlights", 1, true) then
 				lsp_highlight_action = true
@@ -2385,6 +2427,7 @@ test("actions command opens a session action palette", function()
 		ok(output_actions, "action palette should include output actions")
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
+		ok(signature_help, "action palette should include signature help")
 		ok(lsp_highlight_action, "action palette should include LSP highlights")
 		ok(callers_quickfix, "action palette should include callers quickfix")
 		ok(callees_quickfix, "action palette should include callees quickfix")
@@ -2830,6 +2873,74 @@ test("hover command drafts LSP hover context", function()
 		ok(prompt:find("`value`: any", 1, true))
 		ok(prompt:find("Context", 1, true))
 		ok(prompt:find("Line: local value = missing", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("signature command drafts LSP signature help context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local result = join(left, right)",
+		"print(result)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 20 })
+
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/signatureHelp")
+		eq(params.position.line, 0)
+		eq(params.position.character, 20)
+		callback({
+			[1] = {
+				result = {
+					activeSignature = 0,
+					activeParameter = 1,
+					signatures = {
+						{
+							label = "join(left: string, right: string): string",
+							documentation = "Join two strings.",
+							parameters = {
+								{ label = "left" },
+								{ label = "right", documentation = "Right value." },
+							},
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpSignature")
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP signature help as context.", 1, true))
+		ok(prompt:find("Signature help:", 1, true))
+		ok(prompt:find("Signature: join%(left: string, right: string%): string"))
+		ok(prompt:find("* right", 1, true))
+		ok(prompt:find("Right value.", 1, true))
+		ok(prompt:find("Line: local result = join%(left, right%)"))
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all

@@ -62,6 +62,7 @@ This plugin provides an editor-native ACP chat surface:
 - adapter-backed session listing and restoration
 - async LSP code-action picker for drafting focused fix/refactor prompts
 - async LSP hover context insertion for source-cursor documentation
+- async LSP signature-help insertion for call-site context
 - async LSP incoming/outgoing call-hierarchy pickers with quickfix export
 - async LSP document-highlight marks for read/write source occurrences
 - async LSP references picker with quickfix export for focused usage context
@@ -174,6 +175,7 @@ vim.g.acp_nvim_config = {
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
 - `:AcpHover` inserts LSP hover documentation for the source cursor
+- `:AcpSignature` inserts LSP signature help for the source cursor
 - `:AcpCallers` opens an LSP incoming-call picker for the source cursor
 - `:AcpCallersQuickfix` sends incoming LSP calls for the source cursor to quickfix
 - `:AcpCallees` opens an LSP outgoing-call picker for the source cursor
@@ -218,7 +220,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
-- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@diagnostics`/`@callers`/`@callees`/`@output` workflows
+- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@diagnostics`/`@signature`/`@callers`/`@callees`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>am` opens a persistent output map with progress rails and item counts
