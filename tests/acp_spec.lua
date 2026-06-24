@@ -575,6 +575,8 @@ test("output dashboard and section helpers are rendered", function()
 	eq(qf_items[1].filename, refs[1].path)
 	eq(qf_items[1].lnum, 2)
 	eq(qf_items[1].col, 7)
+	eq(acp_output.reference_badge(1), " REF ")
+	eq(acp_output.reference_badge(3), " REF x3 ")
 	local output_items = acp_output.output_items({
 		"Status: error: failed",
 		"Agent",
@@ -1481,6 +1483,27 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(ref_line, "output should contain a file reference")
+		vim.api.nvim_exec_autocmds("TextChanged", { buffer = output_buf })
+		marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
+		local ref_highlight = false
+		local ref_badge = false
+		local ref_sign = false
+		for _, mark in ipairs(marks) do
+			if mark[2] == ref_line - 1 and mark[3] == ref_col and mark[4] and mark[4].hl_group == "AcpOutputReference" then
+				ref_highlight = true
+			end
+			if mark[2] == ref_line - 1 and mark[4] and mark[4].sign_text == "R>" then
+				ref_sign = true
+			end
+			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
+				if mark[2] == ref_line - 1 and chunk[1] and chunk[1]:find("REF", 1, true) then
+					ref_badge = true
+				end
+			end
+		end
+		ok(ref_highlight, "output references should be highlighted inline")
+		ok(ref_sign, "output references should render a sign marker")
+		ok(ref_badge, "output references should render a badge")
 		vim.api.nvim_win_set_cursor(output_win, { problem_line, 0 })
 		vim.cmd("AcpOutputNextItem")
 		local item_line = vim.api.nvim_win_get_cursor(output_win)[1]

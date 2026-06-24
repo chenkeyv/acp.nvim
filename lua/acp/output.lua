@@ -236,6 +236,8 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpCodeBlockHeader", { fg = "#1a1b26", bg = "#414868", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCodeBlockSign", { link = "AcpCodeFence", default = true })
 	vim.api.nvim_set_hl(0, "AcpInjectedLanguage", { fg = "#1a1b26", bg = "#7aa2f7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputReference", { link = "Underlined", default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputReferenceBadge", { fg = "#1a1b26", bg = "#2ac3de", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpSectionStats", { fg = "#1a1b26", bg = "#565f89", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputActivity", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
@@ -844,6 +846,14 @@ function M.file_reference_quickfix_items(references)
 		})
 	end
 	return items
+end
+
+function M.reference_badge(count)
+	local number = tonumber(count) or 0
+	if number <= 1 then
+		return " REF "
+	end
+	return (" REF x%d "):format(number)
 end
 
 function M.problem_diagnostics(lines)

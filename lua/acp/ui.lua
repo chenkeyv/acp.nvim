@@ -179,6 +179,35 @@ local function refresh_output_highlights(state)
 		end
 	end
 
+	local reference_counts = {}
+	local reference_badges = {}
+	local references = output.file_references(lines, { cwd = state.cwd })
+	for _, reference in ipairs(references) do
+		if reference.source_line and reference.source_col and reference.source_end_col then
+			reference_counts[reference.source_line] = (reference_counts[reference.source_line] or 0) + 1
+		end
+	end
+	for _, reference in ipairs(references) do
+		if reference.source_line and reference.source_col and reference.source_end_col then
+			local row = reference.source_line - 1
+			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, row, reference.source_col - 1, {
+				end_col = reference.source_end_col,
+				hl_group = "AcpOutputReference",
+				priority = 82,
+			})
+			if not reference_badges[reference.source_line] then
+				reference_badges[reference.source_line] = true
+				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, row, 0, {
+					virt_text = { { output.reference_badge(reference_counts[reference.source_line]), "AcpOutputReferenceBadge" } },
+					virt_text_pos = "right_align",
+					sign_text = "R>",
+					sign_hl_group = "AcpOutputReferenceBadge",
+					priority = 83,
+				})
+			end
+		end
+	end
+
 	local ghost = output.ghost_text(state, lines, state.output_animation_frame)
 	if ghost and #lines > 0 then
 		local row = #lines - 1
