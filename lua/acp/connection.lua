@@ -25,7 +25,10 @@ local function resolve_path(path, cwd)
 	if not path or path == "" then
 		return nil
 	end
-	if vim.fs.is_absolute(path) then
+	if vim.fs.is_absolute and vim.fs.is_absolute(path) then
+		return vim.fs.normalize(path)
+	end
+	if path:sub(1, 1) == "/" or path:match("^%a:[/\\]") or path:sub(1, 2) == "\\\\" then
 		return vim.fs.normalize(path)
 	end
 	return vim.fs.normalize(vim.fs.joinpath(cwd, path))
@@ -293,7 +296,7 @@ function Connection:prompt(text, handlers)
 
 	self.active_handlers = handlers
 	local id = self:next_request_id()
-	self.pending[id] = {}
+	self.pending[id] = { async = true }
 
 	local ok = self:write(jsonrpc.request(id, methods.session_prompt, {
 		sessionId = self.session_id,
@@ -450,6 +453,7 @@ function Connection:handle_line(line)
 
 	if message.id and not message.method then
 		local pending = self.pending[message.id]
+		local async = pending and pending.async
 		if pending then
 			pending.done = true
 			pending.result = message.result
@@ -461,6 +465,9 @@ function Connection:handle_line(line)
 		elseif message.error and self.active_handlers and self.active_handlers.error then
 			self.active_handlers.error(message.error.message or "ACP request failed")
 			self.active_handlers = nil
+		end
+		if async then
+			self.pending[message.id] = nil
 		end
 	elseif message.method then
 		self:handle_request(message)

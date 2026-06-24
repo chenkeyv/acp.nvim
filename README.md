@@ -58,6 +58,7 @@ vim.g.acp_nvim_config = {
 - `:AcpChatTab [adapter]` opens the dedicated tab layout
 - `:AcpChatFloat [adapter]` opens a floating output/input layout
 - `:AcpChatWindow [adapter]` opens a split-window layout
+- `:AcpChatBuffer [adapter]` opens the split-window layout
 - `:AcpSend` sends the current prompt
 - `:AcpStop` stops the current agent process
 - `:AcpSessions` focuses the sessions side panel
@@ -73,7 +74,15 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 
+## Development
+
+Run the headless smoke tests with:
+
+```sh
+NVIM_LOG_FILE=/tmp/acp.nvim-nvim.log nvim --headless -u tests/minimal_init.lua -c "luafile tests/acp_spec.lua" -c "qa!"
+```
+
 ## Status
 
-This is an early minimal ACP client. Terminal operations, session switching, and
-rich diff approval UI are not implemented yet.
+This is an early minimal ACP client. Terminal operations, persistent session
+restoration, and rich diff approval UI are not implemented yet.
