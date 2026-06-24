@@ -236,6 +236,8 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpInjectedLanguage", { fg = "#1a1b26", bg = "#7aa2f7", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpSectionStats", { fg = "#1a1b26", bg = "#565f89", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputActivity", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputIdle", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulse", { link = "IncSearch", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulseSoft", { link = "Search", default = true })
 end
@@ -578,6 +580,45 @@ end
 function M.animation_frame(index)
 	local number = tonumber(index) or 1
 	return animation_frames[((number - 1) % #animation_frames) + 1]
+end
+
+function M.activity_badge(state, stats, frame)
+	stats = stats or {}
+	local status = clean(state and state.run_status)
+	local busy = state and state.busy
+	status = status or (busy and "running" or "idle")
+	if #status > 28 then
+		status = status:sub(1, 25) .. "..."
+	end
+
+	local prefix = busy and (M.animation_frame(frame) .. " ") or ""
+	local label = ("%s%s | %d section%s | %d code | %d loc%s | %d change%s"):format(
+		prefix,
+		status,
+		stats.sections or 0,
+		stats.sections == 1 and "" or "s",
+		stats.code_blocks or 0,
+		stats.locations or 0,
+		stats.locations == 1 and "" or "s",
+		stats.changes or 0,
+		stats.changes == 1 and "" or "s"
+	)
+
+	local lower_status = status:lower()
+	local hl = "AcpOutputIdle"
+	if lower_status:find("error", 1, true) or lower_status:find("failed", 1, true) then
+		hl = "AcpBadgeError"
+	elseif busy then
+		hl = "AcpOutputActivity"
+	elseif
+		lower_status:find("done", 1, true)
+		or lower_status:find("stopped", 1, true)
+		or lower_status:find("restored", 1, true)
+	then
+		hl = "AcpStatusDone"
+	end
+
+	return (" %s "):format(label), hl
 end
 
 function M.ghost_text(state, lines, frame)

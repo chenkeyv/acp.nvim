@@ -493,6 +493,24 @@ test("output dashboard and section helpers are rendered", function()
 
 	eq(acp_output.animation_frame(1), "|")
 	eq(acp_output.animation_frame(5), "|")
+	local activity_badge, activity_hl = acp_output.activity_badge({
+		busy = true,
+		run_status = "streaming",
+	}, {
+		sections = 2,
+		code_blocks = 1,
+		locations = 1,
+		changes = 1,
+	}, 2)
+	ok(activity_badge:find("/ streaming", 1, true))
+	ok(activity_badge:find("2 sections", 1, true))
+	ok(activity_badge:find("1 code", 1, true))
+	ok(activity_badge:find("1 loc", 1, true))
+	ok(activity_badge:find("1 change", 1, true))
+	eq(activity_hl, "AcpOutputActivity")
+	local error_badge, error_hl = acp_output.activity_badge({ run_status = "error: failed" }, {}, 1)
+	ok(error_badge:find("error: failed", 1, true))
+	eq(error_hl, "AcpBadgeError")
 	ok(acp_output.ghost_text({ busy = true, run_status = "streaming" }, {}, 2):find("streaming", 1, true))
 	ok(acp_output.ghost_text({ busy = false }, { "ACP: test", "" }):find("Ready", 1, true))
 	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("? menu", 1, true))
@@ -1138,6 +1156,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local highlighted_header = false
 		local ghost_text = false
 		local session_sign = false
+		local activity_badge = false
 		for _, mark in ipairs(marks) do
 			if mark[4] and mark[4].line_hl_group == "AcpOutputHeader" then
 				highlighted_header = true
@@ -1149,11 +1168,15 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 				if chunk[1] and chunk[1]:find("Ready", 1, true) then
 					ghost_text = true
 				end
+				if chunk[1] and chunk[1]:find("idle | 0 sections", 1, true) then
+					activity_badge = true
+				end
 			end
 		end
 		ok(highlighted_header, "output header should be highlighted")
 		ok(session_sign, "output session sign should be rendered")
 		ok(ghost_text, "output ghost text should be rendered")
+		ok(activity_badge, "output header should render activity badge")
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "hello output" })
 		vim.cmd("AcpSend")

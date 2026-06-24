@@ -107,6 +107,16 @@ local function refresh_output_highlights(state)
 	vim.api.nvim_buf_clear_namespace(state.output_buf, output_ns, 0, -1)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 	refresh_output_diagnostics(state, lines)
+	local dashboard_count = state.output_dashboard_lines or #output.dashboard_lines(state)
+	local activity_badge, activity_hl = output.activity_badge(
+		state,
+		output.transcript_stats(lines, {
+			start_line = dashboard_count + 1,
+			cwd = state.cwd,
+			change_count = changes.count(state),
+		}),
+		state.output_animation_frame
+	)
 	local section_summaries = output.section_summaries(lines)
 	for index, line in ipairs(lines) do
 		local style = output.line_style(line)
@@ -118,13 +128,17 @@ local function refresh_output_highlights(state)
 				opts.line_hl_group = style.line_hl_group
 			end
 			local summary = section_summaries[index]
-			if style.badge or summary then
+			local header_activity = index == 1 and line:match("^ACP:") and activity_badge
+			if style.badge or summary or header_activity then
 				opts.virt_text = {}
 				if summary then
 					table.insert(opts.virt_text, { summary.label, "AcpSectionStats" })
 				end
 				if style.badge then
 					table.insert(opts.virt_text, { style.badge, style.badge_hl or "AcpBadge" })
+				end
+				if header_activity then
+					table.insert(opts.virt_text, { activity_badge, activity_hl or "AcpOutputIdle" })
 				end
 				opts.virt_text_pos = "right_align"
 			end
