@@ -2403,6 +2403,9 @@ local function create_session_panel_buffer(state)
 	vim.keymap.set("n", "<CR>", function()
 		M.select_session()
 	end, { buffer = state.session_panel_buf, desc = "Open ACP session" })
+	vim.keymap.set("n", "x", function()
+		M.close_selected_session()
+	end, { buffer = state.session_panel_buf, desc = "Close ACP session" })
 	vim.keymap.set("n", "<leader>ak", function()
 		M.open_actions()
 	end, { buffer = state.session_panel_buf, desc = "Open ACP actions" })
@@ -2819,6 +2822,14 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpStop", function()
 		M.stop()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpClose", function()
+		M.close()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCloseAll", function()
+		M.close_all()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpSessions", function()
@@ -3259,6 +3270,9 @@ local function action_palette_items(state)
 		add_action(items, "Stop agent", "Stop the active ACP adapter process", "<leader>aq", "session", function()
 			M.stop()
 		end)
+		add_action(items, "Close session", "Close this ACP session and clear its source marks", ":AcpClose", "session", function()
+			M.close()
+		end)
 		add_action(items, "Add context", "Insert captured editor context into the prompt", "<leader>ac", "session", function()
 			M.add_context()
 		end)
@@ -3348,6 +3362,9 @@ local function action_palette_items(state)
 
 	add_action(items, "Sessions", "Focus or pick an open ACP session", ":AcpSessions", "global", function()
 		M.focus_sessions()
+	end)
+	add_action(items, "Close all sessions", "Close every open ACP session", ":AcpCloseAll", "global", function()
+		M.close_all()
 	end)
 	add_action(items, "Restore session", "Restore an adapter-backed ACP session", ":AcpRestore", "global", function()
 		M.restore(config.default_adapter)
@@ -4103,6 +4120,17 @@ function M.select_session()
 	focus_session(sessions[id])
 end
 
+function M.close_selected_session()
+	local bufnr = vim.api.nvim_get_current_buf()
+	local line = vim.api.nvim_win_get_cursor(0)[1]
+	local id = session_panel_lines[bufnr] and session_panel_lines[bufnr][line]
+	if not id then
+		return
+	end
+
+	unregister(sessions[id])
+end
+
 function M.focus_sessions()
 	local state = states[vim.api.nvim_get_current_buf()]
 
@@ -4140,6 +4168,27 @@ function M.open_source_actions()
 	end
 
 	open_source_actions(state)
+end
+
+function M.close()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	unregister(state)
+end
+
+function M.close_all()
+	local list = sorted_sessions()
+	if #list == 0 then
+		notify("No ACP sessions open", vim.log.levels.WARN)
+		return
+	end
+
+	for _, state in ipairs(list) do
+		unregister(state)
+	end
 end
 
 function M.restore(adapter_name)

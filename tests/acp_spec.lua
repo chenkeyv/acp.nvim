@@ -84,6 +84,8 @@ test("setup registers public user commands", function()
 		"AcpPromptPrev",
 		"AcpPromptNext",
 		"AcpStop",
+		"AcpClose",
+		"AcpCloseAll",
 		"AcpSessions",
 		"AcpActions",
 		"AcpPromptActions",
@@ -1475,6 +1477,10 @@ test("sessions command opens a picker from source buffers", function()
 	end
 	ok(current_line, "session panel should highlight the current session")
 	ok(idle_badge, "session panel should render a status badge")
+	vim.api.nvim_buf_call(session_buf, function()
+		local close_map = vim.fn.maparg("x", "n", false, true)
+		eq(close_map.desc, "Close ACP session")
+	end)
 
 	vim.api.nvim_set_current_win(source_win)
 	vim.cmd("AcpSessions")
@@ -1524,6 +1530,7 @@ test("actions command opens a session action palette", function()
 		local inspect_output = false
 		local output_actions = false
 		local yank_code_block = false
+		local close_session = false
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
 				output_outline_row = index
@@ -1537,11 +1544,15 @@ test("actions command opens a session action palette", function()
 			if line:find("Yank code block", 1, true) then
 				yank_code_block = true
 			end
+			if line:find("Close session", 1, true) then
+				close_session = true
+			end
 		end
 		ok(output_outline_row, "action palette should include output outline")
 		ok(inspect_output, "action palette should include output inspect")
 		ok(output_actions, "action palette should include output actions")
 		ok(yank_code_block, "action palette should include code block yank")
+		ok(close_session, "action palette should include close session")
 
 		vim.api.nvim_win_set_cursor(0, { output_outline_row, 0 })
 		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
@@ -1633,10 +1644,10 @@ test("chat marks captured source ranges and clears them on close", function()
 		ok(prompt:find("Context", 1, true))
 		ok(prompt:find("local value = 1", 1, true))
 
-		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
-		input_buf = nil
+		vim.cmd("AcpClose")
 		marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
 		eq(#marks, 0)
+		input_buf = nil
 	end)
 
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
