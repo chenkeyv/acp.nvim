@@ -49,7 +49,7 @@ function M.kind_name(kind)
 	return kind_names[kind] or "Symbol"
 end
 
-function M.range_lines(symbol)
+function M.range(symbol)
 	local range = symbol_range(symbol)
 	if not range or type(range.start) ~= "table" or type(range["end"]) ~= "table" then
 		return nil
@@ -60,7 +60,20 @@ function M.range_lines(symbol)
 	if line2 < line1 then
 		line2 = line1
 	end
-	return line1, line2
+	return {
+		line1 = line1,
+		line2 = line2,
+		col1 = (tonumber(range.start.character) or 0) + 1,
+		col2 = (tonumber(range["end"].character) or 0) + 1,
+	}
+end
+
+function M.range_lines(symbol)
+	local range = M.range(symbol)
+	if not range then
+		return nil
+	end
+	return range.line1, range.line2
 end
 
 local function collect(out, symbol, depth)
@@ -111,8 +124,26 @@ function M.picker_lines(symbols)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add context, or q/<Esc> to close.")
+	table.insert(lines, "Press <Enter> to add context, Q for quickfix, or q/<Esc> to close.")
 	return lines, line_symbols
+end
+
+function M.quickfix_items(bufnr, symbols)
+	local items = {}
+	for _, symbol in ipairs(symbols or {}) do
+		local range = M.range(symbol)
+		if range then
+			table.insert(items, {
+				bufnr = bufnr,
+				lnum = range.line1,
+				col = range.col1 or 1,
+				end_lnum = range.line2,
+				end_col = range.col2 or range.col1 or 1,
+				text = ("SYMBOL: %s (%s)"):format(symbol.name or "?", M.kind_name(symbol.kind)),
+			})
+		end
+	end
+	return items
 end
 
 return M

@@ -2333,6 +2333,9 @@ local function prompt_action_items()
 	add("Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 		M.open_symbols()
 	end)
+	add("Symbols quickfix", "Send source-buffer LSP symbols to quickfix", "<leader>aL", "LSP", function()
+		M.open_symbols_quickfix()
+	end)
 	add("Tree-sitter nodes", "Pick syntax-aware source context", "<leader>at", "Tree-sitter", function()
 		M.open_treesitter()
 	end)
@@ -3179,6 +3182,9 @@ local function register_keymaps(state)
 	local open_symbols = function()
 		M.open_symbols()
 	end
+	local open_symbols_quickfix = function()
+		M.open_symbols_quickfix()
+	end
 	local open_treesitter = function()
 		M.open_treesitter()
 	end
@@ -3213,6 +3219,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ar", open_references, { buffer = bufnr, desc = "Open ACP LSP references" })
 		vim.keymap.set("n", "<leader>aR", open_references_quickfix, { buffer = bufnr, desc = "Open ACP LSP references quickfix" })
 		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
+		vim.keymap.set("n", "<leader>aL", open_symbols_quickfix, { buffer = bufnr, desc = "Open ACP LSP symbols quickfix" })
 		vim.keymap.set("n", "<leader>at", open_treesitter, { buffer = bufnr, desc = "Open ACP Tree-sitter nodes" })
 		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
 		vim.keymap.set("n", "<leader>an", next_prompt, { buffer = bufnr, desc = "Next ACP prompt" })
@@ -3500,6 +3507,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpSymbols", function()
 		M.open_symbols()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpSymbolsQuickfix", function()
+		M.open_symbols_quickfix()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpTreeSitter", function()
@@ -3919,6 +3930,9 @@ local function action_palette_items(state)
 		add_action(items, "Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 			M.open_symbols()
 		end)
+		add_action(items, "Symbols quickfix", "Send source-buffer LSP symbols to quickfix", "<leader>aL", "LSP", function()
+			M.open_symbols_quickfix()
+		end)
 		add_action(items, "Tree-sitter nodes", "Pick syntax-aware source context", "<leader>at", "Tree-sitter", function()
 			M.open_treesitter()
 		end)
@@ -4127,6 +4141,10 @@ local function source_action_items(state)
 	add("Symbols", "Pick LSP document symbols from the source buffer", "<leader>al", "LSP", function()
 		focus_session(state)
 		M.open_symbols()
+	end)
+	add("Symbols quickfix", "Send LSP document symbols from the source buffer to quickfix", "<leader>aL", "LSP", function()
+		focus_session(state)
+		M.open_symbols_quickfix()
 	end)
 	add("Tree-sitter nodes", "Pick syntax-aware source context around the captured cursor", "<leader>at", "Tree-sitter", function()
 		focus_session(state)
@@ -4620,6 +4638,55 @@ local function request_lsp_symbols(bufnr, callback)
 	return true
 end
 
+local function open_symbols_quickfix(state, symbol_list)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	local function open_items(list)
+		if not list or #list == 0 then
+			notify("No LSP symbols found for the source buffer", vim.log.levels.WARN)
+			return false
+		end
+
+		local items = symbols.quickfix_items(state.source.bufnr, list)
+		if #items == 0 then
+			notify("No quickfix-ready LSP symbols found", vim.log.levels.WARN)
+			return false
+		end
+
+		vim.fn.setqflist({}, " ", {
+			title = ("ACP symbols #%s"):format(tostring(state.id or "?")),
+			items = items,
+		})
+		vim.cmd("copen")
+		if not state.busy then
+			set_run_status(state, "symbols quickfix")
+		end
+		return true
+	end
+
+	if symbol_list then
+		return open_items(symbol_list)
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading symbols quickfix")
+	end
+	request_lsp_symbols(state.source.bufnr, function(list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_items(list)
+	end)
+	return true
+end
+
 local function open_symbol_picker(state, symbol_list)
 	if not symbol_list or #symbol_list == 0 then
 		notify("No LSP symbols found for the source buffer", vim.log.levels.WARN)
@@ -4627,7 +4694,7 @@ local function open_symbol_picker(state, symbol_list)
 	end
 
 	local lines, line_symbols = symbols.picker_lines(symbol_list)
-	picker.open({
+	local view = picker.open({
 		name = ("ACP://%s/%d/symbols"):format(state.adapter, state.id),
 		filetype = "acp-symbols",
 		lines = lines,
@@ -4669,6 +4736,11 @@ local function open_symbol_picker(state, symbol_list)
 			end
 		end,
 	})
+
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		open_symbols_quickfix(state, symbol_list)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP symbols quickfix" })
 
 	return true
 end
@@ -5314,6 +5386,15 @@ function M.open_symbols()
 		end
 		open_symbol_picker(state, symbol_list)
 	end)
+end
+
+function M.open_symbols_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_symbols_quickfix(state)
 end
 
 function M.open_treesitter()

@@ -119,6 +119,7 @@ test("setup registers public user commands", function()
 		"AcpReferences",
 		"AcpReferencesQuickfix",
 		"AcpSymbols",
+		"AcpSymbolsQuickfix",
 		"AcpTreeSitter",
 		"AcpHistory",
 		"AcpRestore",
@@ -979,6 +980,11 @@ test("LSP symbols are flattened and rendered for picker", function()
 	local line1, line2 = symbols.range_lines(flattened[3])
 	eq(line1, 8)
 	eq(line2, 8)
+	local range = symbols.range(flattened[2])
+	eq(range.line1, 2)
+	eq(range.line2, 4)
+	eq(range.col1, 2)
+	eq(range.col2, 3)
 
 	local lines, line_symbols = symbols.picker_lines(flattened)
 	local text = table.concat(lines, "\n")
@@ -986,8 +992,16 @@ test("LSP symbols are flattened and rendered for picker", function()
 	ok(text:find("class detail", 1, true))
 	ok(text:find("  run  Function lines 2-4", 1, true))
 	ok(text:find("from-location  Variable lines 8-8", 1, true))
+	ok(text:find("Q for quickfix", 1, true))
 	eq(line_symbols[3].name, "Example")
 	eq(line_symbols[5].name, "run")
+
+	local qf_items = symbols.quickfix_items(42, flattened)
+	eq(#qf_items, 3)
+	eq(qf_items[1].bufnr, 42)
+	eq(qf_items[2].lnum, 2)
+	eq(qf_items[2].col, 2)
+	ok(qf_items[2].text:find("SYMBOL: run %(Function%)"))
 end)
 
 test("config option picker lines render selectable options", function()
@@ -1168,6 +1182,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		ok(prompt_actions_text:find("Source diagnostics", 1, true))
 		ok(prompt_actions_text:find("Tree-sitter nodes", 1, true))
 		ok(prompt_actions_text:find("References quickfix", 1, true))
+		ok(prompt_actions_text:find("Symbols quickfix", 1, true))
 		ok(prompt_actions_text:find("Search output", 1, true))
 		ok(prompt_actions_text:find("Output map", 1, true))
 
@@ -1972,6 +1987,7 @@ test("actions command opens a session action palette", function()
 		local yank_code_block = false
 		local diagnostics_quickfix = false
 		local references_quickfix = false
+		local symbols_quickfix = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
@@ -2001,6 +2017,9 @@ test("actions command opens a session action palette", function()
 			if line:find("References quickfix", 1, true) then
 				references_quickfix = true
 			end
+			if line:find("Symbols quickfix", 1, true) then
+				symbols_quickfix = true
+			end
 			if line:find("Close session", 1, true) then
 				close_session = true
 			end
@@ -2014,6 +2033,7 @@ test("actions command opens a session action palette", function()
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
 		ok(references_quickfix, "action palette should include references quickfix")
+		ok(symbols_quickfix, "action palette should include symbols quickfix")
 		ok(close_session, "action palette should include close session")
 
 		vim.api.nvim_win_set_cursor(0, { output_outline_row, 0 })
@@ -2084,6 +2104,7 @@ test("chat marks captured source ranges and clears them on close", function()
 		ok(actions_text:find("Refresh source", 1, true))
 		ok(actions_text:find("Tree-sitter nodes", 1, true))
 		ok(actions_text:find("References quickfix", 1, true))
+		ok(actions_text:find("Symbols quickfix", 1, true))
 		ok(actions_text:find("Search output", 1, true))
 		ok(actions_text:find("Output map", 1, true))
 
@@ -2263,7 +2284,35 @@ test("symbols command drafts selected LSP symbol context", function()
 		local picker_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[picker_buf].filetype, "acp-symbols")
 
-		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local symbol_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(symbol_qflist.title:find("ACP symbols", 1, true))
+		eq(#symbol_qflist.items, 1)
+		eq(symbol_qflist.items[1].bufnr, source_buf)
+		eq(symbol_qflist.items[1].lnum, 1)
+		eq(symbol_qflist.items[1].col, 1)
+		ok(symbol_qflist.items[1].text:find("SYMBOL: add %(Function%)"))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after symbols quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpSymbolsQuickfix")
+		symbol_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(symbol_qflist.title:find("ACP symbols", 1, true))
+		eq(#symbol_qflist.items, 1)
+		eq(symbol_qflist.items[1].lnum, 1)
+		eq(symbol_qflist.items[1].col, 1)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible before symbol draft")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpSymbols")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-symbols")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		eq(vim.api.nvim_get_current_buf(), input_buf)
 

@@ -63,7 +63,7 @@ This plugin provides an editor-native ACP chat surface:
 - async LSP code-action picker for drafting focused fix/refactor prompts
 - async LSP hover context insertion for source-cursor documentation
 - async LSP references picker with quickfix export for focused usage context
-- async LSP document-symbol picker for adding focused symbol context
+- async LSP document-symbol picker with quickfix export for focused symbol context
 - Tree-sitter node picker for adding syntax-aware focused context
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
 - visual/range context capture for selected code
@@ -170,6 +170,7 @@ vim.g.acp_nvim_config = {
 - `:AcpReferences` opens an LSP references picker for the source cursor
 - `:AcpReferencesQuickfix` sends LSP references for the source cursor to quickfix
 - `:AcpSymbols` opens an LSP document-symbol picker for the source buffer
+- `:AcpSymbolsQuickfix` sends LSP document symbols for the source buffer to quickfix
 - `:AcpTreeSitter` opens a Tree-sitter node picker for the source cursor
 - `:AcpHistory` opens saved transcript history
 - `:AcpRestore [adapter]` lists adapter-backed sessions and restores the selected session
@@ -217,6 +218,7 @@ In the prompt buffer:
 - `<leader>ar` opens source-buffer LSP references
 - `<leader>aR` sends source-buffer LSP references to quickfix
 - `<leader>al` opens source-buffer LSP symbols
+- `<leader>aL` sends source-buffer LSP symbols to quickfix
 - `<leader>at` opens source-buffer Tree-sitter nodes
 
 In the output buffer:
@@ -251,7 +253,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file, diagnostics, LSP-reference, output-location, and output-item pickers use `Q` to export rows to quickfix
+- changed-file, diagnostics, LSP-reference, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 
