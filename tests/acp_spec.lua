@@ -483,6 +483,11 @@ test("output dashboard and section helpers are rendered", function()
 	eq(timeline[3].total, 3)
 	eq(timeline[3].progress, " 50%")
 	ok(timeline[3].label:find("2/3", 1, true))
+	local rail_lines = { "ACP: test", "Session: #7", "You", "hello", "Agent" }
+	eq(acp_output.statuscolumn_marker(rail_lines, 1), "01")
+	eq(acp_output.statuscolumn_marker(rail_lines, 3), "02")
+	eq(acp_output.statuscolumn_marker(rail_lines, 4), " |")
+	eq(acp_output.statuscolumn_marker({}, 1), "  ")
 	local outline, line_sections = acp_output.outline_lines(sections)
 	local outline_text = table.concat(outline, "\n")
 	ok(outline_text:find("ACP Output Outline", 1, true))
@@ -1180,6 +1185,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(vim.wo[output_win].foldlevel, 99)
 		eq(vim.wo[output_win].foldcolumn, "1")
 		eq(vim.wo[output_win].signcolumn, "yes:1")
+		ok(vim.wo[output_win].statuscolumn:find("acp_nvim_output_statuscolumn", 1, true))
 		ok(
 			vim.b[output_buf].acp_language_injection == "treesitter-markdown"
 				or vim.b[output_buf].acp_language_injection == "fence-detection"

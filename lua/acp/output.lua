@@ -275,6 +275,7 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpOutputReferenceBadge", { fg = "#1a1b26", bg = "#2ac3de", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpSectionStats", { fg = "#1a1b26", bg = "#565f89", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputTimeline", { fg = "#c0caf5", bg = "#3b4261", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputRail", { fg = "#9ece6a", bg = "#1f2335", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentItem", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputActivity", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
@@ -650,6 +651,28 @@ function M.section_timeline(lines)
 	end
 
 	return markers
+end
+
+function M.statuscolumn_marker(lines, lnum)
+	lines = lines or {}
+	lnum = math.max(1, math.min(tonumber(lnum) or 1, #lines))
+	if not lines[lnum] then
+		return "  "
+	end
+	local section_index = 0
+	local inside_section = false
+
+	for index = 1, lnum do
+		if M.is_section(lines[index]) then
+			section_index = section_index + 1
+			inside_section = true
+			if index == lnum then
+				return section_index < 100 and ("%02d"):format(section_index) or "++"
+			end
+		end
+	end
+
+	return inside_section and " |" or "  "
 end
 
 function M.outline_lines(sections, opts)

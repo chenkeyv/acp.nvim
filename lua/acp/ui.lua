@@ -2423,6 +2423,9 @@ local function apply_window_options(state)
 			vim.wo[winid].relativenumber = false
 			vim.wo[winid].foldcolumn = "0"
 			pcall(function()
+				vim.wo[winid].statuscolumn = ""
+			end)
+			pcall(function()
 				vim.wo[winid].winfixbuf = true
 			end)
 		end
@@ -2445,6 +2448,9 @@ local function apply_window_options(state)
 		vim.wo[state.output_win].foldlevel = 99
 		vim.wo[state.output_win].foldcolumn = "1"
 		vim.wo[state.output_win].signcolumn = "yes:1"
+		pcall(function()
+			vim.wo[state.output_win].statuscolumn = "%s%C%#AcpOutputRail#%{v:lua.acp_nvim_output_statuscolumn()}%* "
+		end)
 		refresh_output_chrome(state)
 	end
 
@@ -4888,6 +4894,14 @@ function _G.acp_nvim_output_foldtext()
 		return ""
 	end
 	return require("acp.output").fold_text(lines, vim.v.foldstart, vim.v.foldend)
+end
+
+function _G.acp_nvim_output_statuscolumn()
+	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, 0, -1, false)
+	if not ok then
+		return "  "
+	end
+	return require("acp.output").statuscolumn_marker(lines, vim.v.lnum)
 end
 
 return M
