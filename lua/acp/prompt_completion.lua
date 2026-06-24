@@ -34,6 +34,12 @@ local workflows = {
 		info = "Open LSP code actions as focused ACP context.",
 	},
 	{
+		id = "code_lens",
+		trigger = "@code-lens",
+		menu = "LSP",
+		info = "Open LSP code lenses as focused ACP context.",
+	},
+	{
 		id = "rename",
 		trigger = "@rename",
 		menu = "LSP",

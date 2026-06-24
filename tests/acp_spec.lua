@@ -3,6 +3,7 @@ local actions = require("acp.actions")
 local call_hierarchy = require("acp.call_hierarchy")
 local acp_changes = require("acp.changes")
 local code_actions = require("acp.code_actions")
+local code_lens = require("acp.code_lens")
 local acp_commands = require("acp.commands")
 local acp_config = require("acp.config")
 local acp_context = require("acp.context")
@@ -126,6 +127,8 @@ test("setup registers public user commands", function()
 		"AcpCommands",
 		"AcpConfig",
 		"AcpCodeActions",
+		"AcpCodeLens",
+		"AcpCodeLensQuickfix",
 		"AcpRename",
 		"AcpSmartContext",
 		"AcpHover",
@@ -1313,6 +1316,58 @@ test("LSP code actions are flattened and rendered for picker", function()
 	eq(line_actions[5].title, "Run command")
 end)
 
+test("LSP code lenses are flattened and rendered for picker", function()
+	local items = code_lens.normalize({
+		{
+			range = {
+				start = { line = 1, character = 2 },
+				["end"] = { line = 1, character = 12 },
+			},
+			command = {
+				title = "Run test",
+				command = "test.run",
+				arguments = { "nearest" },
+			},
+		},
+		{
+			range = {
+				start = { line = 0, character = 0 },
+				["end"] = { line = 0, character = 8 },
+			},
+		},
+	})
+
+	eq(#items, 2)
+	eq(code_lens.title(items[1]), "Unresolved code lens")
+	eq(code_lens.range(items[2]).line1, 2)
+	local lines, line_items = code_lens.picker_lines(items)
+	local text = table.concat(lines, "\n")
+	ok(text:find("ACP Code Lens", 1, true))
+	ok(text:find("Run test  test.run", 1, true))
+	ok(text:find("Q for quickfix", 1, true))
+	eq(line_items[3], items[1])
+
+	local qf_items = code_lens.quickfix_items(42, items)
+	eq(qf_items[1].bufnr, 42)
+	eq(qf_items[1].lnum, 1)
+	ok(qf_items[2].text:find("CODE LENS: Run test", 1, true))
+
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_name(bufnr, vim.fn.tempname() .. ".lua")
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"local function test_value()",
+		"  return 1",
+		"end",
+	})
+	vim.bo[bufnr].filetype = "lua"
+	local prompt = code_lens.prompt({ bufnr = bufnr }, items[2])
+	ok(prompt:find("Use this LSP code lens as context: Run test.", 1, true))
+	ok(prompt:find("Command: test.run", 1, true))
+	ok(prompt:find("Arguments: 1 item", 1, true))
+	ok(prompt:find("Selection: lines 2-2", 1, true))
+	pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+end)
+
 test("LSP prepare rename result is normalized and rendered", function()
 	local rename = require("acp.rename")
 	local bufnr = vim.api.nvim_create_buf(true, true)
@@ -1712,6 +1767,9 @@ test("slash command completion items are rendered for completefunc", function()
 	local code_action_item = prompt_completion.items(commands, "@code")[1]
 	eq(code_action_item.word, "@code-actions")
 	eq(code_action_item.menu, "LSP")
+	local code_lens_item = prompt_completion.items(commands, "@code-l")[1]
+	eq(code_lens_item.word, "@code-lens")
+	eq(prompt_completion.action_id(code_lens_item), "code_lens")
 	local rename_item = prompt_completion.items(commands, "@ren")[1]
 	eq(rename_item.word, "@rename")
 	eq(prompt_completion.action_id(rename_item), "rename")
@@ -1857,6 +1915,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		local prompt_actions_text = table.concat(vim.api.nvim_buf_get_lines(prompt_actions_buf, 0, -1, false), "\n")
 		ok(prompt_actions_text:find("Add context", 1, true))
 		ok(prompt_actions_text:find("Source diagnostics", 1, true))
+		ok(prompt_actions_text:find("Code lens", 1, true))
 		ok(prompt_actions_text:find("Rename symbol", 1, true))
 		ok(prompt_actions_text:find("LSP highlights", 1, true))
 		ok(prompt_actions_text:find("Tree-sitter nodes", 1, true))
@@ -2713,6 +2772,8 @@ test("actions command opens a session action palette", function()
 		local symbols_quickfix = false
 		local workspace_diagnostics = false
 		local workspace_diagnostics_quickfix = false
+		local code_lens_action = false
+		local code_lens_quickfix = false
 		local rename_action = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
@@ -2748,6 +2809,12 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Smart context", 1, true) then
 				smart_context_action = true
+			end
+			if line:find("Code lens", 1, true) then
+				code_lens_action = true
+			end
+			if line:find("Code lens quickfix", 1, true) then
+				code_lens_quickfix = true
 			end
 			if line:find("Rename symbol", 1, true) then
 				rename_action = true
@@ -2812,6 +2879,8 @@ test("actions command opens a session action palette", function()
 		ok(workspace_diagnostics, "action palette should include workspace diagnostics")
 		ok(workspace_diagnostics_quickfix, "action palette should include workspace diagnostics quickfix")
 		ok(smart_context_action, "action palette should include smart context")
+		ok(code_lens_action, "action palette should include code lens")
+		ok(code_lens_quickfix, "action palette should include code lens quickfix")
 		ok(rename_action, "action palette should include rename")
 		ok(signature_help, "action palette should include signature help")
 		ok(inlay_hints_action, "action palette should include inlay hints")
@@ -3324,6 +3393,122 @@ test("code actions command drafts selected LSP action context", function()
 
 	vim.lsp.buf_request_all = original_buf_request_all
 	vim.diagnostic.reset(ns, source_buf)
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("code lens command drafts selected LSP code-lens context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local function test_value()",
+		"  return 1",
+		"end",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/codeLens")
+		eq(params.textDocument.uri, vim.uri_from_bufnr(source_buf))
+		callback({
+			[1] = {
+				result = {
+					{
+						range = {
+							start = { line = 0, character = 0 },
+							["end"] = { line = 0, character = 25 },
+						},
+						command = {
+							title = "Run file tests",
+							command = "test.runFile",
+						},
+					},
+					{
+						range = {
+							start = { line = 1, character = 2 },
+							["end"] = { line = 1, character = 10 },
+						},
+						command = {
+							title = "Debug nearest test",
+							command = "test.debugNearest",
+							arguments = { "nearest" },
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpCodeLens")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-code-lens")
+		local picker_text = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+		ok(picker_text:find("Run file tests", 1, true))
+		ok(picker_text:find("Debug nearest test", 1, true))
+
+		local preview_found = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local bufnr = vim.api.nvim_win_get_buf(winid)
+			if bufnr ~= picker_buf and vim.bo[bufnr].buftype == "nofile" and vim.bo[bufnr].filetype == "lua" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+				if preview:find("local function test_value", 1, true) then
+					preview_found = true
+					break
+				end
+			end
+		end
+		ok(preview_found, "code lens picker should show a source preview")
+
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qflist.title:find("ACP code lens", 1, true))
+		eq(#qflist.items, 2)
+		ok(qflist.items[1].text:find("Run file tests", 1, true))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after code lens quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpCodeLensQuickfix")
+		qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qflist.title:find("ACP code lens", 1, true))
+		eq(#qflist.items, 2)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpCodeLens")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Use this LSP code lens as context: Run file tests.", 1, true))
+		ok(prompt:find("Command: test.runFile", 1, true))
+		ok(prompt:find("Selection: lines 1-1", 1, true))
+		ok(prompt:find("local function test_value", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
 	end

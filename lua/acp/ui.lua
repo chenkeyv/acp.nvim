@@ -2367,6 +2367,12 @@ local function prompt_action_items()
 	add("Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
 		M.open_code_actions()
 	end)
+	add("Code lens", "Draft from source-buffer LSP code lenses", ":AcpCodeLens", "LSP", function()
+		M.open_code_lens()
+	end)
+	add("Code lens quickfix", "Send source-buffer LSP code lenses to quickfix", ":AcpCodeLensQuickfix", "LSP", function()
+		M.open_code_lens_quickfix()
+	end)
 	add("Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
 		M.rename_symbol()
 	end)
@@ -3732,6 +3738,14 @@ function M.setup(opts)
 		M.open_code_actions()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpCodeLens", function()
+		M.open_code_lens()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCodeLensQuickfix", function()
+		M.open_code_lens_quickfix()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpRename", function()
 		M.rename_symbol()
 	end, {})
@@ -4269,6 +4283,12 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
 			M.open_code_actions()
+		end)
+		add_action(items, "Code lens", "Draft from source-buffer LSP code lenses", ":AcpCodeLens", "LSP", function()
+			M.open_code_lens()
+		end)
+		add_action(items, "Code lens quickfix", "Send source-buffer LSP code lenses to quickfix", ":AcpCodeLensQuickfix", "LSP", function()
+			M.open_code_lens_quickfix()
 		end)
 		add_action(items, "Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
 			M.rename_symbol()
@@ -6084,6 +6104,141 @@ function M.open_code_actions()
 	end)
 end
 
+function M._open_code_lens_picker(state, lens_list)
+	local code_lens = require("acp.code_lens")
+	if not lens_list or #lens_list == 0 then
+		notify("No LSP code lenses found for the source buffer", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_lenses = code_lens.picker_lines(lens_list)
+	local view
+	view = picker.open({
+		name = ("ACP://%s/%d/code-lens"):format(state.adapter, state.id),
+		filetype = "acp-code-lens",
+		lines = lines,
+		title = " ACP code lens ",
+		submit_desc = "Add ACP code-lens context",
+		close_desc = "Close ACP code lens",
+		preview = function(row)
+			local item = line_lenses[row]
+			if not item then
+				return nil
+			end
+			return source_preview(
+				state.source.bufnr,
+				code_lens.range(item),
+				(" Code lens %s "):format(code_lens.title(item))
+			)
+		end,
+		on_submit = function(row, view)
+			local item = line_lenses[row]
+			if not item then
+				return
+			end
+			local prompt, err = code_lens.prompt(state.source, item)
+			if not prompt then
+				notify(err or "Failed to render LSP code-lens context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("code lens: %s"):format(code_lens.title(item)))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
+	})
+
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		M._open_code_lens_quickfix(state, lens_list)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP code lens quickfix" })
+
+	return true
+end
+
+function M._open_code_lens_quickfix(state, lens_list)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	local code_lens = require("acp.code_lens")
+	local function open_items(items)
+		if not items or #items == 0 then
+			notify("No LSP code lenses found for the source buffer", vim.log.levels.WARN)
+			return false
+		end
+
+		vim.fn.setqflist({}, " ", {
+			title = ("ACP code lens #%s"):format(tostring(state.id or "?")),
+			items = code_lens.quickfix_items(state.source.bufnr, items),
+		})
+		vim.cmd("copen")
+		if not state.busy then
+			set_run_status(state, "code lens quickfix")
+		end
+		return true
+	end
+
+	if lens_list then
+		return open_items(lens_list)
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading code lens quickfix")
+	end
+	code_lens.request(state.source, function(items, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_items(items)
+	end)
+	return true
+end
+
+function M.open_code_lens()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local code_lens = require("acp.code_lens")
+	if not state.busy then
+		set_run_status(state, "loading code lens")
+	end
+	code_lens.request(state.source, function(lens_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		M._open_code_lens_picker(state, lens_list)
+	end)
+end
+
+function M.open_code_lens_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	M._open_code_lens_quickfix(state)
+end
+
 function M.rename_symbol()
 	local state = current_state()
 	if not state then
@@ -7168,6 +7323,9 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		code_actions = function()
 			M.open_code_actions()
+		end,
+		code_lens = function()
+			M.open_code_lens()
 		end,
 		rename = function()
 			M.rename_symbol()
