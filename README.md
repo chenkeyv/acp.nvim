@@ -12,6 +12,7 @@ This plugin provides an editor-native ACP chat surface:
 - Neovim highlight groups for readable transcript sections
 - non-blocking adapter startup and session creation
 - floating slash-command picker for adapter-advertised commands
+- native slash-command completion in the prompt buffer
 - floating session config picker for adapter-advertised model, mode, and reasoning options
 - per-session prompt history recall
 - plain-text transcript history under Neovim state
@@ -103,6 +104,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
+- `<C-Space>` opens native ACP prompt completion
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>af` opens the current session's changed files in quickfix
 - `<leader>a/` opens advertised ACP slash commands

@@ -151,6 +151,37 @@ test("slash command picker lines and draft text are rendered", function()
 	eq(acp_commands.slash_text(line_commands[6]), "/test")
 end)
 
+test("slash command completion items are rendered for completefunc", function()
+	local commands = {
+		{
+			name = "plan",
+			description = "Create a plan",
+			input = {
+				hint = "task",
+			},
+		},
+		{
+			name = "test",
+			description = "Run tests",
+		},
+	}
+
+	eq(acp_commands.completion_start("/pl", 3), 0)
+	eq(acp_commands.completion_start("ask /pl", 7), -3)
+
+	local plan_items = acp_commands.completion_items(commands, "/p")
+	eq(#plan_items, 1)
+	eq(plan_items[1].word, "/plan ")
+	eq(plan_items[1].abbr, "/plan")
+	eq(plan_items[1].menu, "task")
+	eq(plan_items[1].info, "Create a plan")
+
+	local all_items = acp_commands.completion_items(commands, "/")
+	eq(#all_items, 2)
+	eq(all_items[2].word, "/test")
+	eq(all_items[2].menu, "ACP")
+end)
+
 test("available commands updates are forwarded to active handlers", function()
 	local connection = Connection.new({
 		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 10 },
@@ -212,6 +243,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 	local passed, err = pcall(function()
 		vim.cmd("AcpChatWindow test")
 		input_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[input_buf].completefunc, "v:lua.acp_nvim_completefunc")
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "first prompt" })
 		vim.cmd("AcpSend")

@@ -788,6 +788,8 @@ local function create_buffers(state)
 	set_buf_options(state.input_buf, {
 		bufhidden = "wipe",
 		buftype = "nofile",
+		completefunc = "v:lua.acp_nvim_completefunc",
+		completeopt = "menuone,noselect",
 		filetype = "markdown",
 		swapfile = false,
 	})
@@ -893,6 +895,7 @@ local function register_keymaps(state)
 	vim.keymap.set({ "n", "i" }, "<M-p>", previous_prompt, { buffer = state.input_buf, desc = "Previous ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<M-n>", next_prompt, { buffer = state.input_buf, desc = "Next ACP prompt" })
 	vim.keymap.set("i", "<CR>", "<CR>", { buffer = state.input_buf, desc = "Insert newline" })
+	vim.keymap.set("i", "<C-Space>", "<C-x><C-u>", { buffer = state.input_buf, desc = "Complete ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<C-CR>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<C-s>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
 end
@@ -1750,6 +1753,19 @@ function M.open_config()
 	open_config_picker(state)
 end
 
+function M.completefunc(findstart, base)
+	if tonumber(findstart) == 1 then
+		return acp_commands.completion_start(vim.fn.getline("."), vim.fn.col(".") - 1)
+	end
+
+	local state = states[vim.api.nvim_get_current_buf()]
+	if not state then
+		return {}
+	end
+
+	return acp_commands.completion_items(state.available_commands, base)
+end
+
 function M.prompt_previous()
 	local state = current_state()
 	if not state then
@@ -1848,6 +1864,10 @@ function M.tabline()
 
 	table.insert(parts, "%#TabLineFill#%T")
 	return table.concat(parts)
+end
+
+function _G.acp_nvim_completefunc(findstart, base)
+	return require("acp.ui").completefunc(findstart, base)
 end
 
 return M
