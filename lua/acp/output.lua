@@ -200,6 +200,7 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpGhostText", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpCodeFence", { fg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpInjectedLanguage", { fg = "#1a1b26", bg = "#7aa2f7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpSectionStats", { fg = "#1a1b26", bg = "#565f89", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpCurrentSection", { link = "CursorLine", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulse", { link = "IncSearch", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulseSoft", { link = "Search", default = true })
@@ -446,6 +447,78 @@ function M.section_text(lines, lnum, opts)
 		return nil
 	end
 	return table.concat(section_lines, "\n"), range, section_lines
+end
+
+local function section_body(lines, range)
+	local body = {}
+	if not range then
+		return body
+	end
+
+	for index = range.line1 + 1, range.line2 do
+		table.insert(body, lines[index] or "")
+	end
+	while #body > 0 and not clean(body[#body]) do
+		table.remove(body)
+	end
+	return body
+end
+
+local function section_summary_label(body)
+	local line_count = 0
+	local word_count = 0
+	for _, line in ipairs(body or {}) do
+		if clean(line) then
+			line_count = line_count + 1
+			for _ in tostring(line):gmatch("%S+") do
+				word_count = word_count + 1
+			end
+		end
+	end
+
+	if line_count == 0 then
+		return nil
+	end
+
+	local code_count = #M.code_blocks(body)
+	if code_count > 0 then
+		return ("%dL | %d code"):format(line_count, code_count), {
+			lines = line_count,
+			words = word_count,
+			code_blocks = code_count,
+		}
+	end
+
+	return ("%dL | %dw"):format(line_count, word_count), {
+		lines = line_count,
+		words = word_count,
+		code_blocks = 0,
+	}
+end
+
+function M.section_summaries(lines)
+	lines = lines or {}
+	local summaries = {}
+	local sections = M.sections(lines)
+
+	for index, section in ipairs(sections) do
+		if section.kind ~= "SESSION" then
+			local next_section = sections[index + 1]
+			local range = {
+				line1 = section.line,
+				line2 = next_section and (next_section.line - 1) or #lines,
+			}
+			local label, metrics = section_summary_label(section_body(lines, range))
+			if label then
+				metrics.line = section.line
+				metrics.kind = section.kind
+				metrics.label = (" %s "):format(label)
+				summaries[section.line] = metrics
+			end
+		end
+	end
+
+	return summaries
 end
 
 function M.outline_lines(sections)

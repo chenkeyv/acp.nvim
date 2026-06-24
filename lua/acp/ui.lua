@@ -88,6 +88,7 @@ local function refresh_output_highlights(state)
 
 	vim.api.nvim_buf_clear_namespace(state.output_buf, output_ns, 0, -1)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local section_summaries = output.section_summaries(lines)
 	for index, line in ipairs(lines) do
 		local style = output.line_style(line)
 		if style then
@@ -97,8 +98,15 @@ local function refresh_output_highlights(state)
 			if style.line_hl_group then
 				opts.line_hl_group = style.line_hl_group
 			end
-			if style.badge then
-				opts.virt_text = { { style.badge, style.badge_hl or "AcpBadge" } }
+			local summary = section_summaries[index]
+			if style.badge or summary then
+				opts.virt_text = {}
+				if summary then
+					table.insert(opts.virt_text, { summary.label, "AcpSectionStats" })
+				end
+				if style.badge then
+					table.insert(opts.virt_text, { style.badge, style.badge_hl or "AcpBadge" })
+				end
 				opts.virt_text_pos = "right_align"
 			end
 			if style.sign_text then
