@@ -42,6 +42,7 @@ This plugin provides an editor-native ACP chat surface:
 - floating slash-command picker for adapter-advertised commands
 - native slash-command completion in the prompt buffer
 - prompt-buffer ghost text and draft statistics while composing
+- prompt-focused action picker with source, LSP, Tree-sitter, output, and session workflows
 - floating session config picker for adapter-advertised model, mode, and reasoning options
 - per-session prompt history recall
 - searchable, previewable plain-text transcript history under Neovim state
@@ -122,6 +123,7 @@ vim.g.acp_nvim_config = {
 - `:AcpStop` stops the current agent process
 - `:AcpSessions` focuses the sessions side panel or opens a floating session picker
 - `:AcpActions` opens a picker of available ACP workflows
+- `:AcpPromptActions` opens composer-focused actions with source context preview
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
 - `:AcpOutput` opens a floating outline of the current output transcript
 - `:AcpOutputSearch` opens every non-empty output line with context previews
@@ -160,6 +162,7 @@ In the sessions panel:
 In the prompt buffer:
 
 - empty prompts show ghost-text workflow hints; non-empty prompts show draft stats
+- `?` opens composer-focused actions with source context preview
 - `<Enter>` inserts a newline
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback

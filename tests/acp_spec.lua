@@ -86,6 +86,7 @@ test("setup registers public user commands", function()
 		"AcpStop",
 		"AcpSessions",
 		"AcpActions",
+		"AcpPromptActions",
 		"AcpChanges",
 		"AcpOutput",
 		"AcpOutputSearch",
@@ -209,6 +210,7 @@ test("prompt view renders ghost text and draft stats", function()
 	local empty = prompt_view.info({ "" })
 	ok(empty.empty)
 	ok(empty.ghost:find("<C%-s> send"))
+	ok(empty.ghost:find("? actions", 1, true))
 
 	local busy = prompt_view.info({ "" }, { busy = true })
 	ok(busy.ghost:find("responding", 1, true))
@@ -920,6 +922,34 @@ test("prompt history recalls sent prompts and restores draft", function()
 			end
 		end
 		ok(ghost, "empty prompt should show ghost text")
+
+		local keys = vim.api.nvim_replace_termcodes("?", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local prompt_actions_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[prompt_actions_buf].filetype, "acp-prompt-actions")
+		local prompt_actions_text = table.concat(vim.api.nvim_buf_get_lines(prompt_actions_buf, 0, -1, false), "\n")
+		ok(prompt_actions_text:find("Add context", 1, true))
+		ok(prompt_actions_text:find("Source diagnostics", 1, true))
+		ok(prompt_actions_text:find("Tree-sitter nodes", 1, true))
+		ok(prompt_actions_text:find("Search output", 1, true))
+
+		local prompt_preview = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local bufnr = vim.api.nvim_win_get_buf(winid)
+			if bufnr ~= prompt_actions_buf and vim.bo[bufnr].buftype == "nofile" then
+				local preview_text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+				if preview_text:find("Prompt Actions", 1, true) and preview_text:find("Context Sources", 1, true) then
+					prompt_preview = true
+				end
+			end
+		end
+		ok(prompt_preview, "prompt actions should show a context preview")
+		keys = vim.api.nvim_replace_termcodes("q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local input_win = vim.fn.bufwinid(input_buf)
+		if input_win ~= -1 then
+			vim.api.nvim_set_current_win(input_win)
+		end
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "draft prompt" })
 		vim.api.nvim_exec_autocmds("TextChanged", { buffer = input_buf })

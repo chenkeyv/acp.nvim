@@ -1713,6 +1713,177 @@ local function open_output_actions(state)
 	return true
 end
 
+local function prompt_action_items()
+	local items = {}
+
+	local function add(label, detail, key, scope, run)
+		table.insert(items, {
+			label = label,
+			detail = detail,
+			key = key,
+			scope = scope,
+			run = run,
+		})
+	end
+
+	add("Send prompt", "Submit the current prompt buffer", "<C-s>", "prompt", function()
+		M.send()
+	end)
+	add("Stop agent", "Stop the active ACP adapter process", "<leader>aq", "prompt", function()
+		M.stop()
+	end)
+	add("Add context", "Insert captured editor context into the prompt", "<leader>ac", "source", function()
+		M.add_context()
+	end)
+	add("Source diagnostics", "Draft a focused fix from source diagnostics", "<leader>ad", "LSP", function()
+		M.open_diagnostics()
+	end)
+	add("Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
+		M.open_code_actions()
+	end)
+	add("Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
+		M.add_hover()
+	end)
+	add("References", "Pick LSP references as focused context", "<leader>ar", "LSP", function()
+		M.open_references()
+	end)
+	add("Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
+		M.open_symbols()
+	end)
+	add("Tree-sitter nodes", "Pick syntax-aware source context", "<leader>at", "Tree-sitter", function()
+		M.open_treesitter()
+	end)
+	add("Slash commands", "Draft an adapter-advertised slash command", "<leader>a/", "session", function()
+		M.open_commands()
+	end)
+	add("Config options", "Pick adapter-advertised session config", "<leader>ao", "session", function()
+		M.open_config()
+	end)
+	add("Search output", "Search every non-empty transcript line with context preview", "<leader>ax", "output", function()
+		M.open_output_search()
+	end)
+	add("Draft from output", "Insert the current transcript section as follow-up prompt context", "<leader>ai", "output", function()
+		M.draft_output_section()
+	end)
+	add("Output outline", "Jump across transcript sections", "<leader>av", "output", function()
+		M.open_output()
+	end)
+	add("All actions", "Open the full ACP workflow palette", "<leader>ak", "session", function()
+		M.open_actions()
+	end)
+	add("Previous prompt", "Recall the previous sent prompt", "<M-p>", "prompt", function()
+		M.prompt_previous()
+	end)
+	add("Next prompt", "Step forward through prompt history or restore the draft", "<M-n>", "prompt", function()
+		M.prompt_next()
+	end)
+
+	return items
+end
+
+local function prompt_actions_preview(state)
+	if not state then
+		return nil
+	end
+
+	local lines = { "Prompt Actions", "" }
+	table.insert(lines, ("Session: #%d %s"):format(state.id, state.adapter))
+	if state.model and state.model ~= "" then
+		table.insert(lines, ("Model: %s"):format(state.model))
+	end
+	if state.context_window then
+		table.insert(lines, ("Context window: %s"):format(format_count(state.context_window)))
+	end
+	table.insert(lines, ("Status: %s"):format(state.run_status or (state.busy and "running" or "ready")))
+
+	table.insert(lines, "")
+	table.insert(lines, "Draft")
+	if valid_buf(state.input_buf) then
+		local prompt_lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
+		local text = table.concat(prompt_lines, "\n")
+		local content = trim(text)
+		if content == "" then
+			table.insert(lines, "Empty prompt")
+		else
+			local words = 0
+			for _ in content:gmatch("%S+") do
+				words = words + 1
+			end
+			table.insert(lines, ("%d line(s), %d char(s), %d word(s)"):format(
+				math.max(1, #prompt_lines),
+				vim.fn.strchars(text),
+				words
+			))
+		end
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Source")
+	if state.source and valid_buf(state.source.bufnr) then
+		local name = vim.api.nvim_buf_get_name(state.source.bufnr)
+		local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or "[No Name]"
+		local filetype = vim.bo[state.source.bufnr].filetype
+		table.insert(lines, ("File: %s"):format(path))
+		if filetype ~= "" then
+			table.insert(lines, ("Filetype: %s"):format(filetype))
+		end
+		if state.source.range then
+			table.insert(lines, ("Selection: lines %d-%d"):format(state.source.range.line1, state.source.range.line2))
+		elseif state.source.cursor then
+			table.insert(lines, ("Cursor: %d:%d"):format(state.source.cursor[1] or 1, (state.source.cursor[2] or 0) + 1))
+		end
+	else
+		table.insert(lines, "No source buffer captured for this session")
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Context Sources")
+	table.insert(lines, "- Source selection and cursor context")
+	table.insert(lines, "- LSP diagnostics, code actions, hover, references, symbols")
+	table.insert(lines, "- Tree-sitter nodes around the source cursor")
+	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
+
+	return {
+		lines = lines,
+		filetype = "acp",
+		title = " ACP prompt preview ",
+	}
+end
+
+local function open_prompt_actions(state)
+	if not state or not valid_buf(state.input_buf) then
+		notify("No ACP prompt buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_actions = actions.picker_lines(prompt_action_items())
+	local origin_win = valid_win(state.input_win) and state.input_win or vim.api.nvim_get_current_win()
+	picker.open({
+		name = ("ACP://%s/%d/prompt-actions"):format(state.adapter, state.id),
+		filetype = "acp-prompt-actions",
+		lines = lines,
+		title = " ACP prompt actions ",
+		submit_desc = "Run ACP prompt action",
+		close_desc = "Close ACP prompt actions",
+		preview = function()
+			return prompt_actions_preview(state)
+		end,
+		on_submit = function(row, view)
+			local action = line_actions[row]
+			if not action then
+				return
+			end
+
+			view.close()
+			if valid_win(origin_win) then
+				vim.api.nvim_set_current_win(origin_win)
+			end
+			action.run()
+		end,
+	})
+	return true
+end
+
 local function source_range(source)
 	if source and source.range then
 		return source.range
@@ -2351,6 +2522,9 @@ local function register_keymaps(state)
 	local open_output_action_menu = function()
 		open_output_actions(state)
 	end
+	local open_prompt_action_menu = function()
+		open_prompt_actions(state)
+	end
 	local previous_output_item = function()
 		jump_output_item(state, -1)
 	end
@@ -2420,6 +2594,7 @@ local function register_keymaps(state)
 	end
 
 	vim.keymap.set("n", "<leader>ac", add_context, { buffer = state.input_buf, desc = "Add ACP editor context" })
+	vim.keymap.set("n", "?", open_prompt_action_menu, { buffer = state.input_buf, desc = "Open ACP prompt actions" })
 	vim.keymap.set("n", "[[", function()
 		jump_output_section(state, -1)
 	end, { buffer = state.output_buf, desc = "Previous ACP output section" })
@@ -2564,6 +2739,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpActions", function()
 		M.open_actions()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpPromptActions", function()
+		M.open_prompt_actions()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpChanges", function()
@@ -2985,6 +3164,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Add context", "Insert captured editor context into the prompt", "<leader>ac", "session", function()
 			M.add_context()
+		end)
+		add_action(items, "Prompt actions", "Show composer-focused actions and source context preview", "?", "session", function()
+			M.open_prompt_actions()
 		end)
 		add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "session", function()
 			M.open_output()
@@ -3645,6 +3827,15 @@ end
 
 function M.open_actions()
 	open_action_palette(state_for_current_buffer(), vim.api.nvim_get_current_win())
+end
+
+function M.open_prompt_actions()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_prompt_actions(state)
 end
 
 function M.restore(adapter_name)
