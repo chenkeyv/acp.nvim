@@ -428,6 +428,7 @@ test("async prompt starts session without blocking before sending prompt", funct
 
 	eq(#writes, 2)
 	eq(writes[2].method, "session/new")
+	eq(writes[1].params.clientCapabilities.terminal, true)
 	eq(started, false)
 
 	connection:handle_line(vim.json.encode({
@@ -452,6 +453,161 @@ test("async prompt starts session without blocking before sending prompt", funct
 	}))
 
 	eq(done_reason, "end_turn")
+end)
+
+test("terminal requests capture bounded output and wait for exit", function()
+	local root = vim.fn.tempname()
+	vim.fn.mkdir(root, "p")
+
+	local connection = Connection.new({
+		adapter = {
+			command = { "missing-acp-test-command" },
+			timeout_ms = 10,
+			terminal_auto_approve = true,
+		},
+		cwd = root,
+	})
+	connection.session_id = "session-1"
+
+	local writes = {}
+	function connection:write(message)
+		table.insert(writes, message)
+		return true
+	end
+
+	connection:handle_request({
+		id = 51,
+		method = "terminal/create",
+		params = {
+			sessionId = "session-1",
+			command = "sh",
+			args = { "-c", "printf 1234567890" },
+			cwd = root,
+			outputByteLimit = 4,
+		},
+	})
+
+	local terminal_id = writes[1].result.terminalId
+	ok(terminal_id, "terminal create should return an id")
+
+	connection:handle_request({
+		id = 52,
+		method = "terminal/wait_for_exit",
+		params = {
+			sessionId = "session-1",
+			terminalId = terminal_id,
+		},
+	})
+
+	ok(vim.wait(500, function()
+		return #writes >= 2
+	end, 5), "terminal wait should respond after command exits")
+	eq(writes[2].id, 52)
+	eq(writes[2].result.exitCode, 0)
+
+	ok(vim.wait(500, function()
+		local output = connection.terminals:output(terminal_id)
+		return output and output.output == "7890"
+	end, 5), "terminal output should be captured and bounded")
+
+	connection:handle_request({
+		id = 53,
+		method = "terminal/output",
+		params = {
+			sessionId = "session-1",
+			terminalId = terminal_id,
+		},
+	})
+	eq(writes[3].result.output, "7890")
+	eq(writes[3].result.truncated, true)
+	eq(writes[3].result.exitStatus.exitCode, 0)
+
+	connection:handle_request({
+		id = 54,
+		method = "terminal/release",
+		params = {
+			sessionId = "session-1",
+			terminalId = terminal_id,
+		},
+	})
+	eq(writes[4].id, 54)
+	eq(writes[4].result, vim.NIL)
+
+	connection:handle_request({
+		id = 55,
+		method = "terminal/output",
+		params = {
+			sessionId = "session-1",
+			terminalId = terminal_id,
+		},
+	})
+	eq(writes[5].error.code, jsonrpc.errors.invalid_params)
+
+	vim.fn.delete(root, "rf")
+end)
+
+test("embedded terminals stream output to active handlers", function()
+	local root = vim.fn.tempname()
+	vim.fn.mkdir(root, "p")
+
+	local connection = Connection.new({
+		adapter = {
+			command = { "missing-acp-test-command" },
+			timeout_ms = 10,
+			terminal_auto_approve = true,
+		},
+		cwd = root,
+	})
+	connection.session_id = "session-1"
+
+	local writes = {}
+	function connection:write(message)
+		table.insert(writes, message)
+		return true
+	end
+
+	local chunks = {}
+	local attached
+	connection.active_handlers = {
+		terminal_attach = function(event)
+			attached = event.terminal_id
+		end,
+		terminal_output = function(event)
+			table.insert(chunks, event.text)
+		end,
+	}
+
+	connection:handle_request({
+		id = 61,
+		method = "terminal/create",
+		params = {
+			sessionId = "session-1",
+			command = "sh",
+			args = { "-c", "sleep 0.05; printf hello" },
+			cwd = root,
+		},
+	})
+
+	local terminal_id = writes[1].result.terminalId
+	connection:handle_session_update({
+		sessionUpdate = "tool_call",
+		toolCallId = "tool-1",
+		title = "Run command",
+		content = {
+			{
+				type = "terminal",
+				terminalId = terminal_id,
+			},
+		},
+	})
+
+	eq(attached, terminal_id)
+	ok(vim.wait(500, function()
+		return table.concat(chunks):find("hello", 1, true) ~= nil
+	end, 5), "embedded terminal output should stream to handlers")
+
+	connection.terminals:release_all()
+	vim.fn.delete(root, "rf")
 end)
 
 test("editor context includes source line and diagnostics", function()

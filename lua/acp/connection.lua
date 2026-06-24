@@ -1,6 +1,7 @@
 local jsonrpc = require("acp.jsonrpc")
 local file_review = require("acp.file_review")
 local permission = require("acp.permission")
+local terminal = require("acp.terminal")
 
 local M = {}
 
@@ -13,6 +14,11 @@ local methods = {
 	session_request_permission = "session/request_permission",
 	fs_read_text_file = "fs/read_text_file",
 	fs_write_text_file = "fs/write_text_file",
+	terminal_create = "terminal/create",
+	terminal_output = "terminal/output",
+	terminal_wait_for_exit = "terminal/wait_for_exit",
+	terminal_kill = "terminal/kill",
+	terminal_release = "terminal/release",
 }
 
 local function notify(message, level)
@@ -103,11 +109,52 @@ local function file_write_review_delay(adapter)
 	return 80
 end
 
+local function env_table(env)
+	if type(env) ~= "table" then
+		return nil
+	end
+
+	local out = {}
+	for _, item in ipairs(env) do
+		if type(item) == "table" and type(item.name) == "string" then
+			out[item.name] = item.value ~= nil and tostring(item.value) or ""
+		end
+	end
+
+	return next(out) and out or nil
+end
+
+local function string_list(value)
+	if value == nil then
+		return {}
+	end
+	if type(value) ~= "table" then
+		return nil
+	end
+
+	local out = {}
+	for _, item in ipairs(value) do
+		if type(item) ~= "string" then
+			return nil
+		end
+		table.insert(out, item)
+	end
+	return out
+end
+
+local function command_display(command, args)
+	local parts = { command }
+	for _, arg in ipairs(args or {}) do
+		table.insert(parts, arg)
+	end
+	return table.concat(parts, " ")
+end
+
 local Connection = {}
 Connection.__index = Connection
 
 function Connection.new(config)
-	return setmetatable({
+	local connection = setmetatable({
 		adapter = config.adapter,
 		cwd = config.cwd or vim.fn.getcwd(),
 		handle = nil,
@@ -122,6 +169,12 @@ function Connection.new(config)
 		authenticated = false,
 		active_handlers = nil,
 	}, Connection)
+	connection.terminals = terminal.new({
+		on_output = function(event)
+			connection:handle_terminal_output(event)
+		end,
+	})
+	return connection
 end
 
 function Connection:next_request_id()
@@ -279,7 +332,7 @@ function Connection:initialize()
 				readTextFile = true,
 				writeTextFile = true,
 			},
-			terminal = false,
+			terminal = true,
 		},
 		clientInfo = {
 			name = "keyv.nvim-acp",
@@ -376,7 +429,7 @@ function Connection:initialize_async(callback)
 				readTextFile = true,
 				writeTextFile = true,
 			},
-			terminal = false,
+			terminal = true,
 		},
 		clientInfo = {
 			name = "keyv.nvim-acp",
@@ -527,6 +580,31 @@ local function extract_text(content)
 	end
 end
 
+function Connection:handle_terminal_output(event)
+	if self.active_handlers and self.active_handlers.terminal_output then
+		self.active_handlers.terminal_output(event)
+	end
+end
+
+function Connection:mark_embedded_terminals(content)
+	if type(content) ~= "table" then
+		return
+	end
+
+	for _, item in ipairs(content) do
+		if type(item) == "table" and item.type == "terminal" and type(item.terminalId) == "string" then
+			local snapshot = self.terminals and self.terminals:embed(item.terminalId)
+			if snapshot and self.active_handlers and self.active_handlers.terminal_attach then
+				self.active_handlers.terminal_attach({
+					terminal_id = item.terminalId,
+					output = snapshot.output,
+					truncated = snapshot.truncated,
+				})
+			end
+		end
+	end
+end
+
 function Connection:handle_session_update(update)
 	if not self.active_handlers or type(update) ~= "table" then
 		return
@@ -542,10 +620,16 @@ function Connection:handle_session_update(update)
 		if text and text ~= "" and self.active_handlers.thought_chunk then
 			self.active_handlers.thought_chunk(text)
 		end
-	elseif update.sessionUpdate == "tool_call" and self.active_handlers.tool_call then
-		self.active_handlers.tool_call(update)
-	elseif update.sessionUpdate == "tool_call_update" and self.active_handlers.tool_update then
-		self.active_handlers.tool_update(update)
+	elseif update.sessionUpdate == "tool_call" then
+		if self.active_handlers.tool_call then
+			self.active_handlers.tool_call(update)
+		end
+		self:mark_embedded_terminals(update.content)
+	elseif update.sessionUpdate == "tool_call_update" then
+		if self.active_handlers.tool_update then
+			self.active_handlers.tool_update(update)
+		end
+		self:mark_embedded_terminals(update.content)
 	elseif update.sessionUpdate == "session_info_update" and self.active_handlers.session_info then
 		self.active_handlers.session_info(update)
 	elseif update.sessionUpdate == "usage_update" and self.active_handlers.usage then
@@ -669,6 +753,117 @@ function Connection:handle_fs_write(id, params)
 	self:schedule_file_write_review()
 end
 
+function Connection:terminal_cwd(params)
+	local cwd = params and params.cwd
+	if not cwd or cwd == "" then
+		return self.cwd
+	end
+
+	local path = resolve_path(cwd, self.cwd)
+	if not path or not allowed_path(path, self.cwd) then
+		return nil, "Refusing to run terminal outside cwd"
+	end
+	if vim.fn.isdirectory(path) == 0 then
+		return nil, "Terminal cwd does not exist"
+	end
+	return path, nil
+end
+
+function Connection:run_terminal_create(id, params, cwd, args)
+	local output_limit = tonumber(params.outputByteLimit)
+	if output_limit == nil then
+		output_limit = 1024 * 1024
+	end
+
+	local term, err = self.terminals:create({
+		command = params.command,
+		args = args,
+		env = env_table(params.env),
+		cwd = cwd,
+		output_limit = output_limit,
+	})
+	if not term then
+		return self:send_error(id, ("Terminal failed to start: %s"):format(err))
+	end
+
+	self:send_result(id, { terminalId = term.id })
+end
+
+function Connection:handle_terminal_create(id, params)
+	if type(params.command) ~= "string" or params.command == "" then
+		return self:send_error(id, "Invalid terminal command", jsonrpc.errors.invalid_params)
+	end
+
+	local args = string_list(params.args)
+	if not args then
+		return self:send_error(id, "Invalid terminal args", jsonrpc.errors.invalid_params)
+	end
+
+	local cwd, cwd_err = self:terminal_cwd(params)
+	if not cwd then
+		return self:send_error(id, cwd_err, jsonrpc.errors.invalid_params)
+	end
+
+	if self.adapter.terminal_auto_approve then
+		return self:run_terminal_create(id, params, cwd, args)
+	end
+
+	permission.select({
+		toolCall = {
+			title = ("Run terminal command: %s"):format(params.command),
+			kind = "execute",
+			description = ("cwd: %s"):format(cwd),
+		},
+		options = {
+			{
+				optionId = "run",
+				name = "Run command",
+				description = command_display(params.command, args),
+			},
+			{
+				optionId = "cancel",
+				name = "Cancel",
+			},
+		},
+	}, function(option)
+		if not option or option.optionId ~= "run" then
+			return self:send_error(id, "Terminal command cancelled", jsonrpc.errors.internal_error)
+		end
+
+		self:run_terminal_create(id, params, cwd, args)
+	end)
+end
+
+function Connection:handle_terminal_output_request(id, params)
+	local result = self.terminals:output(params.terminalId)
+	if not result then
+		return self:send_error(id, "Terminal not found", jsonrpc.errors.invalid_params)
+	end
+	self:send_result(id, result)
+end
+
+function Connection:handle_terminal_wait_for_exit(id, params)
+	if not self.terminals:wait(params.terminalId, function(status)
+		self:send_result(id, status)
+	end) then
+		return self:send_error(id, "Terminal not found", jsonrpc.errors.invalid_params)
+	end
+end
+
+function Connection:handle_terminal_kill(id, params)
+	if not self.terminals:kill(params.terminalId) then
+		return self:send_error(id, "Terminal not found", jsonrpc.errors.invalid_params)
+	end
+	self:send_result(id, nil)
+end
+
+function Connection:handle_terminal_release(id, params)
+	if not self.terminals:release(params.terminalId) then
+		return self:send_error(id, "Terminal not found", jsonrpc.errors.invalid_params)
+	end
+	self:send_result(id, nil)
+end
+
 function Connection:handle_request(message)
 	if
 		message.params
@@ -687,6 +882,16 @@ function Connection:handle_request(message)
 		return self:handle_fs_read(message.id, message.params or {})
 	elseif message.method == methods.fs_write_text_file then
 		return self:handle_fs_write(message.id, message.params or {})
+	elseif message.method == methods.terminal_create then
+		return self:handle_terminal_create(message.id, message.params or {})
+	elseif message.method == methods.terminal_output then
+		return self:handle_terminal_output_request(message.id, message.params or {})
+	elseif message.method == methods.terminal_wait_for_exit then
+		return self:handle_terminal_wait_for_exit(message.id, message.params or {})
+	elseif message.method == methods.terminal_kill then
+		return self:handle_terminal_kill(message.id, message.params or {})
+	elseif message.method == methods.terminal_release then
+		return self:handle_terminal_release(message.id, message.params or {})
 	elseif message.id then
 		return self:send_error(message.id, "Method not found", jsonrpc.errors.method_not_found)
 	end
@@ -738,6 +943,7 @@ function Connection:handle_exit(result)
 		self.active_handlers.error(("ACP agent exited with code %s"):format(code))
 	end
 	self.pending_file_writes = {}
+	self.terminals:release_all()
 
 	local message = ("ACP agent exited with code %s"):format(code)
 	for id, pending in pairs(self.pending) do
@@ -764,6 +970,7 @@ function Connection:stop()
 		self.handle:kill(15)
 	end
 	self.pending_file_writes = {}
+	self.terminals:release_all()
 	self.handle = nil
 	self.active_handlers = nil
 end

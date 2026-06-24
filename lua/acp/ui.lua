@@ -82,6 +82,9 @@ local function output_line_highlight(line)
 	if line:match("^Tool") or line:match("^Wrote ") then
 		return "AcpTool"
 	end
+	if line:match("^Terminal:") then
+		return "AcpTool"
+	end
 	if line:match("^Thought:") then
 		return "AcpThought"
 	end
@@ -184,6 +187,34 @@ local function append_text(state, text)
 
 	set_output_lines(state, line_count - 1, line_count, replacement)
 	follow_output(state)
+end
+
+local function ensure_terminal_block(state, terminal_id)
+	state.rendered_terminals = state.rendered_terminals or {}
+	if state.rendered_terminals[terminal_id] then
+		return
+	end
+
+	state.rendered_terminals[terminal_id] = true
+	append_lines(state, { "", ("Terminal: %s"):format(terminal_id), "" })
+end
+
+local function append_terminal_output(state, event)
+	if not event or not event.terminal_id then
+		return
+	end
+
+	ensure_terminal_block(state, event.terminal_id)
+	if event.text and event.text ~= "" then
+		append_text(state, event.text)
+	end
+	if event.truncated then
+		state.truncated_terminals = state.truncated_terminals or {}
+		if not state.truncated_terminals[event.terminal_id] then
+			state.truncated_terminals[event.terminal_id] = true
+			append_lines(state, { "", "Terminal output truncated to the configured byte limit.", "" })
+		end
+	end
 end
 
 local function sorted_sessions()
@@ -1340,6 +1371,20 @@ function M.send()
 		tool_update = function(update)
 			set_run_status(state, ("tool: %s"):format(update.status or update.title or "updated"))
 			append_lines(state, { "", ("Tool update: %s"):format(update.status or update.title or "updated"), "" })
+		end,
+		terminal_attach = function(event)
+			ensure_terminal_block(state, event.terminal_id)
+			if event.output and event.output ~= "" then
+				append_terminal_output(state, {
+					terminal_id = event.terminal_id,
+					text = event.output,
+					truncated = event.truncated,
+				})
+			end
+		end,
+		terminal_output = function(event)
+			set_run_status(state, ("terminal: %s"):format(event.terminal_id))
+			append_terminal_output(state, event)
 		end,
 		file_written = function(path)
 			local entry = changes.record(state, path)
