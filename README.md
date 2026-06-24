@@ -62,7 +62,7 @@ This plugin provides an editor-native ACP chat surface:
 - adapter-backed session listing and restoration
 - async LSP code-action picker for drafting focused fix/refactor prompts
 - async LSP hover context insertion for source-cursor documentation
-- async LSP references picker for adding focused usage context
+- async LSP references picker with quickfix export for focused usage context
 - async LSP document-symbol picker for adding focused symbol context
 - Tree-sitter node picker for adding syntax-aware focused context
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
@@ -168,6 +168,7 @@ vim.g.acp_nvim_config = {
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
 - `:AcpHover` inserts LSP hover documentation for the source cursor
 - `:AcpReferences` opens an LSP references picker for the source cursor
+- `:AcpReferencesQuickfix` sends LSP references for the source cursor to quickfix
 - `:AcpSymbols` opens an LSP document-symbol picker for the source buffer
 - `:AcpTreeSitter` opens a Tree-sitter node picker for the source cursor
 - `:AcpHistory` opens saved transcript history
@@ -214,6 +215,7 @@ In the prompt buffer:
 - `<leader>aa` opens source-buffer LSP code actions
 - `<leader>ah` inserts source-buffer LSP hover documentation
 - `<leader>ar` opens source-buffer LSP references
+- `<leader>aR` sends source-buffer LSP references to quickfix
 - `<leader>al` opens source-buffer LSP symbols
 - `<leader>at` opens source-buffer Tree-sitter nodes
 
@@ -249,7 +251,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file, diagnostics, output-location, and output-item pickers use `Q` to export rows to quickfix
+- changed-file, diagnostics, LSP-reference, output-location, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 

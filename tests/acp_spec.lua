@@ -117,6 +117,7 @@ test("setup registers public user commands", function()
 		"AcpCodeActions",
 		"AcpHover",
 		"AcpReferences",
+		"AcpReferencesQuickfix",
 		"AcpSymbols",
 		"AcpTreeSitter",
 		"AcpHistory",
@@ -771,12 +772,21 @@ test("LSP references are flattened and rendered for picker", function()
 	local range = references.range(flattened[2])
 	eq(range.line1, 4)
 	eq(range.line2, 5)
+	eq(range.col1, 1)
+	eq(range.col2, 2)
 
 	local lines, line_references = references.picker_lines(flattened)
 	local text = table.concat(lines, "\n")
 	ok(text:find("acp%-reference%.lua:2"))
 	ok(text:find("acp%-reference%.lua:4"))
+	ok(text:find("Q for quickfix", 1, true))
 	eq(line_references[3].uri, uri)
+
+	local qf_items = references.quickfix_items(flattened)
+	eq(#qf_items, 2)
+	eq(qf_items[1].lnum, 2)
+	eq(qf_items[1].col, 1)
+	ok(qf_items[1].text:find("REFERENCE", 1, true))
 end)
 
 test("diagnostic picker lines render source and code", function()
@@ -1157,6 +1167,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		ok(prompt_actions_text:find("Add context", 1, true))
 		ok(prompt_actions_text:find("Source diagnostics", 1, true))
 		ok(prompt_actions_text:find("Tree-sitter nodes", 1, true))
+		ok(prompt_actions_text:find("References quickfix", 1, true))
 		ok(prompt_actions_text:find("Search output", 1, true))
 		ok(prompt_actions_text:find("Output map", 1, true))
 
@@ -1960,6 +1971,7 @@ test("actions command opens a session action palette", function()
 		local output_actions = false
 		local yank_code_block = false
 		local diagnostics_quickfix = false
+		local references_quickfix = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
@@ -1986,6 +1998,9 @@ test("actions command opens a session action palette", function()
 			if line:find("Diagnostics quickfix", 1, true) then
 				diagnostics_quickfix = true
 			end
+			if line:find("References quickfix", 1, true) then
+				references_quickfix = true
+			end
 			if line:find("Close session", 1, true) then
 				close_session = true
 			end
@@ -1998,6 +2013,7 @@ test("actions command opens a session action palette", function()
 		ok(output_actions, "action palette should include output actions")
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
+		ok(references_quickfix, "action palette should include references quickfix")
 		ok(close_session, "action palette should include close session")
 
 		vim.api.nvim_win_set_cursor(0, { output_outline_row, 0 })
@@ -2067,6 +2083,7 @@ test("chat marks captured source ranges and clears them on close", function()
 		ok(actions_text:find("Add marked context", 1, true))
 		ok(actions_text:find("Refresh source", 1, true))
 		ok(actions_text:find("Tree-sitter nodes", 1, true))
+		ok(actions_text:find("References quickfix", 1, true))
 		ok(actions_text:find("Search output", 1, true))
 		ok(actions_text:find("Output map", 1, true))
 
@@ -2458,7 +2475,35 @@ test("references command drafts selected LSP reference context", function()
 		local picker_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[picker_buf].filetype, "acp-references")
 
-		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		local keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local reference_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(reference_qflist.title:find("ACP references", 1, true))
+		eq(#reference_qflist.items, 1)
+		eq(reference_qflist.items[1].bufnr, source_buf)
+		eq(reference_qflist.items[1].lnum, 2)
+		eq(reference_qflist.items[1].col, 7)
+		ok(reference_qflist.items[1].text:find("REFERENCE", 1, true))
+		vim.cmd("cclose")
+
+		local input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible after references quickfix")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpReferencesQuickfix")
+		reference_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(reference_qflist.title:find("ACP references", 1, true))
+		eq(#reference_qflist.items, 1)
+		eq(reference_qflist.items[1].lnum, 2)
+		eq(reference_qflist.items[1].col, 7)
+		vim.cmd("cclose")
+
+		input_win = vim.fn.bufwinid(input_buf)
+		ok(input_win and input_win > 0, "input window should be visible before reference draft")
+		vim.api.nvim_set_current_win(input_win)
+		vim.cmd("AcpReferences")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-references")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		eq(vim.api.nvim_get_current_buf(), input_buf)
 

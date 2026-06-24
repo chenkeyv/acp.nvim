@@ -32,6 +32,8 @@ function M.range(reference)
 	return {
 		line1 = line1,
 		line2 = line2,
+		col1 = (tonumber(range.start.character) or 0) + 1,
+		col2 = (tonumber(range["end"].character) or 0) + 1,
 	}
 end
 
@@ -88,8 +90,27 @@ function M.picker_lines(references)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add context, or q/<Esc> to close.")
+	table.insert(lines, "Press <Enter> to add context, Q for quickfix, or q/<Esc> to close.")
 	return lines, line_references
+end
+
+function M.quickfix_items(references)
+	local items = {}
+	for _, reference in ipairs(references or {}) do
+		local bufnr = M.bufnr(reference)
+		local range = M.range(reference)
+		if bufnr and range then
+			table.insert(items, {
+				bufnr = bufnr,
+				lnum = range.line1,
+				col = range.col1 or 1,
+				end_lnum = range.line2,
+				end_col = range.col2 or range.col1 or 1,
+				text = ("REFERENCE: %s:%d"):format(M.display_path(reference), range.line1),
+			})
+		end
+	end
+	return items
 end
 
 function M.request(source, callback)

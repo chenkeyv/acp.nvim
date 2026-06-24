@@ -2327,6 +2327,9 @@ local function prompt_action_items()
 	add("References", "Pick LSP references as focused context", "<leader>ar", "LSP", function()
 		M.open_references()
 	end)
+	add("References quickfix", "Send source-buffer LSP references to quickfix", "<leader>aR", "LSP", function()
+		M.open_references_quickfix()
+	end)
 	add("Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 		M.open_symbols()
 	end)
@@ -3170,6 +3173,9 @@ local function register_keymaps(state)
 	local open_references = function()
 		M.open_references()
 	end
+	local open_references_quickfix = function()
+		M.open_references_quickfix()
+	end
 	local open_symbols = function()
 		M.open_symbols()
 	end
@@ -3205,6 +3211,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aa", open_code_actions, { buffer = bufnr, desc = "Open ACP LSP code actions" })
 		vim.keymap.set("n", "<leader>ah", add_hover, { buffer = bufnr, desc = "Add ACP LSP hover context" })
 		vim.keymap.set("n", "<leader>ar", open_references, { buffer = bufnr, desc = "Open ACP LSP references" })
+		vim.keymap.set("n", "<leader>aR", open_references_quickfix, { buffer = bufnr, desc = "Open ACP LSP references quickfix" })
 		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
 		vim.keymap.set("n", "<leader>at", open_treesitter, { buffer = bufnr, desc = "Open ACP Tree-sitter nodes" })
 		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
@@ -3485,6 +3492,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpReferences", function()
 		M.open_references()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpReferencesQuickfix", function()
+		M.open_references_quickfix()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpSymbols", function()
@@ -3902,6 +3913,9 @@ local function action_palette_items(state)
 		add_action(items, "References", "Pick LSP references as focused context", "<leader>ar", "LSP", function()
 			M.open_references()
 		end)
+		add_action(items, "References quickfix", "Send source-buffer LSP references to quickfix", "<leader>aR", "LSP", function()
+			M.open_references_quickfix()
+		end)
 		add_action(items, "Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
 			M.open_symbols()
 		end)
@@ -4105,6 +4119,10 @@ local function source_action_items(state)
 	add("References", "Pick LSP references from the source cursor", "<leader>ar", "LSP", function()
 		focus_session(state)
 		M.open_references()
+	end)
+	add("References quickfix", "Send LSP references from the source cursor to quickfix", "<leader>aR", "LSP", function()
+		focus_session(state)
+		M.open_references_quickfix()
 	end)
 	add("Symbols", "Pick LSP document symbols from the source buffer", "<leader>al", "LSP", function()
 		focus_session(state)
@@ -4708,6 +4726,55 @@ local function open_treesitter_picker(state, node_list)
 	return true
 end
 
+local function open_references_quickfix(state, reference_list)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	local function open_items(list)
+		if not list or #list == 0 then
+			notify("No LSP references found for the source cursor", vim.log.levels.WARN)
+			return false
+		end
+
+		local items = references.quickfix_items(list)
+		if #items == 0 then
+			notify("No quickfix-ready LSP references found", vim.log.levels.WARN)
+			return false
+		end
+
+		vim.fn.setqflist({}, " ", {
+			title = ("ACP references #%s"):format(tostring(state.id or "?")),
+			items = items,
+		})
+		vim.cmd("copen")
+		if not state.busy then
+			set_run_status(state, "references quickfix")
+		end
+		return true
+	end
+
+	if reference_list then
+		return open_items(reference_list)
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading references quickfix")
+	end
+	references.request(state.source, function(list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_items(list)
+	end)
+	return true
+end
+
 local function open_reference_picker(state, reference_list)
 	if not reference_list or #reference_list == 0 then
 		notify("No LSP references found for the source cursor", vim.log.levels.WARN)
@@ -4715,7 +4782,7 @@ local function open_reference_picker(state, reference_list)
 	end
 
 	local lines, line_references = references.picker_lines(reference_list)
-	picker.open({
+	local view = picker.open({
 		name = ("ACP://%s/%d/references"):format(state.adapter, state.id),
 		filetype = "acp-references",
 		lines = lines,
@@ -4754,6 +4821,11 @@ local function open_reference_picker(state, reference_list)
 			end
 		end,
 	})
+
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		open_references_quickfix(state, reference_list)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP references quickfix" })
 
 	return true
 end
@@ -5208,6 +5280,15 @@ function M.open_references()
 		end
 		open_reference_picker(state, reference_list)
 	end)
+end
+
+function M.open_references_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_references_quickfix(state)
 end
 
 function M.open_symbols()
