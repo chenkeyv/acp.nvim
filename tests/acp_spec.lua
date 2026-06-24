@@ -7,6 +7,7 @@ local acp_config = require("acp.config")
 local acp_context = require("acp.context")
 local acp_diagnostics = require("acp.diagnostics")
 local acp_health = require("acp.health")
+local lsp_highlights = require("acp.highlights")
 local file_review = require("acp.file_review")
 local hover = require("acp.hover")
 local history = require("acp.history")
@@ -116,6 +117,8 @@ test("setup registers public user commands", function()
 		"AcpConfig",
 		"AcpCodeActions",
 		"AcpHover",
+		"AcpHighlights",
+		"AcpClearHighlights",
 		"AcpReferences",
 		"AcpReferencesQuickfix",
 		"AcpDefinitions",
@@ -344,6 +347,49 @@ test("source view summarizes diagnostics in linked context range", function()
 	ok(marks[1].opts.virt_lines[1][1][1]:find("diagnostics E1 W1", 1, true))
 
 	vim.diagnostic.reset(ns, bufnr)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
+test("source view renders LSP document highlights", function()
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"local value = 1",
+		"value = value + 1",
+	})
+
+	local marks = source_view.marks({
+		id = 7,
+		source = {
+			bufnr = bufnr,
+			cursor = { 2, 0 },
+		},
+		source_highlights = {
+			{
+				kind = 3,
+				range = {
+					line1 = 2,
+					line2 = 2,
+					col1 = 1,
+					col2 = 6,
+				},
+			},
+		},
+	})
+
+	local lens = marks[1].opts.virt_lines[1][1][1]
+	ok(lens:find("highlights 1", 1, true))
+	local highlight_mark
+	for _, mark in ipairs(marks) do
+		if mark.opts.hl_group == "AcpSourceHighlightWrite" then
+			highlight_mark = mark
+			break
+		end
+	end
+	ok(highlight_mark, "source highlights should render a write mark")
+	eq(highlight_mark.line, 2)
+	eq(highlight_mark.col, 0)
+	eq(highlight_mark.opts.end_col, 5)
+
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
@@ -872,6 +918,34 @@ test("LSP hover markdown content is normalized", function()
 	eq(hover.text({ contents = {} }), nil)
 end)
 
+test("LSP document highlights are normalized for source marks", function()
+	local items = lsp_highlights.normalize({
+		{
+			kind = 3,
+			range = {
+				start = { line = 2, character = 4 },
+				["end"] = { line = 2, character = 9 },
+			},
+		},
+		{
+			range = {
+				start = { line = 4, character = 0 },
+				["end"] = { line = 4, character = 5 },
+			},
+		},
+		{
+			kind = 2,
+		},
+	})
+
+	eq(#items, 2)
+	eq(items[1].kind, 3)
+	eq(items[1].range.line1, 3)
+	eq(items[1].range.col1, 5)
+	eq(lsp_highlights.kind_name(items[1].kind), "write")
+	eq(lsp_highlights.kind_name(items[2].kind), "text")
+end)
+
 test("Tree-sitter nodes are collected and rendered for picker", function()
 	local root = {}
 	function root:type()
@@ -1200,6 +1274,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		local prompt_actions_text = table.concat(vim.api.nvim_buf_get_lines(prompt_actions_buf, 0, -1, false), "\n")
 		ok(prompt_actions_text:find("Add context", 1, true))
 		ok(prompt_actions_text:find("Source diagnostics", 1, true))
+		ok(prompt_actions_text:find("LSP highlights", 1, true))
 		ok(prompt_actions_text:find("Tree-sitter nodes", 1, true))
 		ok(prompt_actions_text:find("References quickfix", 1, true))
 		ok(prompt_actions_text:find("Definitions quickfix", 1, true))
@@ -2009,6 +2084,7 @@ test("actions command opens a session action palette", function()
 		local output_actions = false
 		local yank_code_block = false
 		local diagnostics_quickfix = false
+		local lsp_highlight_action = false
 		local references_quickfix = false
 		local definitions_quickfix = false
 		local implementations_quickfix = false
@@ -2040,6 +2116,9 @@ test("actions command opens a session action palette", function()
 			if line:find("Diagnostics quickfix", 1, true) then
 				diagnostics_quickfix = true
 			end
+			if line:find("LSP highlights", 1, true) then
+				lsp_highlight_action = true
+			end
 			if line:find("References quickfix", 1, true) then
 				references_quickfix = true
 			end
@@ -2067,6 +2146,7 @@ test("actions command opens a session action palette", function()
 		ok(output_actions, "action palette should include output actions")
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
+		ok(lsp_highlight_action, "action palette should include LSP highlights")
 		ok(references_quickfix, "action palette should include references quickfix")
 		ok(definitions_quickfix, "action palette should include definitions quickfix")
 		ok(implementations_quickfix, "action palette should include implementations quickfix")
@@ -2140,6 +2220,7 @@ test("chat marks captured source ranges and clears them on close", function()
 		ok(actions_text:find("Focus chat", 1, true))
 		ok(actions_text:find("Add marked context", 1, true))
 		ok(actions_text:find("Refresh source", 1, true))
+		ok(actions_text:find("LSP highlights", 1, true))
 		ok(actions_text:find("Tree-sitter nodes", 1, true))
 		ok(actions_text:find("References quickfix", 1, true))
 		ok(actions_text:find("Definitions quickfix", 1, true))
@@ -2504,6 +2585,90 @@ test("hover command drafts LSP hover context", function()
 		ok(prompt:find("`value`: any", 1, true))
 		ok(prompt:find("Context", 1, true))
 		ok(prompt:find("Line: local value = missing", 1, true))
+	end)
+
+	vim.lsp.buf_request_all = original_buf_request_all
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("highlights command renders and clears LSP document highlights", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = 1",
+		"value = value + 1",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/documentHighlight")
+		eq(params.position.line, 1)
+		eq(params.position.character, 0)
+		callback({
+			[1] = {
+				result = {
+					{
+						kind = 3,
+						range = {
+							start = { line = 1, character = 0 },
+							["end"] = { line = 1, character = 5 },
+						},
+					},
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpHighlights")
+
+		local ns = vim.api.nvim_create_namespace("acp.nvim.source")
+		local marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
+		local highlight_found = false
+		local lens_found = false
+		for _, mark in ipairs(marks) do
+			local details = mark[4] or {}
+			if details.hl_group == "AcpSourceHighlightWrite" then
+				highlight_found = true
+				eq(mark[2] + 1, 2)
+				eq(mark[3], 0)
+				eq(details.end_col, 5)
+			end
+			for _, line in ipairs(details.virt_lines or {}) do
+				for _, chunk in ipairs(line) do
+					if chunk[1] and chunk[1]:find("highlights 1", 1, true) then
+						lens_found = true
+					end
+				end
+			end
+		end
+		ok(highlight_found, "AcpHighlights should render LSP write range")
+		ok(lens_found, "source lens should include highlight count")
+
+		vim.cmd("AcpClearHighlights")
+		marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
+		for _, mark in ipairs(marks) do
+			local details = mark[4] or {}
+			ok(details.hl_group ~= "AcpSourceHighlightWrite", "AcpClearHighlights should clear LSP highlight marks")
+		end
 	end)
 
 	vim.lsp.buf_request_all = original_buf_request_all

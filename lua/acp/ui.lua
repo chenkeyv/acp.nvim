@@ -743,7 +743,8 @@ local function refresh_source_marks(state)
 	state.source_mark_ids = {}
 	for _, mark in ipairs(source_view.marks(state)) do
 		local line = math.max(1, math.min(mark.line or 1, line_count))
-		local ok, mark_id = pcall(vim.api.nvim_buf_set_extmark, state.source.bufnr, source_ns, line - 1, 0, mark.opts or {})
+		local ok, mark_id =
+			pcall(vim.api.nvim_buf_set_extmark, state.source.bufnr, source_ns, line - 1, mark.col or 0, mark.opts or {})
 		if ok then
 			table.insert(state.source_mark_ids, mark_id)
 		end
@@ -2324,6 +2325,12 @@ local function prompt_action_items()
 	add("Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
 		M.add_hover()
 	end)
+	add("LSP highlights", "Show source-buffer LSP read/write highlights", "<leader>aH", "LSP", function()
+		M.open_highlights()
+	end)
+	add("Clear highlights", "Clear source-buffer LSP highlight marks", ":AcpClearHighlights", "LSP", function()
+		M.clear_highlights()
+	end)
 	add("References", "Pick LSP references as focused context", "<leader>ar", "LSP", function()
 		M.open_references()
 	end)
@@ -2449,7 +2456,10 @@ local function prompt_actions_preview(state)
 	table.insert(lines, "")
 	table.insert(lines, "Context Sources")
 	table.insert(lines, "- Source selection and cursor context")
-	table.insert(lines, "- LSP diagnostics, code actions, hover, references, definitions, implementations, type definitions, symbols")
+	table.insert(
+		lines,
+		"- LSP diagnostics, code actions, hover, highlights, references, definitions, implementations, type definitions, symbols"
+	)
 	table.insert(lines, "- Tree-sitter nodes around the source cursor")
 	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
 
@@ -3248,6 +3258,9 @@ local function register_keymaps(state)
 	local add_hover = function()
 		M.add_hover()
 	end
+	local open_highlights = function()
+		M.open_highlights()
+	end
 	local open_references = function()
 		M.open_references()
 	end
@@ -3300,6 +3313,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ak", open_actions, { buffer = bufnr, desc = "Open ACP actions" })
 		vim.keymap.set("n", "<leader>aa", open_code_actions, { buffer = bufnr, desc = "Open ACP LSP code actions" })
 		vim.keymap.set("n", "<leader>ah", add_hover, { buffer = bufnr, desc = "Add ACP LSP hover context" })
+		vim.keymap.set("n", "<leader>aH", open_highlights, { buffer = bufnr, desc = "Show ACP LSP highlights" })
 		vim.keymap.set("n", "<leader>ar", open_references, { buffer = bufnr, desc = "Open ACP LSP references" })
 		vim.keymap.set("n", "<leader>aR", open_references_quickfix, { buffer = bufnr, desc = "Open ACP LSP references quickfix" })
 		vim.keymap.set("n", "<leader>aG", open_definitions, { buffer = bufnr, desc = "Open ACP LSP definitions" })
@@ -3582,6 +3596,14 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpHover", function()
 		M.add_hover()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpHighlights", function()
+		M.open_highlights()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpClearHighlights", function()
+		M.clear_highlights()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpReferences", function()
@@ -4032,6 +4054,12 @@ local function action_palette_items(state)
 		add_action(items, "Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
 			M.add_hover()
 		end)
+		add_action(items, "LSP highlights", "Show source-buffer LSP read/write highlights", "<leader>aH", "LSP", function()
+			M.open_highlights()
+		end)
+		add_action(items, "Clear highlights", "Clear source-buffer LSP highlight marks", ":AcpClearHighlights", "LSP", function()
+			M.clear_highlights()
+		end)
 		add_action(items, "References", "Pick LSP references as focused context", "<leader>ar", "LSP", function()
 			M.open_references()
 		end)
@@ -4208,6 +4236,7 @@ local function refresh_source_context(state, opts)
 	clear_source_marks(state)
 	unlink_source_state(state)
 	state.source = context.capture(bufnr, winid, range)
+	state.source_highlights = nil
 	link_source_state(state)
 	refresh_source_marks(state)
 	refresh_output_dashboard(state)
@@ -4258,6 +4287,14 @@ local function source_action_items(state)
 	add("Hover context", "Insert LSP hover documentation from the source cursor", "<leader>ah", "LSP", function()
 		focus_session(state)
 		M.add_hover()
+	end)
+	add("LSP highlights", "Show LSP read/write highlights from the source cursor", "<leader>aH", "LSP", function()
+		focus_session(state)
+		M.open_highlights()
+	end)
+	add("Clear highlights", "Clear LSP highlight marks in the source buffer", ":AcpClearHighlights", "LSP", function()
+		focus_session(state)
+		M.clear_highlights()
 	end)
 	add("References", "Pick LSP references from the source cursor", "<leader>ar", "LSP", function()
 		focus_session(state)
@@ -5625,6 +5662,56 @@ function M.add_hover()
 			vim.api.nvim_set_current_win(state.input_win)
 		end
 	end)
+end
+
+function M.open_highlights()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading highlights")
+	end
+	require("acp.highlights").request(state.source, function(items, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+
+		state.source_highlights = items or {}
+		refresh_source_marks(state)
+		if #state.source_highlights == 0 then
+			if not state.busy then
+				set_run_status(state, "highlights: none")
+			end
+			notify("No LSP document highlights found for the source cursor", vim.log.levels.WARN)
+			return
+		end
+		if not state.busy then
+			set_run_status(state, ("highlights: %d"):format(#state.source_highlights))
+		end
+	end)
+end
+
+function M.clear_highlights()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	state.source_highlights = nil
+	refresh_source_marks(state)
+	if not state.busy then
+		set_run_status(state, "highlights cleared")
+	end
 end
 
 function M.open_references()

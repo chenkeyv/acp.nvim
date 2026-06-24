@@ -62,6 +62,7 @@ This plugin provides an editor-native ACP chat surface:
 - adapter-backed session listing and restoration
 - async LSP code-action picker for drafting focused fix/refactor prompts
 - async LSP hover context insertion for source-cursor documentation
+- async LSP document-highlight marks for read/write source occurrences
 - async LSP references picker with quickfix export for focused usage context
 - async LSP definition picker with quickfix export for source-cursor navigation context
 - async LSP implementation picker with quickfix export for interface and abstract API context
@@ -170,6 +171,8 @@ vim.g.acp_nvim_config = {
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
 - `:AcpHover` inserts LSP hover documentation for the source cursor
+- `:AcpHighlights` shows LSP read/write highlights in the linked source buffer
+- `:AcpClearHighlights` clears source-buffer LSP highlight marks
 - `:AcpReferences` opens an LSP references picker for the source cursor
 - `:AcpReferencesQuickfix` sends LSP references for the source cursor to quickfix
 - `:AcpDefinitions` opens an LSP definition picker for the source cursor
@@ -224,6 +227,7 @@ In the prompt buffer:
 - `<leader>ak` opens the ACP action palette
 - `<leader>aa` opens source-buffer LSP code actions
 - `<leader>ah` inserts source-buffer LSP hover documentation
+- `<leader>aH` shows source-buffer LSP read/write highlights
 - `<leader>ar` opens source-buffer LSP references
 - `<leader>aR` sends source-buffer LSP references to quickfix
 - `<leader>aG` opens source-buffer LSP definitions
