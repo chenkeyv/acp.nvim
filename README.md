@@ -11,7 +11,7 @@ This plugin provides an editor-native ACP chat surface:
 - Neovim highlight groups for readable transcript sections
 - non-blocking adapter startup and session creation
 - plain-text transcript history under Neovim state
-- editor context insertion from the source buffer, Tree-sitter node, LSP clients, and diagnostics
+- editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
 - visual/range context capture for selected code
 - LSP diagnostic fix drafts from the current buffer or visual range
 - floating permission chooser with numbered actions

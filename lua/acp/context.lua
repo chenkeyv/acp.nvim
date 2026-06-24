@@ -112,7 +112,45 @@ local function treesitter_node(bufnr, cursor)
 	end
 
 	local start_row, start_col, end_row, end_col = node:range()
-	return ("%s at %d:%d-%d:%d"):format(node:type(), start_row + 1, start_col + 1, end_row + 1, end_col)
+	return {
+		node = node,
+		label = ("%s at %d:%d-%d:%d"):format(node:type(), start_row + 1, start_col + 1, end_row + 1, end_col),
+	}
+end
+
+local function treesitter_node_text(node, bufnr, opts)
+	if opts.include_treesitter_text == false or not vim.treesitter.get_node_text then
+		return nil
+	end
+
+	local ok, text = pcall(vim.treesitter.get_node_text, node, bufnr)
+	if not ok or type(text) ~= "string" or text == "" then
+		return nil
+	end
+
+	local max_chars = opts.treesitter_text_chars or 1200
+	local max_lines = opts.treesitter_text_lines or 24
+	local truncated = false
+
+	if #text > max_chars then
+		text = text:sub(1, max_chars)
+		truncated = true
+	end
+
+	local lines = vim.split(text, "\n", { plain = true })
+	if #lines > max_lines then
+		local sliced = {}
+		for index = 1, max_lines do
+			table.insert(sliced, lines[index])
+		end
+		lines = sliced
+		truncated = true
+	end
+
+	if truncated then
+		table.insert(lines, "...")
+	end
+	return lines
 end
 
 local function diagnostics(bufnr, line, limit)
@@ -238,9 +276,14 @@ function M.render(source, opts)
 		table.insert(lines, ("LSP clients: %s"):format(table.concat(clients, ", ")))
 	end
 
-	local node = treesitter_node(bufnr, cursor)
-	if node then
-		table.insert(lines, ("Tree-sitter: %s"):format(node))
+	local treesitter = treesitter_node(bufnr, cursor)
+	if treesitter then
+		table.insert(lines, ("Tree-sitter: %s"):format(treesitter.label))
+		local node_text = treesitter_node_text(treesitter.node, bufnr, opts)
+		if node_text then
+			table.insert(lines, "Tree-sitter text:")
+			vim.list_extend(lines, node_text)
+		end
 	end
 
 	local text = current_line(bufnr, line)

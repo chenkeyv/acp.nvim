@@ -404,6 +404,60 @@ test("editor context includes selected range text", function()
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
+test("editor context includes bounded tree-sitter node text", function()
+	local previous_buf = vim.api.nvim_get_current_buf()
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"function example()",
+		"  return alpha + beta",
+		"end",
+	})
+	vim.bo[bufnr].filetype = "lua"
+	vim.api.nvim_set_current_buf(bufnr)
+	vim.api.nvim_win_set_cursor(0, { 1, 0 })
+
+	local fake_node = {}
+	function fake_node:type()
+		return "function_declaration"
+	end
+	function fake_node:range()
+		return 0, 0, 2, 3
+	end
+
+	local original_treesitter = vim.treesitter
+	local original_get_node = original_treesitter and original_treesitter.get_node
+	local original_get_node_text = original_treesitter and original_treesitter.get_node_text
+	vim.treesitter = vim.treesitter or {}
+	vim.treesitter.get_node = function()
+		return fake_node
+	end
+	vim.treesitter.get_node_text = function()
+		return "function example()\n  return alpha + beta\nend"
+	end
+
+	local source = acp_context.capture(bufnr, vim.api.nvim_get_current_win())
+	local rendered = acp_context.render(source, {
+		treesitter_text_lines = 2,
+	})
+
+	if original_treesitter then
+		vim.treesitter.get_node = original_get_node
+		vim.treesitter.get_node_text = original_get_node_text
+	else
+		vim.treesitter = nil
+	end
+
+	ok(rendered:find("Tree-sitter: function_declaration at 1:1-3:3", 1, true))
+	ok(rendered:find("Tree-sitter text:", 1, true))
+	ok(rendered:find("function example()", 1, true))
+	ok(rendered:find("  return alpha + beta", 1, true))
+	ok(rendered:find("...", 1, true))
+	ok(not rendered:find("\nend", 1, true))
+
+	vim.api.nvim_set_current_buf(previous_buf)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
 test("diagnostics renderer filters by selected range", function()
 	local previous_buf = vim.api.nvim_get_current_buf()
 	local bufnr = vim.api.nvim_create_buf(true, true)
