@@ -81,6 +81,7 @@ test("setup registers public user commands", function()
 		"AcpStop",
 		"AcpSessions",
 		"AcpChanges",
+		"AcpOutput",
 		"AcpDiagnostics",
 		"AcpCommands",
 		"AcpConfig",
@@ -182,6 +183,16 @@ test("output dashboard and section helpers are rendered", function()
 	eq(acp_output.line_style("Status: error: failed").line_hl_group, "AcpStatusError")
 	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 1, 1), 3)
 	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 5, -1), 3)
+
+	local sections = acp_output.sections({ "ACP: test", "", "You", "hello", "Agent", "world" })
+	eq(#sections, 3)
+	eq(sections[2].kind, "USER")
+	eq(sections[2].preview, "hello")
+	local outline, line_sections = acp_output.outline_lines(sections)
+	local outline_text = table.concat(outline, "\n")
+	ok(outline_text:find("ACP Output Outline", 1, true))
+	ok(outline_text:find("USER", 1, true))
+	eq(line_sections[3].kind, "SESSION")
 end)
 
 test("LSP references are flattened and rendered for picker", function()
@@ -651,6 +662,17 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		local line = vim.api.nvim_win_get_cursor(output_win)[1]
 		eq(vim.api.nvim_buf_get_lines(output_buf, line - 1, line, false)[1], "You")
+
+		vim.cmd("AcpOutput")
+		local picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-output")
+		local outline = table.concat(vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false), "\n")
+		ok(outline:find("ACP Output Outline", 1, true))
+		ok(outline:find("USER", 1, true))
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_win(), output_win)
+		eq(vim.api.nvim_win_get_cursor(output_win)[1], 1)
 	end)
 
 	vim.notify = original_notify

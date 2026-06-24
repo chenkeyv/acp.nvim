@@ -81,7 +81,7 @@ function M.dashboard_lines(state)
 		("Session: #%s | Mode: %s"):format(tostring(state and state.id or "?"), clean(state and state.mode) or "?"),
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
-		"Keys: [[/]] sections | <leader>af changes | <leader>ad diagnostics | <leader>a/ commands",
+		"Keys: [[/]] sections | <leader>av outline | <leader>af changes | <leader>ad diagnostics",
 		"",
 	}
 end
@@ -160,6 +160,85 @@ function M.is_section(line)
 		or line:match("^Wrote ")
 		or line:match("^Thought:")
 		or line:match("^stderr:")
+end
+
+local function section_label(line)
+	if line == "You" then
+		return "USER", "Prompt"
+	end
+	if line == "Agent" then
+		return "AGENT", "Response"
+	end
+	if line:match("^ACP:") then
+		return "SESSION", line
+	end
+	if line:match("^Status:") then
+		return "STATUS", line:gsub("^Status:%s*", "")
+	end
+	if line:match("^Tool update:") then
+		return "TOOL", line:gsub("^Tool update:%s*", "Update: ")
+	end
+	if line:match("^Tool:") then
+		return "TOOL", line:gsub("^Tool:%s*", "")
+	end
+	if line:match("^Terminal:") then
+		return "TERM", line:gsub("^Terminal:%s*", "")
+	end
+	if line:match("^Wrote ") then
+		return "FILE", line:gsub("^Wrote%s+", "")
+	end
+	if line:match("^Thought:") then
+		return "NOTE", line:gsub("^Thought:%s*", "")
+	end
+	if line:match("^stderr:") then
+		return "STDERR", "stderr"
+	end
+	return "SECTION", line
+end
+
+local function preview_after(lines, index)
+	for next_index = index + 1, #lines do
+		local line = clean(lines[next_index])
+		if line and not M.is_section(line) then
+			return line:sub(1, 96)
+		end
+	end
+end
+
+function M.sections(lines)
+	local sections = {}
+	for index, line in ipairs(lines or {}) do
+		if M.is_section(line) then
+			local kind, title = section_label(line)
+			table.insert(sections, {
+				line = index,
+				kind = kind,
+				title = clean(title) or kind,
+				preview = preview_after(lines, index),
+			})
+		end
+	end
+	return sections
+end
+
+function M.outline_lines(sections)
+	local lines = { "ACP Output Outline", "" }
+	local line_sections = {}
+	for _, section in ipairs(sections or {}) do
+		local title = section.title
+		if #title > 88 then
+			title = title:sub(1, 85) .. "..."
+		end
+		table.insert(lines, ("%4d  %-7s  %s"):format(section.line, section.kind, title))
+		line_sections[#lines] = section
+		if section.preview then
+			table.insert(lines, ("      %s"):format(section.preview))
+			line_sections[#lines] = section
+		end
+	end
+	table.insert(lines, "")
+	table.insert(lines, "Press <Enter> to jump, or q/<Esc> to close.")
+	return lines, line_sections
 end
 
 function M.next_section(lines, current, direction)

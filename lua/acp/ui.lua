@@ -185,6 +185,46 @@ local function jump_output_section(state, direction)
 	end
 end
 
+local function open_output_outline(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local sections = output.sections(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false))
+	if #sections == 0 then
+		notify("No ACP output sections found", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_sections = output.outline_lines(sections)
+	picker.open({
+		name = ("ACP://%s/%d/output-outline"):format(state.adapter, state.id),
+		filetype = "acp-output",
+		lines = lines,
+		title = " ACP output outline ",
+		submit_desc = "Jump to ACP output section",
+		close_desc = "Close ACP output outline",
+		on_submit = function(row, view)
+			local section = line_sections[row]
+			if not section then
+				return
+			end
+
+			local winid = vim.fn.bufwinid(state.output_buf)
+			if not valid_win(winid) then
+				notify("ACP output window is not visible", vim.log.levels.WARN)
+				return
+			end
+
+			view.close()
+			vim.api.nvim_set_current_win(winid)
+			pcall(vim.api.nvim_win_set_cursor, winid, { section.line, 0 })
+		end,
+	})
+	return true
+end
+
 local function follow_output(state)
 	if not valid_win(state.output_win) or not valid_buf(state.output_buf) then
 		return
@@ -1065,6 +1105,9 @@ local function register_keymaps(state)
 	local open_changes = function()
 		M.open_changes()
 	end
+	local open_output = function()
+		open_output_outline(state)
+	end
 	local open_diagnostics = function()
 		M.open_diagnostics()
 	end
@@ -1099,6 +1142,7 @@ local function register_keymaps(state)
 	for _, bufnr in ipairs({ state.output_buf, state.input_buf }) do
 		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
+		vim.keymap.set("n", "<leader>av", open_output, { buffer = bufnr, desc = "Open ACP output outline" })
 		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
@@ -1250,6 +1294,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpChanges", function()
 		M.open_changes()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutput", function()
+		M.open_output()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpDiagnostics", function()
@@ -2119,6 +2167,15 @@ function M.open_changes()
 		notify("No ACP file changes recorded for this session", vim.log.levels.WARN)
 		return
 	end
+end
+
+function M.open_output()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_outline(state)
 end
 
 function M.open_diagnostics()

@@ -12,6 +12,7 @@ This plugin provides an editor-native ACP chat surface:
 - output-visible run status for active prompts, tools, and completion
 - live output winbar/title with status, model, context, and changed-file counts
 - Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
+- floating output outline for jumping across long transcripts
 - non-blocking adapter startup and session creation
 - floating slash-command picker for adapter-advertised commands
 - native slash-command completion in the prompt buffer
@@ -94,6 +95,7 @@ vim.g.acp_nvim_config = {
 - `:AcpStop` stops the current agent process
 - `:AcpSessions` focuses the sessions side panel or opens a floating session picker
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
+- `:AcpOutput` opens a floating outline of the current output transcript
 - `:AcpDiagnostics` opens a picker for source-buffer diagnostics
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session
@@ -122,6 +124,7 @@ In the prompt buffer:
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
 - `<C-Space>` opens native ACP prompt completion
 - `<leader>ac` inserts source-buffer context into the prompt
+- `<leader>av` opens the output outline
 - `<leader>ad` opens source-buffer diagnostics
 - `<leader>af` opens the current session's changed files in quickfix
 - `<leader>a/` opens advertised ACP slash commands
@@ -136,6 +139,7 @@ In the output buffer:
 
 - `]]` jumps to the next transcript section
 - `[[` jumps to the previous transcript section
+- `<leader>av` opens the output outline
 
 The chat-opening and draft commands accept a line range, so opening ACP from
 Visual mode preserves the selected lines for `:AcpAddContext`,
