@@ -425,6 +425,7 @@ test("output dashboard and section helpers are rendered", function()
 	eq(acp_output.animation_frame(5), "|")
 	ok(acp_output.ghost_text({ busy = true, run_status = "streaming" }, {}, 2):find("streaming", 1, true))
 	ok(acp_output.ghost_text({ busy = false }, { "ACP: test", "" }):find("Ready", 1, true))
+	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("<leader>ay yank", 1, true))
 	local blocks = acp_output.code_blocks({ "Agent", "```lua", "print(1)", "```", "```", "plain" })
 	eq(#blocks, 2)
 	eq(blocks[1].start_line, 2)
@@ -440,6 +441,7 @@ test("output dashboard and section helpers are rendered", function()
 	local block_at = acp_output.code_block_at({ "Agent", "```lua", "print(1)", "```" }, 3)
 	eq(block_at.language, "lua")
 	eq(block_at.lines[1], "print(1)")
+	ok(acp_output.cursor_hint({ "Agent", "```lua", "print(1)", "```" }, 3, 0):find("open code", 1, true))
 	local block_picker, line_blocks = acp_output.code_block_lines(blocks)
 	local block_text = table.concat(block_picker, "\n")
 	ok(block_text:find("ACP Output Code Blocks", 1, true))
@@ -462,6 +464,7 @@ test("output dashboard and section helpers are rendered", function()
 	eq(ref_at.path, refs[1].path)
 	eq(ref_at.line, 2)
 	eq(ref_at.column, 7)
+	ok(acp_output.cursor_hint({ ref_line }, 1, ref_line:find(ref_file, 1, true), {}):find("gf source", 1, true))
 	local ref_picker, line_refs = acp_output.file_reference_lines(refs)
 	local ref_text = table.concat(ref_picker, "\n")
 	ok(ref_text:find("ACP Output Locations", 1, true))
@@ -487,6 +490,7 @@ test("output dashboard and section helpers are rendered", function()
 	ok(problem_items[1].message:find("failed to start session", 1, true))
 	eq(problem_items[2].message, "stderr: permission denied")
 	eq(problem_items[3].severity, vim.diagnostic.severity.WARN)
+	ok(acp_output.cursor_hint({ "Status: error: failed" }, 1, 0):find("problems", 1, true))
 	local stats = acp_output.transcript_stats({
 		"ACP: test",
 		"```lua",
@@ -1079,6 +1083,18 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(current_section_highlight, "current output section should be highlighted")
+		local hint_ns = vim.api.nvim_create_namespace("acp.nvim.output.hints")
+		local hint_marks = vim.api.nvim_buf_get_extmarks(output_buf, hint_ns, 0, -1, { details = true })
+		local section_hint = false
+		for _, mark in ipairs(hint_marks) do
+			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
+				if chunk[1] and chunk[1]:find("<leader>ai draft", 1, true) then
+					section_hint = true
+					break
+				end
+			end
+		end
+		ok(section_hint, "output cursor should show section action hints")
 
 		vim.cmd("AcpOutputDraft")
 		local draft = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")

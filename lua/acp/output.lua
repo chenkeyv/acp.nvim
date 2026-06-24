@@ -231,6 +231,7 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpBadgeError", { link = "DiagnosticError", default = true })
 	vim.api.nvim_set_hl(0, "AcpBadgeTool", { fg = "#1a1b26", bg = "#bb9af7", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpGhostText", { link = "Comment", default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputHint", { link = "AcpGhostText", default = true })
 	vim.api.nvim_set_hl(0, "AcpCodeFence", { fg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpInjectedLanguage", { fg = "#1a1b26", bg = "#7aa2f7", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpSectionStats", { fg = "#1a1b26", bg = "#565f89", bold = true, default = true })
@@ -814,6 +815,30 @@ function M.problem_diagnostics(lines)
 		end
 	end
 	return items
+end
+
+function M.cursor_hint(lines, lnum, col, opts)
+	opts = opts or {}
+	lines = lines or {}
+	local line_number = math.max(1, math.min(tonumber(lnum) or 1, #lines))
+	local line = lines[line_number]
+	if not line then
+		return nil
+	end
+
+	if M.file_reference_at(lines, line_number, col, { cwd = opts.cwd }) then
+		return "actions: <Enter> open ref | gf source | <leader>ai draft"
+	end
+	if M.code_block_at(lines, line_number) then
+		return "actions: <Enter> open code | <leader>ab blocks | <leader>ai draft"
+	end
+	if line:match("^Status:%s+error") or line:match("^stderr:") or line:match("^Terminal output truncated") then
+		return "actions: <leader>ae problems | <leader>ai draft"
+	end
+	if M.is_section(line) then
+		return "actions: <leader>ai draft | <leader>ay yank | [[/]] sections"
+	end
+	return nil
 end
 
 function M.transcript_stats(lines, opts)

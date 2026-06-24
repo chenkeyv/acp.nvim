@@ -31,6 +31,7 @@ This plugin provides an editor-native ACP chat surface:
 - native output diagnostics and location-list navigation for transcript errors and stderr
 - virtual section separators for scanning long output without changing transcript text
 - ghost-text output hints and lightweight animated busy status
+- cursor-sensitive ghost-text action hints for references, code blocks, errors, and sections
 - optional Tree-sitter Markdown/code-fence language injection for agent responses
 - floating output outline for jumping across long transcripts
 - native folds for collapsing transcript sections
@@ -178,6 +179,7 @@ In the prompt buffer:
 
 In the output buffer:
 
+- the current line shows ghost-text action hints for references, code blocks, errors, and sections
 - `]]` jumps to the next transcript section
 - `[[` jumps to the previous transcript section
 - `za` toggles the fold under the cursor

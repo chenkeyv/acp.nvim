@@ -57,6 +57,7 @@ local next_session_id = 1
 local session_panel_lines = {}
 local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
 local output_current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_section")
+local output_hint_ns = vim.api.nvim_create_namespace("acp.nvim.output.hints")
 local output_pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
 local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
 local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
@@ -195,6 +196,34 @@ local function refresh_current_output_section(state)
 	end
 end
 
+local function refresh_output_cursor_hint(state)
+	if not valid_buf(state.output_buf) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(state.output_buf, output_hint_ns, 0, -1)
+	if not valid_win(state.output_win) or vim.api.nvim_win_get_buf(state.output_win) ~= state.output_buf then
+		return
+	end
+
+	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local hint = output.cursor_hint(lines, cursor[1], cursor[2], {
+		cwd = state.cwd,
+	})
+	if not hint then
+		return
+	end
+
+	local line = lines[cursor[1]] or ""
+	pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_hint_ns, cursor[1] - 1, #line, {
+		virt_text = { { "  " .. hint, "AcpOutputHint" } },
+		virt_text_pos = "eol",
+		hl_mode = "combine",
+		priority = 96,
+	})
+end
+
 local function pulse_output_section(state, range)
 	if not (state and range and valid_buf(state.output_buf)) then
 		return
@@ -287,6 +316,7 @@ local function set_output_lines(state, start, stop, lines)
 	vim.bo[state.output_buf].modifiable = false
 	refresh_output_highlights(state)
 	refresh_current_output_section(state)
+	refresh_output_cursor_hint(state)
 	save_output_history(state)
 	if refresh_output_dashboard and not state.refreshing_output_dashboard and start ~= 0 then
 		refresh_output_dashboard(state)
@@ -383,6 +413,7 @@ local function refresh_output_chrome(state)
 		current_section = output.current_section(lines, cursor[1])
 	end
 	refresh_current_output_section(state)
+	refresh_output_cursor_hint(state)
 	local title = output.window_title(state, {
 		change_count = changes.count(state),
 		current_section = current_section,
