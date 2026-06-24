@@ -1107,6 +1107,7 @@ function M.output_items(lines, opts)
 			line = (item.lnum or 0) + 1,
 			col = (item.col or 0) + 1,
 			label = item.message,
+			total_lines = #lines,
 		})
 	end
 	for _, reference in ipairs(M.file_references(lines, { cwd = opts.cwd })) do
@@ -1115,6 +1116,7 @@ function M.output_items(lines, opts)
 			line = reference.source_line or 1,
 			col = reference.source_col or 1,
 			label = ("%s:%d:%d"):format(reference.display_path or reference.path or "?", reference.line or 1, reference.column or 1),
+			total_lines = #lines,
 		})
 	end
 	for _, block in ipairs(M.code_blocks(lines)) do
@@ -1123,6 +1125,7 @@ function M.output_items(lines, opts)
 			line = block.start_line or 1,
 			col = 1,
 			label = ("%s code block"):format(block.language or "text"),
+			total_lines = #lines,
 		})
 	end
 
@@ -1136,6 +1139,28 @@ function M.output_items(lines, opts)
 		return (order[left.kind] or 99) < (order[right.kind] or 99)
 	end)
 	return items
+end
+
+function M.output_item_lines(items, opts)
+	opts = opts or {}
+	local lines = { "ACP Output Items", "" }
+	local line_items = {}
+	local total = opts.total_lines
+
+	for _, item in ipairs(items or {}) do
+		total = total or item.total_lines
+		local label = clean(item.label) or item.kind or "item"
+		if #label > 96 then
+			label = label:sub(1, 93) .. "..."
+		end
+		local progress = position_percent(item.line, total) or "   ?"
+		table.insert(lines, ("%4d  %s  %-9s  %s"):format(item.line or 1, progress, (item.kind or "item"):upper(), label))
+		line_items[#lines] = item
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Type / to filter, press <Enter> to jump, or q/<Esc> to close.")
+	return lines, line_items
 end
 
 function M.next_output_item(lines, current, direction, opts)

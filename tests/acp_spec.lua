@@ -95,6 +95,7 @@ test("setup registers public user commands", function()
 		"AcpChangesQuickfix",
 		"AcpOutput",
 		"AcpOutputSearch",
+		"AcpOutputItems",
 		"AcpOutputYank",
 		"AcpOutputDraft",
 		"AcpOutputOpen",
@@ -621,6 +622,13 @@ test("output dashboard and section helpers are rendered", function()
 	eq(output_items[2].line, 3)
 	eq(output_items[3].kind, "reference")
 	eq(output_items[3].line, 6)
+	local item_picker, line_items = acp_output.output_item_lines(output_items, { total_lines = 6 })
+	local item_text = table.concat(item_picker, "\n")
+	ok(item_text:find("ACP Output Items", 1, true))
+	ok(item_text:find("PROBLEM", 1, true))
+	ok(item_text:find("CODE", 1, true))
+	ok(item_text:find("REFERENCE", 1, true))
+	eq(line_items[3].kind, "problem")
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 1).kind, "code")
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 6, -1).kind, "code")
 	local current_problem = acp_output.current_output_item({
@@ -1601,6 +1609,41 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(ref_highlight, "output references should be highlighted inline")
 		ok(ref_sign, "output references should render a sign marker")
 		ok(ref_badge, "output references should render a badge")
+		vim.cmd("AcpOutputItems")
+		picker_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[picker_buf].filetype, "acp-output-items")
+		local item_picker_lines = vim.api.nvim_buf_get_lines(picker_buf, 0, -1, false)
+		local output_items_text = table.concat(item_picker_lines, "\n")
+		ok(output_items_text:find("ACP Output Items", 1, true))
+		ok(output_items_text:find("PROBLEM", 1, true))
+		ok(output_items_text:find("CODE", 1, true))
+		ok(output_items_text:find("REFERENCE", 1, true))
+		local code_item_row
+		for index, item_line in ipairs(item_picker_lines) do
+			if item_line:find("CODE", 1, true) then
+				code_item_row = index
+				break
+			end
+		end
+		ok(code_item_row, "output item picker should include code rows")
+		vim.api.nvim_win_set_cursor(0, { code_item_row, 0 })
+		vim.cmd("doautocmd CursorMoved")
+		local item_preview = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local preview_bufnr = vim.api.nvim_win_get_buf(winid)
+			if preview_bufnr ~= picker_buf and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "lua" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
+				if preview:find("print('from acp')", 1, true) then
+					item_preview = true
+					break
+				end
+			end
+		end
+		ok(item_preview, "output item picker should preview code blocks")
+		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_win(), output_win)
+		eq(vim.api.nvim_buf_get_lines(output_buf, vim.api.nvim_win_get_cursor(output_win)[1] - 1, vim.api.nvim_win_get_cursor(output_win)[1], false)[1], "```lua")
 		vim.api.nvim_win_set_cursor(output_win, { problem_line, 0 })
 		vim.cmd("AcpOutputNextItem")
 		local item_line = vim.api.nvim_win_get_cursor(output_win)[1]
@@ -1772,6 +1815,7 @@ test("actions command opens a session action palette", function()
 		eq(vim.bo[action_buf].filetype, "acp-actions")
 		local action_lines = vim.api.nvim_buf_get_lines(action_buf, 0, -1, false)
 		local output_outline_row
+		local output_items = false
 		local inspect_output = false
 		local output_actions = false
 		local yank_code_block = false
@@ -1779,6 +1823,9 @@ test("actions command opens a session action palette", function()
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
 				output_outline_row = index
+			end
+			if line:find("Output items", 1, true) then
+				output_items = true
 			end
 			if line:find("Inspect output item", 1, true) then
 				inspect_output = true
@@ -1794,6 +1841,7 @@ test("actions command opens a session action palette", function()
 			end
 		end
 		ok(output_outline_row, "action palette should include output outline")
+		ok(output_items, "action palette should include output items")
 		ok(inspect_output, "action palette should include output inspect")
 		ok(output_actions, "action palette should include output actions")
 		ok(yank_code_block, "action palette should include code block yank")

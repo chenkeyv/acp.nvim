@@ -21,6 +21,7 @@ This plugin provides an editor-native ACP chat surface:
 - cursor-aware output breadcrumb showing the active transcript section
 - cursor-aware current-section highlighting in the output buffer
 - cursor-aware current-item highlighting for references, code blocks, and problems
+- unified output item picker for references, code blocks, and problems with previews
 - searchable output transcript picker with progress, context previews, and jump-to-line navigation
 - current-section yank action with a short visual pulse in the output buffer
 - follow-up prompt drafting from the current output section
@@ -144,6 +145,7 @@ vim.g.acp_nvim_config = {
 - `:AcpChangesQuickfix` opens a quickfix list of files changed in the current ACP session
 - `:AcpOutput` opens a floating outline of the current output transcript
 - `:AcpOutputSearch` opens every non-empty output line with context previews
+- `:AcpOutputItems` opens references, code blocks, and problems from the current output
 - `:AcpOutputYank` yanks the current output section into the unnamed register
 - `:AcpOutputDraft` inserts the current output section as follow-up prompt context
 - `:AcpOutputOpen` opens the local file reference or code block under the output cursor
@@ -189,6 +191,7 @@ In the prompt buffer:
 - `<C-Space>` opens native ACP prompt completion
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
+- `<leader>aO` opens output references, code blocks, and problems
 - `<leader>ay` yanks the current output section
 - `<leader>ai` inserts the current output section as follow-up prompt context
 - `<leader>av` opens the output outline
@@ -221,6 +224,7 @@ In the output buffer:
 - `K` previews the reference, code block, problem, or section under the cursor
 - `gf` opens the local file reference under the cursor
 - `<leader>ax` searches output transcript lines
+- `<leader>aO` opens output references, code blocks, and problems
 - `<leader>ay` yanks the current output section
 - `<leader>ai` inserts the current output section as follow-up prompt context
 - `<leader>av` opens the output outline

@@ -778,6 +778,19 @@ local function open_output_search(state)
 	return true
 end
 
+local function jump_to_output_line(state, line, col)
+	local winid = vim.fn.bufwinid(state.output_buf)
+	if not valid_win(winid) then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	vim.api.nvim_set_current_win(winid)
+	pcall(vim.api.nvim_win_set_cursor, winid, { line or 1, math.max(0, (col or 1) - 1) })
+	refresh_output_chrome(state)
+	return true
+end
+
 local function output_cursor_line(state)
 	local winid = vim.api.nvim_get_current_win()
 	if valid_win(winid) and vim.api.nvim_win_get_buf(winid) == state.output_buf then
@@ -1729,6 +1742,77 @@ local function output_inspector_preview(context_info)
 	return output_problem_preview(context_info) or output_section_preview(context_info)
 end
 
+local function output_item_preview(state, lines, item)
+	if not item then
+		return nil
+	end
+
+	if item.kind == "reference" then
+		local reference = output.file_reference_at(lines, item.line, math.max(0, (item.col or 1) - 1), {
+			cwd = state.cwd,
+		})
+		return file_reference_preview(reference) or output_line_preview(lines, item)
+	end
+
+	if item.kind == "code" then
+		local block = output.code_block_at(lines, item.line)
+		if block then
+			return {
+				lines = block.lines,
+				filetype = block.filetype,
+				title = code_block_title(block),
+				cursor_line = 1,
+			}
+		end
+	end
+
+	if item.kind == "problem" then
+		return output_problem_preview({
+			lines = lines,
+			cursor = { item.line or 1, math.max(0, (item.col or 1) - 1) },
+		})
+	end
+
+	return output_line_preview(lines, item)
+end
+
+local function open_output_items(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local items = output.output_items(output_lines, { cwd = state.cwd })
+	if #items == 0 then
+		notify("No ACP output items found", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_items = output.output_item_lines(items, { total_lines = #output_lines })
+	picker.open({
+		name = ("ACP://%s/%d/output-items"):format(state.adapter, state.id),
+		filetype = "acp-output-items",
+		lines = lines,
+		title = " ACP output items ",
+		submit_desc = "Jump to ACP output item",
+		close_desc = "Close ACP output items",
+		preview = function(row)
+			return output_item_preview(state, output_lines, line_items[row])
+		end,
+		on_submit = function(row, view)
+			local item = line_items[row]
+			if not item then
+				return
+			end
+
+			view.close()
+			jump_to_output_line(state, item.line, item.col)
+		end,
+	})
+	return true
+end
+
 local function inspect_output_at_cursor(state)
 	if not state or not valid_buf(state.output_buf) then
 		notify("No ACP output buffer is available", vim.log.levels.WARN)
@@ -1854,6 +1938,9 @@ local function output_action_items(state, context_info)
 	end)
 	add("Previous item", "Jump to the previous reference, code block, or problem", "[o", function()
 		jump_output_item(state, -1)
+	end)
+	add("Output items", "Browse references, code blocks, and problems in one picker", "<leader>aO", function()
+		open_output_items(state)
 	end)
 	if context_info.reference then
 		add("Open reference", "Jump to the local file reference under the cursor", "gf", function()
@@ -1988,6 +2075,9 @@ local function prompt_action_items()
 	end)
 	add("Search output", "Search every non-empty transcript line with context preview", "<leader>ax", "output", function()
 		M.open_output_search()
+	end)
+	add("Output items", "Browse references, code blocks, and problems in one picker", "<leader>aO", "output", function()
+		M.open_output_items()
 	end)
 	add("Draft from output", "Insert the current transcript section as follow-up prompt context", "<leader>ai", "output", function()
 		M.draft_output_section()
@@ -2741,6 +2831,9 @@ local function register_keymaps(state)
 	local open_search = function()
 		open_output_search(state)
 	end
+	local open_output_item_picker = function()
+		open_output_items(state)
+	end
 	local yank_section = function()
 		yank_output_section(state)
 	end
@@ -2819,6 +2912,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 		vim.keymap.set("n", "<leader>av", open_output, { buffer = bufnr, desc = "Open ACP output outline" })
 		vim.keymap.set("n", "<leader>ax", open_search, { buffer = bufnr, desc = "Search ACP output" })
+		vim.keymap.set("n", "<leader>aO", open_output_item_picker, { buffer = bufnr, desc = "Browse ACP output items" })
 		vim.keymap.set("n", "<leader>ay", yank_section, { buffer = bufnr, desc = "Yank current ACP output section" })
 		vim.keymap.set("n", "<leader>ai", draft_section, { buffer = bufnr, desc = "Draft from current ACP output section" })
 		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
@@ -3025,6 +3119,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutputSearch", function()
 		M.open_output_search()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputItems", function()
+		M.open_output_items()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpOutputYank", function()
@@ -3454,6 +3552,9 @@ local function action_palette_items(state)
 		add_action(items, "Search output", "Search every non-empty transcript line with context preview", "<leader>ax", "session", function()
 			M.open_output_search()
 		end)
+		add_action(items, "Output items", "Browse references, code blocks, and problems in one picker", "<leader>aO", "session", function()
+			M.open_output_items()
+		end)
 		add_action(items, "Yank output section", "Copy the current transcript section into the unnamed register", "<leader>ay", "session", function()
 			M.yank_output_section()
 		end)
@@ -3713,6 +3814,10 @@ local function source_action_items(state)
 	add("Search output", "Search the linked ACP transcript with previews", "<leader>ax", "output", function()
 		focus_session(state)
 		M.open_output_search()
+	end)
+	add("Output items", "Browse references, code blocks, and problems in the linked transcript", "<leader>aO", "output", function()
+		focus_session(state)
+		M.open_output_items()
 	end)
 
 	return items
@@ -4494,6 +4599,15 @@ function M.open_output_search()
 	end
 
 	open_output_search(state)
+end
+
+function M.open_output_items()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_items(state)
 end
 
 function M.yank_output_section()
