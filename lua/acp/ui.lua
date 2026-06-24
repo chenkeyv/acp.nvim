@@ -2367,6 +2367,9 @@ local function prompt_action_items()
 	add("Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
 		M.open_code_actions()
 	end)
+	add("Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
+		M.rename_symbol()
+	end)
 	add("Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
 		M.add_hover()
 	end)
@@ -3729,6 +3732,10 @@ function M.setup(opts)
 		M.open_code_actions()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpRename", function()
+		M.rename_symbol()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpSmartContext", function()
 		M.add_smart_context()
 	end, {})
@@ -4262,6 +4269,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
 			M.open_code_actions()
+		end)
+		add_action(items, "Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
+			M.rename_symbol()
 		end)
 		add_action(items, "Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
 			M.add_hover()
@@ -6074,6 +6084,61 @@ function M.open_code_actions()
 	end)
 end
 
+function M.rename_symbol()
+	local state = current_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local rename = require("acp.rename")
+	if not state.busy then
+		set_run_status(state, "preparing rename")
+	end
+	rename.request(state.source, function(item, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		if not item then
+			notify("No LSP prepare-rename result", vim.log.levels.WARN)
+			return
+		end
+
+		local current_name = item.placeholder or "symbol"
+		vim.ui.input({
+			prompt = ("Rename %s to: "):format(current_name),
+			default = current_name,
+		}, function(new_name)
+			if new_name == nil then
+				if not state.busy then
+					set_run_status(state, "rename cancelled")
+				end
+				return
+			end
+
+			local prompt, prompt_err = rename.prompt(state.source, item, new_name)
+			if not prompt then
+				notify(prompt_err or "Failed to render rename context", vim.log.levels.ERROR)
+				return
+			end
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("rename: %s -> %s"):format(current_name, new_name))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end)
+	end)
+end
+
 function M.add_hover()
 	local state = current_state()
 	if not state then
@@ -7103,6 +7168,9 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		code_actions = function()
 			M.open_code_actions()
+		end,
+		rename = function()
+			M.rename_symbol()
 		end,
 		hover = function()
 			M.add_hover()

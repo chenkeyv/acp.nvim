@@ -126,6 +126,7 @@ test("setup registers public user commands", function()
 		"AcpCommands",
 		"AcpConfig",
 		"AcpCodeActions",
+		"AcpRename",
 		"AcpSmartContext",
 		"AcpHover",
 		"AcpSignature",
@@ -1312,6 +1313,48 @@ test("LSP code actions are flattened and rendered for picker", function()
 	eq(line_actions[5].title, "Run command")
 end)
 
+test("LSP prepare rename result is normalized and rendered", function()
+	local rename = require("acp.rename")
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_name(bufnr, vim.fn.tempname() .. ".lua")
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"local old_name = 1",
+		"print(old_name)",
+	})
+	vim.bo[bufnr].filetype = "lua"
+	local source = {
+		bufnr = bufnr,
+		cursor = { 1, 8 },
+	}
+
+	local item = rename.normalize({
+		range = {
+			start = { line = 0, character = 6 },
+			["end"] = { line = 0, character = 14 },
+		},
+		placeholder = "old_name",
+	}, source)
+	eq(item.placeholder, "old_name")
+	eq(item.range.line1, 1)
+	eq(item.range.col1, 7)
+	eq(item.range.col2, 15)
+
+	local default_item = rename.normalize({
+		defaultBehavior = true,
+	}, source)
+	eq(default_item.placeholder, "old_name")
+	eq(default_item.range.line1, 1)
+
+	local prompt = rename.prompt(source, item, "new_name")
+	ok(prompt:find("Rename this symbol to `new_name`", 1, true))
+	ok(prompt:find("Current name: old_name", 1, true))
+	ok(prompt:find("New name: new_name", 1, true))
+	ok(prompt:find("Selection: lines 1-1", 1, true))
+	ok(prompt:find("local old_name = 1", 1, true))
+
+	pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+end)
+
 test("LSP symbols are flattened and rendered for picker", function()
 	local flattened = symbols.flatten({
 		{
@@ -1669,6 +1712,9 @@ test("slash command completion items are rendered for completefunc", function()
 	local code_action_item = prompt_completion.items(commands, "@code")[1]
 	eq(code_action_item.word, "@code-actions")
 	eq(code_action_item.menu, "LSP")
+	local rename_item = prompt_completion.items(commands, "@ren")[1]
+	eq(rename_item.word, "@rename")
+	eq(prompt_completion.action_id(rename_item), "rename")
 	local signature_item = prompt_completion.items(commands, "@sig")[1]
 	eq(signature_item.word, "@signature")
 	eq(prompt_completion.action_id(signature_item), "signature")
@@ -1811,6 +1857,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		local prompt_actions_text = table.concat(vim.api.nvim_buf_get_lines(prompt_actions_buf, 0, -1, false), "\n")
 		ok(prompt_actions_text:find("Add context", 1, true))
 		ok(prompt_actions_text:find("Source diagnostics", 1, true))
+		ok(prompt_actions_text:find("Rename symbol", 1, true))
 		ok(prompt_actions_text:find("LSP highlights", 1, true))
 		ok(prompt_actions_text:find("Tree-sitter nodes", 1, true))
 		ok(prompt_actions_text:find("References quickfix", 1, true))
@@ -2666,6 +2713,7 @@ test("actions command opens a session action palette", function()
 		local symbols_quickfix = false
 		local workspace_diagnostics = false
 		local workspace_diagnostics_quickfix = false
+		local rename_action = false
 		local close_session = false
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
@@ -2700,6 +2748,9 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Smart context", 1, true) then
 				smart_context_action = true
+			end
+			if line:find("Rename symbol", 1, true) then
+				rename_action = true
 			end
 			if line:find("Signature help", 1, true) then
 				signature_help = true
@@ -2761,6 +2812,7 @@ test("actions command opens a session action palette", function()
 		ok(workspace_diagnostics, "action palette should include workspace diagnostics")
 		ok(workspace_diagnostics_quickfix, "action palette should include workspace diagnostics quickfix")
 		ok(smart_context_action, "action palette should include smart context")
+		ok(rename_action, "action palette should include rename")
 		ok(signature_help, "action palette should include signature help")
 		ok(inlay_hints_action, "action palette should include inlay hints")
 		ok(selection_ranges_action, "action palette should include selection ranges")
@@ -3272,6 +3324,77 @@ test("code actions command drafts selected LSP action context", function()
 
 	vim.lsp.buf_request_all = original_buf_request_all
 	vim.diagnostic.reset(ns, source_buf)
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("rename command drafts selected LSP prepare-rename context", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local old_name = 1",
+		"print(old_name)",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, 8 })
+
+	local original_buf_request_all = vim.lsp.buf_request_all
+	vim.lsp.buf_request_all = function(bufnr, method, params, callback)
+		eq(bufnr, source_buf)
+		eq(method, "textDocument/prepareRename")
+		eq(params.position.line, 0)
+		eq(params.position.character, 8)
+		callback({
+			[1] = {
+				result = {
+					range = {
+						start = { line = 0, character = 6 },
+						["end"] = { line = 0, character = 14 },
+					},
+					placeholder = "old_name",
+				},
+			},
+		})
+		return {
+			[1] = 1,
+		}
+	end
+
+	local original_ui_input = vim.ui.input
+	local input_opts
+	vim.ui.input = function(opts, callback)
+		input_opts = opts
+		callback("new_name")
+	end
+
+	local input_buf
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		vim.cmd("AcpRename")
+		ok(input_opts.prompt:find("old_name", 1, true))
+		eq(input_opts.default, "old_name")
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Rename this symbol to `new_name`", 1, true))
+		ok(prompt:find("Current name: old_name", 1, true))
+		ok(prompt:find("New name: new_name", 1, true))
+		ok(prompt:find("Range: lines 1%-1"))
+		ok(prompt:find("Selection: lines 1-1", 1, true))
+		ok(prompt:find("local old_name = 1", 1, true))
+	end)
+
+	vim.ui.input = original_ui_input
+	vim.lsp.buf_request_all = original_buf_request_all
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
 	end

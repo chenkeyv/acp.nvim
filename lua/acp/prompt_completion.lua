@@ -34,6 +34,12 @@ local workflows = {
 		info = "Open LSP code actions as focused ACP context.",
 	},
 	{
+		id = "rename",
+		trigger = "@rename",
+		menu = "LSP",
+		info = "Draft an LSP prepare-rename request for the source cursor.",
+	},
+	{
 		id = "hover",
 		trigger = "@hover",
 		menu = "LSP",
