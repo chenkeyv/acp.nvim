@@ -969,6 +969,42 @@ local function open_output_problems(state)
 	return true
 end
 
+local function open_changed_files(state)
+	if not state or changes.count(state) == 0 then
+		notify("No ACP file changes recorded for this session", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_entries = changes.picker_lines(state)
+	local view
+	view = picker.open({
+		name = ("ACP://%s/%d/changes"):format(state.adapter, state.id),
+		filetype = "acp-changes",
+		lines = lines,
+		title = " ACP changed files ",
+		submit_desc = "Open ACP changed file",
+		close_desc = "Close ACP changed files",
+		preview = function(row)
+			return changes.preview(line_entries[row])
+		end,
+		on_submit = function(row, picker_view)
+			local entry = line_entries[row]
+			if not entry then
+				return
+			end
+
+			picker_view.close()
+			vim.cmd("edit " .. vim.fn.fnameescape(entry.path))
+		end,
+	})
+
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		changes.open_quickfix(state)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP changed files quickfix" })
+	return true
+end
+
 local function follow_output(state)
 	if not valid_win(state.output_win) or not valid_buf(state.output_buf) then
 		return
@@ -2632,7 +2668,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
 		vim.keymap.set("n", "<leader>ae", open_problems, { buffer = bufnr, desc = "Open ACP output problems" })
 		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
-		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
+		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Preview ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
 		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
 		vim.keymap.set("n", "<leader>ak", open_actions, { buffer = bufnr, desc = "Open ACP actions" })
@@ -2803,6 +2839,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpChanges", function()
 		M.open_changes()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpChangesQuickfix", function()
+		M.open_changes_quickfix()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpOutput", function()
@@ -3034,7 +3074,7 @@ local function chat_handlers(state, opts)
 			local entry = changes.record(state, path)
 			local display = entry and entry.display or vim.fn.fnamemodify(path, ":.")
 			set_run_status(state, ("wrote %s"):format(display))
-			append_lines(state, { "", ("Wrote %s"):format(display), "Use :AcpChanges to review changed files.", "" })
+			append_lines(state, { "", ("Wrote %s"):format(display), "Use :AcpChanges to preview changed files.", "" })
 			refresh_output_chrome(state)
 			refresh_session_panels()
 		end,
@@ -3264,8 +3304,11 @@ local function action_palette_items(state)
 		add_action(items, "Output quickfix", "Send transcript file references to quickfix", ":AcpOutputQuickfix", "session", function()
 			M.open_output_quickfix()
 		end)
-		add_action(items, "Changed files", "Open files changed by this session in quickfix", "<leader>af", "session", function()
+		add_action(items, "Changed files", "Preview files changed by this session", "<leader>af", "session", function()
 			M.open_changes()
+		end)
+		add_action(items, "Changed files quickfix", "Send files changed by this session to quickfix", ":AcpChangesQuickfix", "session", function()
+			M.open_changes_quickfix()
 		end)
 		add_action(items, "Diagnostics", "Draft a focused fix from source diagnostics", "<leader>ad", "LSP", function()
 			M.open_diagnostics()
@@ -4079,6 +4122,15 @@ function M.add_context()
 end
 
 function M.open_changes()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_changed_files(state)
+end
+
+function M.open_changes_quickfix()
 	local state = current_state()
 	if not state then
 		return

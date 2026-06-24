@@ -89,6 +89,7 @@ test("setup registers public user commands", function()
 		"AcpPromptActions",
 		"AcpSourceActions",
 		"AcpChanges",
+		"AcpChangesQuickfix",
 		"AcpOutput",
 		"AcpOutputSearch",
 		"AcpOutputYank",
@@ -2050,7 +2051,7 @@ test("tree-sitter command drafts selected node context", function()
 	end
 end)
 
-test("changes module records unique written files for quickfix", function()
+test("changes module records unique written files for picker and quickfix", function()
 	local root = vim.fn.tempname()
 	vim.fn.mkdir(vim.fs.joinpath(root, "nested"), "p")
 	local first = vim.fs.joinpath(root, "example.txt")
@@ -2074,6 +2075,19 @@ test("changes module records unique written files for quickfix", function()
 	eq(items[1].text, "ACP wrote example.txt (2 writes)")
 	eq(items[2].filename, vim.fs.normalize(second))
 	eq(items[2].text, "ACP wrote nested/other.txt")
+
+	local lines, line_entries = acp_changes.picker_lines(state)
+	local text = table.concat(lines, "\n")
+	ok(text:find("ACP Changed Files", 1, true))
+	ok(text:find("example.txt  2 writes", 1, true))
+	ok(text:find("nested/other.txt", 1, true))
+	ok(text:find("Q for quickfix", 1, true))
+	eq(line_entries[3].path, vim.fs.normalize(first))
+
+	local preview = acp_changes.preview(line_entries[3])
+	eq(preview.filetype, "text")
+	ok(preview.title:find("example.txt", 1, true))
+	eq(preview.lines[1], "one")
 
 	ok(acp_changes.open_quickfix(state), "quickfix should open for recorded changes")
 	local qf = vim.fn.getqflist({ title = 1, items = 1 })

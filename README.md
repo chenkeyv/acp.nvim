@@ -62,7 +62,7 @@ This plugin provides an editor-native ACP chat surface:
 - floating permission chooser with numbered actions
 - floating terminal command approval with live output in tool calls
 - floating batch file-write review with diff previews before applying agent edits
-- quickfix navigation for files changed during an ACP session
+- previewed changed-file picker with quickfix export for files written by the agent
 - floating diagnostics picker for drafting focused fixes
 - floating Markdown input prompt for completion-friendly editing
 - native `:checkhealth acp` diagnostics for adapter commands and metadata
@@ -126,7 +126,8 @@ vim.g.acp_nvim_config = {
 - `:AcpActions` opens a picker of available ACP workflows
 - `:AcpPromptActions` opens composer-focused actions with source context preview
 - `:AcpSourceActions` opens actions for the source buffer linked to an ACP session
-- `:AcpChanges` opens a quickfix list of files changed in the current ACP session
+- `:AcpChanges` opens a previewed picker of files changed in the current ACP session
+- `:AcpChangesQuickfix` opens a quickfix list of files changed in the current ACP session
 - `:AcpOutput` opens a floating outline of the current output transcript
 - `:AcpOutputSearch` opens every non-empty output line with context previews
 - `:AcpOutputYank` yanks the current output section into the unnamed register
@@ -180,7 +181,7 @@ In the prompt buffer:
 - `<leader>ag` opens output file references
 - `<leader>ae` opens output errors/stderr in the location list
 - `<leader>ad` opens source-buffer diagnostics
-- `<leader>af` opens the current session's changed files in quickfix
+- `<leader>af` previews the current session's changed files
 - `<leader>a/` opens advertised ACP slash commands
 - `<leader>ao` opens advertised ACP config options
 - `<leader>ak` opens the ACP action palette
@@ -219,6 +220,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
+- changed-file and output-location pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 

@@ -19,6 +19,16 @@ local function relative_path(path, cwd)
 	return vim.fn.fnamemodify(normalized, ":.")
 end
 
+local function filetype_for(path)
+	if vim.filetype and vim.filetype.match then
+		local ok, filetype = pcall(vim.filetype.match, { filename = path })
+		if ok and filetype and filetype ~= "" then
+			return filetype
+		end
+	end
+	return "text"
+end
+
 local function ensure_state(state)
 	state.written_files = state.written_files or {}
 	state.written_file_index = state.written_file_index or {}
@@ -63,6 +73,48 @@ function M.items(state)
 		})
 	end
 	return items
+end
+
+function M.picker_lines(state)
+	local lines = { "ACP Changed Files", "" }
+	local line_entries = {}
+
+	for index, entry in ipairs((state and state.written_files) or {}) do
+		local suffix = entry.count > 1 and ("  %d writes"):format(entry.count) or ""
+		table.insert(lines, ("%d. %s%s"):format(index, entry.display, suffix))
+		line_entries[#lines] = entry
+		table.insert(lines, ("   %s"):format(entry.path))
+		line_entries[#lines] = entry
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Press <Enter> to open, Q for quickfix, / to filter, or q/<Esc> to close.")
+	return lines, line_entries
+end
+
+function M.preview(entry)
+	if not entry then
+		return nil
+	end
+
+	local ok, lines = pcall(vim.fn.readfile, entry.path, "", 200)
+	if not ok then
+		lines = {
+			"Unable to read changed file.",
+			tostring(lines),
+		}
+	elseif #lines == 0 then
+		lines = { "" }
+	elseif #lines == 200 then
+		table.insert(lines, "")
+		table.insert(lines, "... preview truncated")
+	end
+
+	return {
+		lines = lines,
+		filetype = filetype_for(entry.path),
+		title = (" ACP change %s "):format(entry.display or entry.path),
+	}
 end
 
 function M.open_quickfix(state)
