@@ -1,5 +1,6 @@
 local jsonrpc = require("acp.jsonrpc")
 local acp_context = require("acp.context")
+local acp_diagnostics = require("acp.diagnostics")
 local file_review = require("acp.file_review")
 local history = require("acp.history")
 local permission = require("acp.permission")
@@ -41,7 +42,20 @@ test("jsonrpc line buffer emits complete non-empty lines", function()
 end)
 
 test("setup registers public user commands", function()
-	require("acp").setup({})
+	require("acp").setup({
+		default_adapter = "test",
+		default_mode = "window",
+		adapters = {
+			test = {
+				command = { "missing-acp-test-command" },
+				timeout_ms = 10,
+				metadata = {
+					model = "test-model",
+					context_window = 1000,
+				},
+			},
+		},
+	})
 
 	for _, command in ipairs({
 		"AcpChat",
@@ -54,6 +68,7 @@ test("setup registers public user commands", function()
 		"AcpSessions",
 		"AcpHistory",
 		"AcpAddContext",
+		"AcpFixDiagnostics",
 		"AcpHealth",
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
@@ -349,6 +364,90 @@ test("editor context includes selected range text", function()
 	ok(rendered:find("local two = 2", 1, true))
 	ok(rendered:find("local three = one + two", 1, true))
 
+	vim.api.nvim_set_current_buf(previous_buf)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
+test("diagnostics renderer filters by selected range", function()
+	local previous_buf = vim.api.nvim_get_current_buf()
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"local alpha = 1",
+		"local beta = missing",
+		"local gamma = beta",
+		"print(unused)",
+	})
+	vim.api.nvim_set_current_buf(bufnr)
+
+	local ns = vim.api.nvim_create_namespace("acp.nvim.test.render-diagnostics")
+	vim.diagnostic.set(ns, bufnr, {
+		{
+			lnum = 1,
+			col = 13,
+			severity = vim.diagnostic.severity.ERROR,
+			message = "undefined global missing",
+			source = "lua_ls",
+			code = "undefined-global",
+		},
+		{
+			lnum = 3,
+			col = 6,
+			severity = vim.diagnostic.severity.WARN,
+			message = "undefined global unused",
+			source = "lua_ls",
+		},
+	})
+
+	local rendered = acp_diagnostics.render(bufnr, {
+		range = {
+			line1 = 1,
+			line2 = 3,
+		},
+	})
+
+	ok(rendered:find("Diagnostics", 1, true))
+	ok(rendered:find("Summary: 1 error(s), 0 warning(s), 0 info, 0 hint(s)", 1, true))
+	ok(rendered:find("Range: lines 1-3", 1, true))
+	ok(rendered:find("2:14 ERROR [lua_ls] (undefined-global): undefined global missing", 1, true))
+	ok(not rendered:find("undefined global unused", 1, true))
+
+	vim.diagnostic.reset(ns, bufnr)
+	vim.api.nvim_set_current_buf(previous_buf)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
+test("fix diagnostics command opens a prefilled prompt", function()
+	local previous_buf = vim.api.nvim_get_current_buf()
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"local value = missing",
+	})
+	vim.bo[bufnr].filetype = "lua"
+	vim.api.nvim_set_current_buf(bufnr)
+	vim.api.nvim_win_set_cursor(0, { 1, 6 })
+
+	local ns = vim.api.nvim_create_namespace("acp.nvim.test.fix-diagnostics")
+	vim.diagnostic.set(ns, bufnr, {
+		{
+			lnum = 0,
+			col = 14,
+			severity = vim.diagnostic.severity.ERROR,
+			message = "undefined global missing",
+			source = "lua_ls",
+		},
+	})
+
+	vim.cmd("AcpFixDiagnostics test")
+	local input_buf = vim.api.nvim_get_current_buf()
+	eq(vim.bo[input_buf].filetype, "markdown")
+	local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+	ok(prompt:find("Fix the diagnostics below", 1, true))
+	ok(prompt:find("Context", 1, true))
+	ok(prompt:find("Filetype: lua", 1, true))
+	ok(prompt:find("Diagnostics", 1, true))
+	ok(prompt:find("ERROR [lua_ls]: undefined global missing", 1, true))
+
+	vim.diagnostic.reset(ns, bufnr)
 	vim.api.nvim_set_current_buf(previous_buf)
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)

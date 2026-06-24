@@ -1,5 +1,6 @@
 local Connection = require("acp.connection").Connection
 local context = require("acp.context")
+local diagnostics = require("acp.diagnostics")
 local history = require("acp.history")
 local metadata = require("acp.metadata")
 
@@ -373,6 +374,33 @@ local function command_source_range(command)
 		line1 = command.line1,
 		line2 = command.line2,
 	}
+end
+
+local function diagnostics_prompt(source)
+	if not source or not source.bufnr then
+		return nil
+	end
+
+	local rendered_diagnostics = diagnostics.render(source.bufnr, {
+		range = source.range,
+	})
+	if not rendered_diagnostics then
+		return nil
+	end
+
+	local lines = {
+		"Fix the diagnostics below. Keep the changes focused and preserve existing behavior.",
+	}
+	local rendered_context = context.render(source, {
+		include_diagnostics = false,
+	})
+	if rendered_context then
+		table.insert(lines, "")
+		table.insert(lines, rendered_context)
+	end
+	table.insert(lines, "")
+	table.insert(lines, rendered_diagnostics)
+	return table.concat(lines, "\n")
 end
 
 local function escape_tabline(text)
@@ -829,6 +857,27 @@ function M.setup(opts)
 		M.add_context()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpFixDiagnostics", function(command)
+		local source_range = command_source_range(command)
+		local bufnr = vim.api.nvim_get_current_buf()
+		if diagnostics.count(bufnr, { range = source_range }) == 0 then
+			notify("No diagnostics found in the current buffer or range", vim.log.levels.WARN)
+			return
+		end
+
+		M.open(command.args ~= "" and command.args or nil, {
+			mode = config.default_mode,
+			source_range = source_range,
+			draft = "diagnostics",
+		})
+	end, {
+		nargs = "?",
+		range = true,
+		complete = function()
+			return adapter_names()
+		end,
+	})
+
 	vim.api.nvim_create_user_command("AcpHealth", function(command)
 		M.health(command.args ~= "" and command.args or nil)
 	end, {
@@ -873,6 +922,11 @@ function M.open(adapter_name, opts)
 	states[state.session_panel_buf] = state
 	states[state.output_buf] = state
 	states[state.input_buf] = state
+	if opts.draft == "diagnostics" then
+		append_input_text(state, diagnostics_prompt(state.source))
+	elseif opts.initial_prompt then
+		append_input_text(state, opts.initial_prompt)
+	end
 	register_keymaps(state)
 	register_autocmds(state)
 	apply_layout(state)

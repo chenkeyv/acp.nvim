@@ -264,17 +264,19 @@ function M.render(source, opts)
 		end
 	end
 
-	local diagnostic_lines = diagnostics(bufnr, line, opts.diagnostic_limit or 5)
-	if #diagnostic_lines > 0 then
-		table.insert(lines, "Diagnostics:")
-		vim.list_extend(lines, diagnostic_lines)
-	end
+	if opts.include_diagnostics ~= false then
+		local diagnostic_lines = diagnostics(bufnr, line, opts.diagnostic_limit or 5)
+		if #diagnostic_lines > 0 then
+			table.insert(lines, "Diagnostics:")
+			vim.list_extend(lines, diagnostic_lines)
+		end
 
-	local summary, buffer_diagnostics = diagnostic_summary(bufnr, line, opts.buffer_diagnostic_limit or 5)
-	if summary then
-		table.insert(lines, "Buffer diagnostics:")
-		table.insert(lines, ("Summary: %s"):format(summary))
-		vim.list_extend(lines, buffer_diagnostics)
+		local summary, buffer_diagnostics = diagnostic_summary(bufnr, line, opts.buffer_diagnostic_limit or 5)
+		if summary then
+			table.insert(lines, "Buffer diagnostics:")
+			table.insert(lines, ("Summary: %s"):format(summary))
+			vim.list_extend(lines, buffer_diagnostics)
+		end
 	end
 
 	return table.concat(lines, "\n")

@@ -13,6 +13,7 @@ This plugin provides an editor-native ACP chat surface:
 - plain-text transcript history under Neovim state
 - editor context insertion from the source buffer, Tree-sitter node, LSP clients, and diagnostics
 - visual/range context capture for selected code
+- LSP diagnostic fix drafts from the current buffer or visual range
 - floating permission chooser with numbered actions
 - floating file-write review with a diff preview before applying agent edits
 - floating Markdown input prompt for completion-friendly editing
@@ -71,6 +72,7 @@ vim.g.acp_nvim_config = {
 - `:AcpSessions` focuses the sessions side panel
 - `:AcpHistory` opens saved transcript history
 - `:AcpAddContext` inserts source-buffer context into the current prompt
+- `:AcpFixDiagnostics [adapter]` opens chat with a diagnostics-focused draft prompt
 - `:AcpHealth [adapter]` checks whether the adapter command is available
 
 In the sessions panel:
@@ -86,6 +88,8 @@ In the prompt buffer:
 
 The chat-opening commands accept a line range, so opening ACP from Visual mode
 preserves the selected lines for `:AcpAddContext`.
+`:AcpFixDiagnostics` also accepts a range, limiting the diagnostic draft to
+that selection.
 
 ## Development
 
