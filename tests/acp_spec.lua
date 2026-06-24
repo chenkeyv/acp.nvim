@@ -91,6 +91,7 @@ test("setup registers public user commands", function()
 		"AcpOutputSearch",
 		"AcpCodeBlocks",
 		"AcpOutputLocations",
+		"AcpOutputQuickfix",
 		"AcpDiagnostics",
 		"AcpCommands",
 		"AcpConfig",
@@ -418,7 +419,13 @@ test("output dashboard and section helpers are rendered", function()
 	local ref_text = table.concat(ref_picker, "\n")
 	ok(ref_text:find("ACP Output Locations", 1, true))
 	ok(ref_text:find(":2:7", 1, true))
+	ok(ref_text:find("Q for quickfix", 1, true))
 	eq(line_refs[3].line, 2)
+	local qf_items = acp_output.file_reference_quickfix_items(refs)
+	eq(#qf_items, 1)
+	eq(qf_items[1].filename, refs[1].path)
+	eq(qf_items[1].lnum, 2)
+	eq(qf_items[1].col, 7)
 	local stats = acp_output.transcript_stats({
 		"ACP: test",
 		"```lua",
@@ -1029,6 +1036,15 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			"See lua/acp/output.lua:1:1 for the output helpers.",
 		})
 		vim.bo[output_buf].modifiable = false
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd("AcpOutputQuickfix")
+		local qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(qflist.title:find("ACP output locations", 1, true))
+		eq(#qflist.items, 1)
+		eq(qflist.items[1].lnum, 1)
+		eq(qflist.items[1].col, 1)
+		ok(qflist.items[1].text:find("lua/acp/output.lua:1:1", 1, true))
+		vim.cmd("cclose")
 		vim.api.nvim_set_current_win(output_win)
 		vim.cmd("AcpOutputLocations")
 		picker_buf = vim.api.nvim_get_current_buf()

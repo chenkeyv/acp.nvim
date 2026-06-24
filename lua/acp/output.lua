@@ -501,8 +501,21 @@ function M.file_reference_lines(references)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to jump, / to filter, or q/<Esc> to close.")
+	table.insert(lines, "Press <Enter> to jump, Q for quickfix, / to filter, or q/<Esc> to close.")
 	return lines, line_references
+end
+
+function M.file_reference_quickfix_items(references)
+	local items = {}
+	for _, reference in ipairs(references or {}) do
+		table.insert(items, {
+			filename = reference.path,
+			lnum = reference.line or 1,
+			col = reference.column or 1,
+			text = reference.source_text or reference.display_path or reference.path,
+		})
+	end
+	return items
 end
 
 function M.transcript_stats(lines, opts)

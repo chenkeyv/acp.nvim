@@ -19,6 +19,7 @@ This plugin provides an editor-native ACP chat surface:
 - searchable output transcript picker with context previews and jump-to-line navigation
 - searchable output code-block picker with language-aware previews and scratch buffers
 - searchable output location picker for jumping from transcript file references into source
+- quickfix export for transcript file references
 - Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
 - ghost-text output hints and lightweight animated busy status
 - optional Tree-sitter Markdown/code-fence language injection for agent responses
@@ -113,6 +114,7 @@ vim.g.acp_nvim_config = {
 - `:AcpOutputSearch` opens every non-empty output line with context previews
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
 - `:AcpOutputLocations` opens local file references from the current output with source previews
+- `:AcpOutputQuickfix` sends local file references from the current output to quickfix
 - `:AcpDiagnostics` opens a picker for source-buffer diagnostics
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a picker for config options advertised by the current ACP session

@@ -556,10 +556,10 @@ local function open_output_code_blocks(state)
 	return true
 end
 
-local function open_output_locations(state)
+local function output_location_references(state)
 	if not state or not valid_buf(state.output_buf) then
 		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
+		return nil
 	end
 
 	local references = output.file_references(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), {
@@ -567,11 +567,34 @@ local function open_output_locations(state)
 	})
 	if #references == 0 then
 		notify("No local file references found in the ACP output", vim.log.levels.WARN)
+		return nil
+	end
+	return references
+end
+
+local function open_output_location_quickfix(state, references)
+	references = references or output_location_references(state)
+	if not references then
+		return false
+	end
+
+	vim.fn.setqflist({}, " ", {
+		title = ("ACP output locations #%s"):format(tostring(state.id or "?")),
+		items = output.file_reference_quickfix_items(references),
+	})
+	vim.cmd("copen")
+	return true
+end
+
+local function open_output_locations(state)
+	local references = output_location_references(state)
+	if not references then
 		return false
 	end
 
 	local lines, line_references = output.file_reference_lines(references)
-	picker.open({
+	local view
+	view = picker.open({
 		name = ("ACP://%s/%d/output-locations"):format(state.adapter, state.id),
 		filetype = "acp-output-locations",
 		lines = lines,
@@ -591,6 +614,10 @@ local function open_output_locations(state)
 			jump_to_file_reference(reference)
 		end,
 	})
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		open_output_location_quickfix(state, references)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP output locations quickfix" })
 	return true
 end
 
@@ -1864,6 +1891,10 @@ function M.setup(opts)
 		M.open_output_locations()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpOutputQuickfix", function()
+		M.open_output_quickfix()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpDiagnostics", function()
 		M.open_diagnostics()
 	end, {})
@@ -2235,6 +2266,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Output locations", "Preview and jump to file references in the transcript", "<leader>ag", "session", function()
 			M.open_output_locations()
+		end)
+		add_action(items, "Output quickfix", "Send transcript file references to quickfix", ":AcpOutputQuickfix", "session", function()
+			M.open_output_quickfix()
 		end)
 		add_action(items, "Changed files", "Open files changed by this session in quickfix", "<leader>af", "session", function()
 			M.open_changes()
@@ -2954,6 +2988,15 @@ function M.open_output_locations()
 	end
 
 	open_output_locations(state)
+end
+
+function M.open_output_quickfix()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_output_location_quickfix(state)
 end
 
 function M.open_diagnostics()
