@@ -126,6 +126,15 @@ local function format_count(value)
 	return tostring(number)
 end
 
+local function short_label(value, limit)
+	local label = clean(value) or "?"
+	limit = limit or 48
+	if #label > limit then
+		return label:sub(1, limit - 3) .. "..."
+	end
+	return label
+end
+
 local function source_label(source)
 	if not source or not source.bufnr or not vim.api.nvim_buf_is_valid(source.bufnr) then
 		return "none"
@@ -224,11 +233,13 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpFile", { fg = "#9ece6a", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpThought", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpError", { link = "DiagnosticError", default = true })
+	vim.api.nvim_set_hl(0, "AcpWarning", { link = "DiagnosticWarn", default = true })
 	vim.api.nvim_set_hl(0, "AcpBadge", { link = "Visual", default = true })
 	vim.api.nvim_set_hl(0, "AcpBadgeUser", { fg = "#1a1b26", bg = "#9ece6a", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpBadgeAgent", { fg = "#1a1b26", bg = "#7dcfff", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpBadgeStatus", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpBadgeError", { link = "DiagnosticError", default = true })
+	vim.api.nvim_set_hl(0, "AcpBadgeWarn", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpBadgeTool", { fg = "#1a1b26", bg = "#bb9af7", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpGhostText", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputHint", { link = "AcpGhostText", default = true })
@@ -244,6 +255,25 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpOutputIdle", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulse", { link = "IncSearch", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputPulseSoft", { link = "Search", default = true })
+end
+
+function M.activity_separator(line)
+	line = line or ""
+	if line:match("^Tool update:") then
+		return ("---- TOOL UPDATE: %s | K inspect | ]o/[o items ----"):format(short_label((line:gsub("^Tool update:%s*", ""))))
+	end
+	if line:match("^Tool:") then
+		return ("---- TOOL: %s | K inspect | ]o/[o items ----"):format(short_label((line:gsub("^Tool:%s*", ""))))
+	end
+	if line:match("^Terminal:") then
+		return ("---- TERMINAL: %s | K inspect | ]o/[o items ----"):format(short_label((line:gsub("^Terminal:%s*", ""))))
+	end
+	if line:match("^Terminal output truncated") then
+		return "---- TERMINAL WARNING: output truncated | <leader>ae problems ----"
+	end
+	if line:match("^stderr:") then
+		return "---- STDERR: problem output | K inspect | <leader>ae problems ----"
+	end
 end
 
 function M.line_style(line)
@@ -307,7 +337,7 @@ function M.line_style(line)
 			badge = " TOOL ",
 			badge_hl = "AcpBadgeTool",
 			sign_text = "T>",
-			separator = "---- TOOL ----",
+			separator = M.activity_separator(line),
 		}
 	end
 	if line:match("^Terminal:") then
@@ -316,7 +346,16 @@ function M.line_style(line)
 			badge = " TERM ",
 			badge_hl = "AcpBadgeTool",
 			sign_text = "$>",
-			separator = "---- TERMINAL ----",
+			separator = M.activity_separator(line),
+		}
+	end
+	if line:match("^Terminal output truncated") then
+		return {
+			line_hl_group = "AcpWarning",
+			badge = " WARN ",
+			badge_hl = "AcpBadgeWarn",
+			sign_text = "W!",
+			separator = M.activity_separator(line),
 		}
 	end
 	if line:match("^Wrote ") then
@@ -343,7 +382,7 @@ function M.line_style(line)
 			badge = " STDERR ",
 			badge_hl = "AcpBadgeError",
 			sign_text = "!>",
-			separator = "---- STDERR ----",
+			separator = M.activity_separator(line),
 		}
 	end
 end
@@ -355,6 +394,7 @@ function M.is_section(line)
 		or line:match("^Status:")
 		or line:match("^Tool")
 		or line:match("^Terminal:")
+		or line:match("^Terminal output truncated")
 		or line:match("^Wrote ")
 		or line:match("^Thought:")
 		or line:match("^stderr:")
@@ -381,6 +421,9 @@ local function section_label(line)
 	end
 	if line:match("^Terminal:") then
 		return "TERM", line:gsub("^Terminal:%s*", "")
+	end
+	if line:match("^Terminal output truncated") then
+		return "TERM", "Output truncated"
 	end
 	if line:match("^Wrote ") then
 		return "FILE", line:gsub("^Wrote%s+", "")
