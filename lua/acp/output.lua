@@ -205,7 +205,7 @@ function M.dashboard_lines(state, opts)
 		metadata_label(state),
 		("Source: %s"):format(source_label(state and state.source)),
 		summary_label(opts.stats),
-		"Keys: ? actions | K inspect | <leader>ax search | gf refs | <leader>ay yank | [[/]] sections | <leader>av outline | <leader>ag locs | <leader>ab code",
+		"Keys: ? actions | K inspect | ]o/[o items | <leader>ax search | gf refs | <leader>ay yank | [[/]] sections | <leader>av outline",
 		"",
 	}
 end
@@ -834,6 +834,76 @@ function M.problem_diagnostic_at(lines, lnum)
 	return nil
 end
 
+function M.output_items(lines, opts)
+	opts = opts or {}
+	lines = lines or {}
+	local items = {}
+	local order = {
+		problem = 1,
+		reference = 2,
+		code = 3,
+	}
+
+	for _, item in ipairs(M.problem_diagnostics(lines)) do
+		table.insert(items, {
+			kind = "problem",
+			line = (item.lnum or 0) + 1,
+			col = (item.col or 0) + 1,
+			label = item.message,
+		})
+	end
+	for _, reference in ipairs(M.file_references(lines, { cwd = opts.cwd })) do
+		table.insert(items, {
+			kind = "reference",
+			line = reference.source_line or 1,
+			col = reference.source_col or 1,
+			label = ("%s:%d:%d"):format(reference.display_path or reference.path or "?", reference.line or 1, reference.column or 1),
+		})
+	end
+	for _, block in ipairs(M.code_blocks(lines)) do
+		table.insert(items, {
+			kind = "code",
+			line = block.start_line or 1,
+			col = 1,
+			label = ("%s code block"):format(block.language or "text"),
+		})
+	end
+
+	table.sort(items, function(left, right)
+		if left.line ~= right.line then
+			return left.line < right.line
+		end
+		if left.col ~= right.col then
+			return left.col < right.col
+		end
+		return (order[left.kind] or 99) < (order[right.kind] or 99)
+	end)
+	return items
+end
+
+function M.next_output_item(lines, current, direction, opts)
+	direction = tonumber(direction) or 1
+	direction = direction < 0 and -1 or 1
+	current = tonumber(current) or 1
+	local items = M.output_items(lines, opts)
+	if direction > 0 then
+		for _, item in ipairs(items) do
+			if item.line > current then
+				return item
+			end
+		end
+		return nil
+	end
+
+	for index = #items, 1, -1 do
+		local item = items[index]
+		if item.line < current then
+			return item
+		end
+	end
+	return nil
+end
+
 function M.cursor_hint(lines, lnum, col, opts)
 	opts = opts or {}
 	lines = lines or {}
@@ -844,13 +914,13 @@ function M.cursor_hint(lines, lnum, col, opts)
 	end
 
 	if M.file_reference_at(lines, line_number, col, { cwd = opts.cwd }) then
-		return "actions: ? menu | K inspect | <Enter> open ref | gf source"
+		return "actions: ? menu | K inspect | <Enter> open ref | ]o/[o items"
 	end
 	if M.code_block_at(lines, line_number) then
-		return "actions: ? menu | K inspect | <Enter> open code | <leader>aY yank code"
+		return "actions: ? menu | K inspect | <Enter> open code | ]o/[o items"
 	end
 	if line:match("^Status:%s+error") or line:match("^stderr:") or line:match("^Terminal output truncated") then
-		return "actions: ? menu | K inspect | <leader>ae problems | <leader>ai draft"
+		return "actions: ? menu | K inspect | ]o/[o items | <leader>ae problems"
 	end
 	if M.is_section(line) then
 		return "actions: ? menu | K inspect | <leader>ai draft | <leader>ay yank"

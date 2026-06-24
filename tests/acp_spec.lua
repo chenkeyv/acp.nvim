@@ -94,6 +94,8 @@ test("setup registers public user commands", function()
 		"AcpOutputOpen",
 		"AcpOutputInspect",
 		"AcpOutputActions",
+		"AcpOutputNextItem",
+		"AcpOutputPrevItem",
 		"AcpCodeBlocks",
 		"AcpCodeBlockYank",
 		"AcpOutputLocations",
@@ -348,10 +350,9 @@ test("output dashboard and section helpers are rendered", function()
 	ok(text:find("Transcript: 0 sections | 0 code | 0 locs | 0 changes", 1, true))
 	ok(text:find("? actions", 1, true))
 	ok(text:find("K inspect", 1, true))
+	ok(text:find("]o/[o items", 1, true))
 	ok(text:find("[[/]] sections", 1, true))
 	ok(text:find("<leader>ax search", 1, true))
-	ok(text:find("<leader>ab code", 1, true))
-	ok(text:find("<leader>ag locs", 1, true))
 
 	eq(acp_output.line_style("You").line_hl_group, "AcpUserHeader")
 	eq(acp_output.line_style("You").sign_text, "U>")
@@ -448,7 +449,7 @@ test("output dashboard and section helpers are rendered", function()
 	eq(block_at.language, "lua")
 	eq(block_at.lines[1], "print(1)")
 	eq(acp_output.code_block_text(block_at), "print(1)")
-	ok(acp_output.cursor_hint({ "Agent", "```lua", "print(1)", "```" }, 3, 0):find("yank code", 1, true))
+	ok(acp_output.cursor_hint({ "Agent", "```lua", "print(1)", "```" }, 3, 0):find("]o/[o items", 1, true))
 	local block_picker, line_blocks = acp_output.code_block_lines(blocks)
 	local block_text = table.concat(block_picker, "\n")
 	ok(block_text:find("ACP Output Code Blocks", 1, true))
@@ -472,7 +473,9 @@ test("output dashboard and section helpers are rendered", function()
 	eq(ref_at.path, refs[1].path)
 	eq(ref_at.line, 2)
 	eq(ref_at.column, 7)
-	ok(acp_output.cursor_hint({ ref_line }, 1, ref_line:find(ref_file, 1, true), {}):find("gf source", 1, true))
+	local ref_hint = acp_output.cursor_hint({ ref_line }, 1, ref_line:find(ref_file, 1, true), {})
+	ok(ref_hint:find("open ref", 1, true))
+	ok(ref_hint:find("]o/[o items", 1, true))
 	local ref_picker, line_refs = acp_output.file_reference_lines(refs)
 	local ref_text = table.concat(ref_picker, "\n")
 	ok(ref_text:find("ACP Output Locations", 1, true))
@@ -484,6 +487,23 @@ test("output dashboard and section helpers are rendered", function()
 	eq(qf_items[1].filename, refs[1].path)
 	eq(qf_items[1].lnum, 2)
 	eq(qf_items[1].col, 7)
+	local output_items = acp_output.output_items({
+		"Status: error: failed",
+		"Agent",
+		"```lua",
+		"print(1)",
+		"```",
+		ref_line,
+	})
+	eq(#output_items, 3)
+	eq(output_items[1].kind, "problem")
+	eq(output_items[1].line, 1)
+	eq(output_items[2].kind, "code")
+	eq(output_items[2].line, 3)
+	eq(output_items[3].kind, "reference")
+	eq(output_items[3].line, 6)
+	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 1).kind, "code")
+	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 6, -1).kind, "code")
 	local problem_items = acp_output.problem_diagnostics({
 		"Status: error: failed to start session",
 		"",
@@ -1315,6 +1335,15 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(ref_line, "output should contain a file reference")
+		vim.api.nvim_win_set_cursor(output_win, { problem_line, 0 })
+		vim.cmd("AcpOutputNextItem")
+		local item_line = vim.api.nvim_win_get_cursor(output_win)[1]
+		eq(vim.api.nvim_buf_get_lines(output_buf, item_line - 1, item_line, false)[1], "```lua")
+		vim.cmd("AcpOutputNextItem")
+		eq(vim.api.nvim_win_get_cursor(output_win)[1], ref_line)
+		vim.cmd("AcpOutputPrevItem")
+		item_line = vim.api.nvim_win_get_cursor(output_win)[1]
+		eq(vim.api.nvim_buf_get_lines(output_buf, item_line - 1, item_line, false)[1], "```lua")
 		vim.api.nvim_win_set_cursor(output_win, { ref_line, ref_col })
 		vim.cmd("AcpOutputInspect")
 		local ref_preview_win, ref_preview = output_inspector_text("lua")

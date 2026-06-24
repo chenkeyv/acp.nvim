@@ -500,6 +500,34 @@ local function jump_output_section(state, direction)
 	end
 end
 
+local function jump_output_item(state, direction)
+	if not state or not valid_buf(state.output_buf) then
+		return false
+	end
+
+	local winid = vim.api.nvim_get_current_win()
+	if vim.api.nvim_win_get_buf(winid) ~= state.output_buf then
+		winid = vim.fn.bufwinid(state.output_buf)
+	end
+	if not valid_win(winid) then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local current = vim.api.nvim_win_get_cursor(winid)[1]
+	local item = output.next_output_item(lines, current, direction, { cwd = state.cwd })
+	if not item then
+		notify(direction < 0 and "No previous ACP output item" or "No next ACP output item", vim.log.levels.WARN)
+		return false
+	end
+
+	vim.api.nvim_set_current_win(winid)
+	pcall(vim.api.nvim_win_set_cursor, winid, { item.line, math.max(0, (item.col or 1) - 1) })
+	refresh_output_chrome(state)
+	return true
+end
+
 local function open_output_outline(state)
 	if not state or not valid_buf(state.output_buf) then
 		notify("No ACP output buffer is available", vim.log.levels.WARN)
@@ -1594,6 +1622,12 @@ local function output_action_items(state, context_info)
 	add("Inspect item", "Open a floating preview for the output item under the cursor", "K", function()
 		inspect_output_at_cursor(state)
 	end)
+	add("Next item", "Jump to the next reference, code block, or problem", "]o", function()
+		jump_output_item(state, 1)
+	end)
+	add("Previous item", "Jump to the previous reference, code block, or problem", "[o", function()
+		jump_output_item(state, -1)
+	end)
 	if context_info.reference then
 		add("Open reference", "Jump to the local file reference under the cursor", "gf", function()
 			open_output_reference_at_cursor(state)
@@ -2317,6 +2351,12 @@ local function register_keymaps(state)
 	local open_output_action_menu = function()
 		open_output_actions(state)
 	end
+	local previous_output_item = function()
+		jump_output_item(state, -1)
+	end
+	local next_output_item = function()
+		jump_output_item(state, 1)
+	end
 	local open_problems = function()
 		open_output_problems(state)
 	end
@@ -2386,6 +2426,8 @@ local function register_keymaps(state)
 	vim.keymap.set("n", "]]", function()
 		jump_output_section(state, 1)
 	end, { buffer = state.output_buf, desc = "Next ACP output section" })
+	vim.keymap.set("n", "[o", previous_output_item, { buffer = state.output_buf, desc = "Previous ACP output item" })
+	vim.keymap.set("n", "]o", next_output_item, { buffer = state.output_buf, desc = "Next ACP output item" })
 	vim.keymap.set("n", "<CR>", open_context, { buffer = state.output_buf, desc = "Open ACP output item" })
 	vim.keymap.set("n", "?", open_output_action_menu, { buffer = state.output_buf, desc = "Open ACP output actions" })
 	vim.keymap.set("n", "K", inspect_output, { buffer = state.output_buf, desc = "Inspect ACP output item" })
@@ -2554,6 +2596,14 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutputActions", function()
 		M.open_output_actions()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputNextItem", function()
+		M.next_output_item()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputPrevItem", function()
+		M.previous_output_item()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
@@ -3726,6 +3776,24 @@ function M.open_output_actions()
 	end
 
 	open_output_actions(state)
+end
+
+function M.next_output_item()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	jump_output_item(state, 1)
+end
+
+function M.previous_output_item()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	jump_output_item(state, -1)
 end
 
 function M.open_code_blocks()

@@ -130,6 +130,7 @@ vim.g.acp_nvim_config = {
 - `:AcpOutputOpen` opens the local file reference or code block under the output cursor
 - `:AcpOutputInspect` opens a floating preview for the output item under the cursor
 - `:AcpOutputActions` opens cursor-aware actions for the current output item
+- `:AcpOutputNextItem` / `:AcpOutputPrevItem` jump between output references, code blocks, and problems
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
 - `:AcpCodeBlockYank` yanks the fenced code block under the output cursor
 - `:AcpOutputLocations` opens local file references from the current output with source previews
@@ -189,6 +190,7 @@ In the output buffer:
 - the current line shows ghost-text action hints for references, code blocks, errors, and sections
 - `]]` jumps to the next transcript section
 - `[[` jumps to the previous transcript section
+- `]o` / `[o` jump between output references, code blocks, and problems
 - `za` toggles the fold under the cursor
 - `zM` closes all transcript folds
 - `zR` opens all transcript folds
