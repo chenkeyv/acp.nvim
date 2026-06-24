@@ -487,6 +487,10 @@ test("output dashboard and section helpers are rendered", function()
 	eq(acp_output.statuscolumn_marker(rail_lines, 1), "01")
 	eq(acp_output.statuscolumn_marker(rail_lines, 3), "02")
 	eq(acp_output.statuscolumn_marker(rail_lines, 4), " |")
+	eq(acp_output.statuscolumn_marker({ "Status: error: failed" }, 1), "E!")
+	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 2), "C>")
+	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 3), "C|")
+	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 4), "C<")
 	eq(acp_output.statuscolumn_marker({}, 1), "  ")
 	local outline, line_sections = acp_output.outline_lines(sections)
 	local outline_text = table.concat(outline, "\n")
@@ -572,6 +576,7 @@ test("output dashboard and section helpers are rendered", function()
 	local ref_file = vim.fn.tempname() .. ".lua"
 	vim.fn.writefile({ "local one = 1", "local two = 2" }, ref_file)
 	local ref_line = ("Check %s:2:7 for details."):format(ref_file)
+	eq(acp_output.statuscolumn_marker({ ref_line }, 1), "R>")
 	local refs = acp_output.file_references({
 		ref_line,
 		"Ignore https://example.com:443 and missing-file.lua:3",

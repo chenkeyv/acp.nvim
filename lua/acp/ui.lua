@@ -4897,11 +4897,15 @@ function _G.acp_nvim_output_foldtext()
 end
 
 function _G.acp_nvim_output_statuscolumn()
+	local bufnr = vim.api.nvim_get_current_buf()
 	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, 0, -1, false)
 	if not ok then
 		return "  "
 	end
-	return require("acp.output").statuscolumn_marker(lines, vim.v.lnum)
+	local state = states[bufnr]
+	return require("acp.output").statuscolumn_marker(lines, vim.v.lnum, {
+		cwd = state and state.cwd,
+	})
 end
 
 return M

@@ -653,12 +653,34 @@ function M.section_timeline(lines)
 	return markers
 end
 
-function M.statuscolumn_marker(lines, lnum)
+function M.statuscolumn_marker(lines, lnum, opts)
+	opts = opts or {}
 	lines = lines or {}
 	lnum = math.max(1, math.min(tonumber(lnum) or 1, #lines))
 	if not lines[lnum] then
 		return "  "
 	end
+
+	local problem = M.problem_diagnostic_at(lines, lnum)
+	if problem then
+		return problem.severity == vim.diagnostic.severity.WARN and "W!" or "E!"
+	end
+
+	local block = M.code_block_at(lines, lnum)
+	if block then
+		if lnum == block.start_line then
+			return "C>"
+		end
+		if lnum == block.end_line and block.closed then
+			return "C<"
+		end
+		return "C|"
+	end
+
+	if M.file_reference_at(lines, lnum, 0, { cwd = opts.cwd }) then
+		return "R>"
+	end
+
 	local section_index = 0
 	local inside_section = false
 
