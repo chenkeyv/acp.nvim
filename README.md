@@ -21,6 +21,7 @@ This plugin provides an editor-native ACP chat surface:
 - searchable output location picker for jumping from transcript file references into source
 - quickfix export for transcript file references
 - Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
+- sign-column markers for transcript sections, run status, tools, files, and errors
 - ghost-text output hints and lightweight animated busy status
 - optional Tree-sitter Markdown/code-fence language injection for agent responses
 - floating output outline for jumping across long transcripts

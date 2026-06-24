@@ -204,13 +204,13 @@ end
 
 function M.line_style(line)
 	if line == "You" then
-		return { line_hl_group = "AcpUserHeader", badge = " USER ", badge_hl = "AcpBadgeUser" }
+		return { line_hl_group = "AcpUserHeader", badge = " USER ", badge_hl = "AcpBadgeUser", sign_text = "U>" }
 	end
 	if line == "Agent" then
-		return { line_hl_group = "AcpAgentHeader", badge = " AGENT ", badge_hl = "AcpBadgeAgent" }
+		return { line_hl_group = "AcpAgentHeader", badge = " AGENT ", badge_hl = "AcpBadgeAgent", sign_text = "A>" }
 	end
 	if line:match("^ACP:") then
-		return { line_hl_group = "AcpOutputHeader", badge = " SESSION ", badge_hl = "AcpBadge" }
+		return { line_hl_group = "AcpOutputHeader", badge = " SESSION ", badge_hl = "AcpBadge", sign_text = "S>" }
 	end
 	if line:match("^Session:") or line:match("^Model:") or line:match("^Source:") or line:match("^Transcript:") then
 		return { line_hl_group = "AcpOutputMeta" }
@@ -219,28 +219,28 @@ function M.line_style(line)
 		return { line_hl_group = "AcpOutputKey" }
 	end
 	if line:match("^Status:%s+error") then
-		return { line_hl_group = "AcpStatusError", badge = " ERROR ", badge_hl = "AcpBadgeError" }
+		return { line_hl_group = "AcpStatusError", badge = " ERROR ", badge_hl = "AcpBadgeError", sign_text = "E!" }
 	end
 	if line:match("^Status:%s+stopped") or line:match("^Status:%s+restored") then
-		return { line_hl_group = "AcpStatusDone", badge = " DONE ", badge_hl = "AcpBadgeStatus" }
+		return { line_hl_group = "AcpStatusDone", badge = " DONE ", badge_hl = "AcpBadgeStatus", sign_text = "OK" }
 	end
 	if line:match("^Status:") then
-		return { line_hl_group = "AcpStatus", badge = " LIVE ", badge_hl = "AcpBadgeStatus" }
+		return { line_hl_group = "AcpStatus", badge = " LIVE ", badge_hl = "AcpBadgeStatus", sign_text = "R>" }
 	end
 	if line:match("^Tool") then
-		return { line_hl_group = "AcpTool", badge = " TOOL ", badge_hl = "AcpBadgeTool" }
+		return { line_hl_group = "AcpTool", badge = " TOOL ", badge_hl = "AcpBadgeTool", sign_text = "T>" }
 	end
 	if line:match("^Terminal:") then
-		return { line_hl_group = "AcpTerminal", badge = " TERM ", badge_hl = "AcpBadgeTool" }
+		return { line_hl_group = "AcpTerminal", badge = " TERM ", badge_hl = "AcpBadgeTool", sign_text = "$>" }
 	end
 	if line:match("^Wrote ") then
-		return { line_hl_group = "AcpFile", badge = " FILE ", badge_hl = "AcpBadgeUser" }
+		return { line_hl_group = "AcpFile", badge = " FILE ", badge_hl = "AcpBadgeUser", sign_text = "F>" }
 	end
 	if line:match("^Thought:") then
-		return { line_hl_group = "AcpThought", badge = " NOTE ", badge_hl = "AcpBadge" }
+		return { line_hl_group = "AcpThought", badge = " NOTE ", badge_hl = "AcpBadge", sign_text = "N>" }
 	end
 	if line:match("^stderr:") then
-		return { line_hl_group = "AcpError", badge = " STDERR ", badge_hl = "AcpBadgeError" }
+		return { line_hl_group = "AcpError", badge = " STDERR ", badge_hl = "AcpBadgeError", sign_text = "!>" }
 	end
 end
 

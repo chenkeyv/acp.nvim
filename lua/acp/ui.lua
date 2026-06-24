@@ -99,6 +99,10 @@ local function refresh_output_highlights(state)
 				opts.virt_text = { { style.badge, style.badge_hl or "AcpBadge" } }
 				opts.virt_text_pos = "right_align"
 			end
+			if style.sign_text then
+				opts.sign_text = style.sign_text
+				opts.sign_hl_group = style.sign_hl_group or style.line_hl_group or style.badge_hl or "AcpBadge"
+			end
 			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, index - 1, 0, opts)
 		end
 	end
@@ -1393,6 +1397,7 @@ local function apply_window_options(state)
 		vim.wo[state.output_win].foldtext = "v:lua.acp_nvim_output_foldtext()"
 		vim.wo[state.output_win].foldlevel = 99
 		vim.wo[state.output_win].foldcolumn = "1"
+		vim.wo[state.output_win].signcolumn = "yes:1"
 		refresh_output_chrome(state)
 	end
 

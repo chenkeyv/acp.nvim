@@ -345,8 +345,13 @@ test("output dashboard and section helpers are rendered", function()
 	ok(text:find("<leader>ag locs", 1, true))
 
 	eq(acp_output.line_style("You").line_hl_group, "AcpUserHeader")
+	eq(acp_output.line_style("You").sign_text, "U>")
+	eq(acp_output.line_style("Agent").sign_text, "A>")
 	eq(acp_output.line_style("Transcript: 1 section | 0 code | 0 locs | 0 changes").line_hl_group, "AcpOutputMeta")
 	eq(acp_output.line_style("Status: error: failed").line_hl_group, "AcpStatusError")
+	eq(acp_output.line_style("Status: error: failed").sign_text, "E!")
+	eq(acp_output.line_style("Tool: build").sign_text, "T>")
+	eq(acp_output.line_style("Wrote lua/acp/init.lua").sign_text, "F>")
 	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 1, 1), 3)
 	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 5, -1), 3)
 
@@ -913,6 +918,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(vim.wo[output_win].foldtext:find("acp_nvim_output_foldtext", 1, true))
 		eq(vim.wo[output_win].foldlevel, 99)
 		eq(vim.wo[output_win].foldcolumn, "1")
+		eq(vim.wo[output_win].signcolumn, "yes:1")
 		ok(
 			vim.b[output_buf].acp_language_injection == "treesitter-markdown"
 				or vim.b[output_buf].acp_language_injection == "fence-detection"
@@ -922,9 +928,13 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
 		local highlighted_header = false
 		local ghost_text = false
+		local session_sign = false
 		for _, mark in ipairs(marks) do
 			if mark[4] and mark[4].line_hl_group == "AcpOutputHeader" then
 				highlighted_header = true
+			end
+			if mark[4] and mark[4].sign_text == "S>" then
+				session_sign = true
 			end
 			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
 				if chunk[1] and chunk[1]:find("Ready", 1, true) then
@@ -933,6 +943,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(highlighted_header, "output header should be highlighted")
+		ok(session_sign, "output session sign should be rendered")
 		ok(ghost_text, "output ghost text should be rendered")
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "hello output" })
@@ -942,6 +953,18 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(text:find("You", 1, true))
 		ok(text:find("Agent", 1, true))
 		ok(text:find("Status: error: failed to start session", 1, true))
+		marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
+		local user_sign = false
+		local agent_sign = false
+		local error_sign = false
+		for _, mark in ipairs(marks) do
+			user_sign = user_sign or (mark[4] and mark[4].sign_text == "U>")
+			agent_sign = agent_sign or (mark[4] and mark[4].sign_text == "A>")
+			error_sign = error_sign or (mark[4] and mark[4].sign_text == "E!")
+		end
+		ok(user_sign, "output user sign should be rendered")
+		ok(agent_sign, "output agent sign should be rendered")
+		ok(error_sign, "output error sign should be rendered")
 		local updated_dashboard = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, 7, false), "\n")
 		ok(updated_dashboard:find("Transcript: 3 sections | 0 code | 0 locs | 0 changes", 1, true))
 
