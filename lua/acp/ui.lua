@@ -2389,6 +2389,15 @@ local function prompt_action_items()
 	add("Clear document colors", "Clear source-buffer LSP document-color swatches", ":AcpClearDocumentColors", "LSP", function()
 		M.clear_document_colors()
 	end)
+	add("Document links", "Pick source-buffer LSP document links as focused context", ":AcpDocumentLinks", "LSP", function()
+		M.open_document_links()
+	end)
+	add("Document links quickfix", "Send source-buffer LSP document links to quickfix", ":AcpDocumentLinksQuickfix", "LSP", function()
+		M.open_document_links_quickfix()
+	end)
+	add("Clear document links", "Clear source-buffer LSP document-link badges", ":AcpClearDocumentLinks", "LSP", function()
+		M.clear_document_links()
+	end)
 	add("Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
 		M.rename_symbol()
 	end)
@@ -3774,6 +3783,18 @@ function M.setup(opts)
 		M.clear_document_colors()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpDocumentLinks", function()
+		M.open_document_links()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpDocumentLinksQuickfix", function()
+		M.open_document_links_quickfix()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpClearDocumentLinks", function()
+		M.clear_document_links()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpRename", function()
 		M.rename_symbol()
 	end, {})
@@ -4327,6 +4348,15 @@ local function action_palette_items(state)
 		add_action(items, "Clear document colors", "Clear source-buffer LSP document-color swatches", ":AcpClearDocumentColors", "LSP", function()
 			M.clear_document_colors()
 		end)
+		add_action(items, "Document links", "Pick source-buffer LSP document links as focused context", ":AcpDocumentLinks", "LSP", function()
+			M.open_document_links()
+		end)
+		add_action(items, "Document links quickfix", "Send source-buffer LSP document links to quickfix", ":AcpDocumentLinksQuickfix", "LSP", function()
+			M.open_document_links_quickfix()
+		end)
+		add_action(items, "Clear document links", "Clear source-buffer LSP document-link badges", ":AcpClearDocumentLinks", "LSP", function()
+			M.clear_document_links()
+		end)
 		add_action(items, "Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
 			M.rename_symbol()
 		end)
@@ -4675,6 +4705,18 @@ local function source_action_items(state)
 	add("Clear document colors", "Clear LSP document-color swatches", ":AcpClearDocumentColors", "LSP", function()
 		focus_session(state)
 		M.clear_document_colors()
+	end)
+	add("Document links", "Pick LSP document links from the source buffer", ":AcpDocumentLinks", "LSP", function()
+		focus_session(state)
+		M.open_document_links()
+	end)
+	add("Document links quickfix", "Send LSP document links to quickfix", ":AcpDocumentLinksQuickfix", "LSP", function()
+		focus_session(state)
+		M.open_document_links_quickfix()
+	end)
+	add("Clear document links", "Clear LSP document-link badges", ":AcpClearDocumentLinks", "LSP", function()
+		focus_session(state)
+		M.clear_document_links()
 	end)
 	add("Clear highlights", "Clear LSP highlight marks in the source buffer", ":AcpClearHighlights", "LSP", function()
 		focus_session(state)
@@ -6441,6 +6483,159 @@ function M.clear_document_colors()
 	end
 end
 
+function M._open_document_link_picker(state, link_list)
+	local document_links = require("acp.document_links")
+	if not link_list or #link_list == 0 then
+		notify("No LSP document links found for the source buffer", vim.log.levels.WARN)
+		return false
+	end
+
+	state.source_document_links = link_list
+	refresh_source_marks(state)
+
+	local lines, line_links = document_links.picker_lines(link_list)
+	local view
+	view = picker.open({
+		name = ("ACP://%s/%d/document-links"):format(state.adapter, state.id),
+		filetype = "acp-document-links",
+		lines = lines,
+		title = " ACP document links ",
+		submit_desc = "Add ACP document-link context",
+		close_desc = "Close ACP document links",
+		preview = function(row)
+			local item = line_links[row]
+			if not item then
+				return nil
+			end
+			return source_preview(
+				state.source.bufnr,
+				document_links.range(item),
+				(" Document link %s "):format(document_links.label(item))
+			)
+		end,
+		on_submit = function(row, view)
+			local item = line_links[row]
+			if not item then
+				return
+			end
+			local prompt, err = document_links.prompt(state.source, item)
+			if not prompt then
+				notify(err or "Failed to render LSP document-link context", vim.log.levels.ERROR)
+				return
+			end
+			view.close()
+			append_input_text(state, prompt)
+			if not state.busy then
+				set_run_status(state, ("document link: %s"):format(document_links.label(item)))
+			end
+			if valid_win(state.input_win) then
+				vim.api.nvim_set_current_win(state.input_win)
+			end
+		end,
+	})
+
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		M._open_document_links_quickfix(state, link_list)
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP document links quickfix" })
+
+	return true
+end
+
+function M._open_document_links_quickfix(state, link_list)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	local document_links = require("acp.document_links")
+	local function open_items(items)
+		if not items or #items == 0 then
+			notify("No LSP document links found for the source buffer", vim.log.levels.WARN)
+			return false
+		end
+
+		state.source_document_links = items
+		refresh_source_marks(state)
+		vim.fn.setqflist({}, " ", {
+			title = ("ACP document links #%s"):format(tostring(state.id or "?")),
+			items = document_links.quickfix_items(state.source.bufnr, items),
+		})
+		vim.cmd("copen")
+		if not state.busy then
+			set_run_status(state, "document links quickfix")
+		end
+		return true
+	end
+
+	if link_list then
+		return open_items(link_list)
+	end
+
+	if not state.busy then
+		set_run_status(state, "loading document links quickfix")
+	end
+	document_links.request(state.source, function(items, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		open_items(items)
+	end)
+	return true
+end
+
+function M.open_document_links()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+	if not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return
+	end
+
+	local document_links = require("acp.document_links")
+	if not state.busy then
+		set_run_status(state, "loading document links")
+	end
+	document_links.request(state.source, function(link_list, err)
+		if err then
+			if not state.busy then
+				set_run_status(state, ("error: %s"):format(err))
+			end
+			notify(err, vim.log.levels.WARN)
+			return
+		end
+		M._open_document_link_picker(state, link_list)
+	end)
+end
+
+function M.open_document_links_quickfix()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	M._open_document_links_quickfix(state)
+end
+
+function M.clear_document_links()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	state.source_document_links = nil
+	refresh_source_marks(state)
+	if not state.busy then
+		set_run_status(state, "document links cleared")
+	end
+end
+
 function M.rename_symbol()
 	local state = current_state()
 	if not state then
@@ -7531,6 +7726,9 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 		end,
 		document_colors = function()
 			M.open_document_colors()
+		end,
+		document_links = function()
+			M.open_document_links()
 		end,
 		rename = function()
 			M.rename_symbol()

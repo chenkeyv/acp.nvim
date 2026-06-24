@@ -46,6 +46,12 @@ local workflows = {
 		info = "Open LSP document colors as visual source context.",
 	},
 	{
+		id = "document_links",
+		trigger = "@links",
+		menu = "LSP",
+		info = "Open LSP document links as visual source context.",
+	},
+	{
 		id = "rename",
 		trigger = "@rename",
 		menu = "LSP",

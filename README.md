@@ -66,6 +66,7 @@ This plugin provides an editor-native ACP chat surface:
 - async LSP code-action picker for drafting focused fix/refactor prompts
 - async LSP code-lens picker with source previews and quickfix export
 - async LSP document-color picker with source-buffer swatches and quickfix export
+- async LSP document-link picker with source badges and quickfix export
 - async LSP prepare-rename draft workflow with a native rename prompt
 - async smart-context insertion for source, hover, signature, inlay hints, and semantic ranges
 - async LSP hover context insertion for source-cursor documentation
@@ -192,6 +193,9 @@ vim.g.acp_nvim_config = {
 - `:AcpDocumentColors` shows LSP document colors as source-buffer swatches
 - `:AcpDocumentColorsQuickfix` sends LSP document colors to quickfix
 - `:AcpClearDocumentColors` clears source-buffer document-color swatches
+- `:AcpDocumentLinks` opens an LSP document-link picker for the source buffer
+- `:AcpDocumentLinksQuickfix` sends LSP document links to quickfix
+- `:AcpClearDocumentLinks` clears source-buffer document-link badges
 - `:AcpRename` prompts for a new symbol name and drafts an LSP prepare-rename request
 - `:AcpSmartContext` inserts source context plus available LSP hover, signature, inlay hints, and semantic ranges
 - `:AcpHover` inserts LSP hover documentation for the source cursor
@@ -246,7 +250,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
-- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@workspace-diagnostics`/`@code-lens`/`@colors`/`@rename`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@supertypes`/`@subtypes`/`@output` workflows
+- `<C-Space>` opens native ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@workspace-diagnostics`/`@code-lens`/`@colors`/`@links`/`@rename`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@supertypes`/`@subtypes`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>am` opens a persistent output map with progress rails and item counts
