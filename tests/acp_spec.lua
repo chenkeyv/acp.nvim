@@ -87,6 +87,7 @@ test("setup registers public user commands", function()
 		"AcpSessions",
 		"AcpActions",
 		"AcpPromptActions",
+		"AcpSourceActions",
 		"AcpChanges",
 		"AcpOutput",
 		"AcpOutputSearch",
@@ -269,7 +270,9 @@ test("source view renders context range marks", function()
 	eq(marks[1].line, 2)
 	eq(marks[3].line, 4)
 	eq(marks[1].opts.line_hl_group, "AcpSourceContext")
-	eq(marks[1].opts.virt_text[1][1], " ACP #9 context ")
+	eq(marks[1].opts.virt_text[1][1], " ACP #9 ready ")
+	eq(marks[1].opts.sign_text, "A>")
+	ok(marks[1].opts.virt_lines[1][1][1]:find(":AcpSourceActions", 1, true))
 	eq(marks[2].opts.virt_text, nil)
 end)
 
@@ -1576,6 +1579,47 @@ test("chat marks captured source ranges and clears them on close", function()
 			end
 		end
 		ok(label_found, "source range should include an ACP context label")
+
+		local source_win = vim.fn.bufwinid(source_buf)
+		ok(source_win ~= -1, "source buffer should remain visible")
+		vim.api.nvim_set_current_win(source_win)
+		vim.cmd("AcpSourceActions")
+		local source_actions_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[source_actions_buf].filetype, "acp-source-actions")
+		local action_lines = vim.api.nvim_buf_get_lines(source_actions_buf, 0, -1, false)
+		local actions_text = table.concat(action_lines, "\n")
+		ok(actions_text:find("Focus chat", 1, true))
+		ok(actions_text:find("Add marked context", 1, true))
+		ok(actions_text:find("Tree-sitter nodes", 1, true))
+		ok(actions_text:find("Search output", 1, true))
+
+		local preview_found = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local bufnr = vim.api.nvim_win_get_buf(winid)
+			if bufnr ~= source_actions_buf and vim.bo[bufnr].buftype == "nofile" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+				if preview:find("local value = 1", 1, true) then
+					preview_found = true
+				end
+			end
+		end
+		ok(preview_found, "source actions should show source preview")
+
+		local add_context_row
+		for index, line in ipairs(action_lines) do
+			if line:find("Add marked context", 1, true) then
+				add_context_row = index
+				break
+			end
+		end
+		ok(add_context_row, "source action picker should include add context row")
+		vim.api.nvim_win_set_cursor(0, { add_context_row, 0 })
+		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(prompt:find("Context", 1, true))
+		ok(prompt:find("local value = 1", 1, true))
 
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
 		input_buf = nil

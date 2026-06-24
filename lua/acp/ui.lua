@@ -53,6 +53,7 @@ local defaults = {
 local config = vim.deepcopy(defaults)
 local states = {}
 local sessions = {}
+local source_links = {}
 local next_session_id = 1
 local session_panel_lines = {}
 local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
@@ -363,6 +364,55 @@ local function clear_source_marks(state)
 		pcall(vim.api.nvim_buf_del_extmark, state.source.bufnr, source_ns, mark_id)
 	end
 	state.source_mark_ids = {}
+end
+
+local function link_source_state(state)
+	if not (state and state.source and valid_buf(state.source.bufnr)) then
+		return
+	end
+
+	local bufnr = state.source.bufnr
+	source_links[bufnr] = source_links[bufnr] or {}
+	source_links[bufnr][state.id] = state
+end
+
+local function unlink_source_state(state)
+	if not (state and state.source and state.source.bufnr) then
+		return
+	end
+
+	local linked = source_links[state.source.bufnr]
+	if not linked then
+		return
+	end
+
+	linked[state.id] = nil
+	if next(linked) == nil then
+		source_links[state.source.bufnr] = nil
+	end
+end
+
+local function linked_source_states(bufnr)
+	local linked = source_links[bufnr]
+	if not linked then
+		return {}
+	end
+
+	local list = {}
+	for id, state in pairs(linked) do
+		if state and not state.closed and state.source and state.source.bufnr == bufnr and valid_buf(bufnr) then
+			table.insert(list, state)
+		else
+			linked[id] = nil
+		end
+	end
+	if next(linked) == nil then
+		source_links[bufnr] = nil
+	end
+	table.sort(list, function(left, right)
+		return (left.id or 0) < (right.id or 0)
+	end)
+	return list
 end
 
 local function refresh_source_marks(state)
@@ -1053,6 +1103,7 @@ local function set_run_status(state, status)
 	end
 	refresh_output_highlights(state)
 	refresh_output_chrome(state)
+	refresh_source_marks(state)
 	refresh_prompt_hints(state)
 	follow_output(state)
 	refresh_session_panels()
@@ -2413,6 +2464,7 @@ local function unregister(state)
 	stop_output_animation(state)
 	close_output_inspector(state)
 	clear_source_marks(state)
+	unlink_source_state(state)
 	session_panel_lines[state.session_panel_buf] = nil
 	states[state.session_panel_buf] = nil
 	states[state.output_buf] = nil
@@ -2743,6 +2795,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpPromptActions", function()
 		M.open_prompt_actions()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpSourceActions", function()
+		M.open_source_actions()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpChanges", function()
@@ -3103,6 +3159,7 @@ function M.open(adapter_name, opts)
 	states[state.session_panel_buf] = state
 	states[state.output_buf] = state
 	states[state.input_buf] = state
+	link_source_state(state)
 	if opts.draft == "diagnostics" then
 		append_input_text(state, diagnostics_prompt(state.source))
 	elseif opts.draft == "context" then
@@ -3167,6 +3224,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Prompt actions", "Show composer-focused actions and source context preview", "?", "session", function()
 			M.open_prompt_actions()
+		end)
+		add_action(items, "Source actions", "Show actions for the source buffer linked to this session", ":AcpSourceActions", "source", function()
+			M.open_source_actions()
 		end)
 		add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "session", function()
 			M.open_output()
@@ -3300,6 +3360,130 @@ local function focus_session(state)
 	end
 
 	refresh_session_panels()
+end
+
+local function current_source_action_state()
+	local state = state_for_current_buffer()
+	if state then
+		return state
+	end
+
+	local linked = linked_source_states(vim.api.nvim_get_current_buf())
+	if #linked == 0 then
+		notify("Current buffer is not linked to an ACP source context", vim.log.levels.WARN)
+		return nil
+	end
+	return linked[#linked]
+end
+
+local function add_marked_source_context(state)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	local rendered = context.render(state.source)
+	if not rendered then
+		notify("No editor context is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	append_input_text(state, rendered)
+	focus_session(state)
+	return true
+end
+
+local function source_action_items(state)
+	local items = {}
+
+	local function add(label, detail, key, scope, run)
+		table.insert(items, {
+			label = label,
+			detail = detail,
+			key = key,
+			scope = scope,
+			run = run,
+		})
+	end
+
+	add("Focus chat", "Jump to the ACP prompt linked to this source context", ":AcpSourceActions", "source", function()
+		focus_session(state)
+	end)
+	add("Add marked context", "Insert this marked source range into the prompt", "<leader>ac", "source", function()
+		add_marked_source_context(state)
+	end)
+	add("Prompt actions", "Open composer-focused actions for the linked ACP session", "?", "prompt", function()
+		focus_session(state)
+		M.open_prompt_actions()
+	end)
+	add("Source diagnostics", "Draft a focused fix from diagnostics in the marked source", "<leader>ad", "LSP", function()
+		focus_session(state)
+		M.open_diagnostics()
+	end)
+	add("Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
+		focus_session(state)
+		M.open_code_actions()
+	end)
+	add("Hover context", "Insert LSP hover documentation from the source cursor", "<leader>ah", "LSP", function()
+		focus_session(state)
+		M.add_hover()
+	end)
+	add("References", "Pick LSP references from the source cursor", "<leader>ar", "LSP", function()
+		focus_session(state)
+		M.open_references()
+	end)
+	add("Symbols", "Pick LSP document symbols from the source buffer", "<leader>al", "LSP", function()
+		focus_session(state)
+		M.open_symbols()
+	end)
+	add("Tree-sitter nodes", "Pick syntax-aware source context around the captured cursor", "<leader>at", "Tree-sitter", function()
+		focus_session(state)
+		M.open_treesitter()
+	end)
+	add("Search output", "Search the linked ACP transcript with previews", "<leader>ax", "output", function()
+		focus_session(state)
+		M.open_output_search()
+	end)
+
+	return items
+end
+
+local function open_source_actions(state)
+	if not state or not state.source or not valid_buf(state.source.bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_actions = actions.picker_lines(source_action_items(state))
+	local origin_win = vim.api.nvim_get_current_win()
+	picker.open({
+		name = ("ACP://%s/%d/source-actions"):format(state.adapter, state.id),
+		filetype = "acp-source-actions",
+		lines = lines,
+		title = " ACP source actions ",
+		submit_desc = "Run ACP source action",
+		close_desc = "Close ACP source actions",
+		preview = function()
+			return source_preview(
+				state.source.bufnr,
+				source_range(state.source),
+				(" ACP source #%d "):format(state.id)
+			)
+		end,
+		on_submit = function(row, view)
+			local action = line_actions[row]
+			if not action then
+				return
+			end
+
+			view.close()
+			if valid_win(origin_win) then
+				vim.api.nvim_set_current_win(origin_win)
+			end
+			action.run()
+		end,
+	})
+	return true
 end
 
 local function session_picker_lines(list)
@@ -3836,6 +4020,15 @@ function M.open_prompt_actions()
 	end
 
 	open_prompt_actions(state)
+end
+
+function M.open_source_actions()
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	open_source_actions(state)
 end
 
 function M.restore(adapter_name)

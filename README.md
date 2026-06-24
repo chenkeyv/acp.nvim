@@ -56,6 +56,7 @@ This plugin provides an editor-native ACP chat surface:
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
 - visual/range context capture for selected code
 - source-buffer virtual marks showing the code linked to an open ACP session
+- source-buffer action lens for focusing the linked chat and adding source/LSP/Tree-sitter context
 - context and review draft commands for source/Visual-mode workflows
 - LSP diagnostic fix drafts from the current buffer or visual range
 - floating permission chooser with numbered actions
@@ -124,6 +125,7 @@ vim.g.acp_nvim_config = {
 - `:AcpSessions` focuses the sessions side panel or opens a floating session picker
 - `:AcpActions` opens a picker of available ACP workflows
 - `:AcpPromptActions` opens composer-focused actions with source context preview
+- `:AcpSourceActions` opens actions for the source buffer linked to an ACP session
 - `:AcpChanges` opens a quickfix list of files changed in the current ACP session
 - `:AcpOutput` opens a floating outline of the current output transcript
 - `:AcpOutputSearch` opens every non-empty output line with context previews
@@ -219,6 +221,11 @@ In floating ACP pickers:
 - source-backed pickers show a live preview beside the picker
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
+
+In source buffers linked to an ACP session:
+
+- marked context ranges show an ACP lens with session status and `:AcpSourceActions`
+- `:AcpSourceActions` focuses the linked chat or opens source, LSP, Tree-sitter, and output workflows
 
 The chat-opening and draft commands accept a line range, so opening ACP from
 Visual mode preserves the selected lines for `:AcpAddContext`,
