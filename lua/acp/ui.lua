@@ -9,6 +9,7 @@ local health = require("acp.health")
 local hover = require("acp.hover")
 local history = require("acp.history")
 local metadata = require("acp.metadata")
+local output = require("acp.output")
 local picker = require("acp.picker")
 local references = require("acp.references")
 local symbols = require("acp.symbols")
@@ -64,42 +65,7 @@ local function valid_win(winid)
 end
 
 local function define_highlights()
-	vim.api.nvim_set_hl(0, "AcpUserHeader", { link = "Title", default = true })
-	vim.api.nvim_set_hl(0, "AcpAgentHeader", { link = "Function", default = true })
-	vim.api.nvim_set_hl(0, "AcpStatus", { link = "DiagnosticInfo", default = true })
-	vim.api.nvim_set_hl(0, "AcpTool", { link = "Type", default = true })
-	vim.api.nvim_set_hl(0, "AcpThought", { link = "Comment", default = true })
-	vim.api.nvim_set_hl(0, "AcpError", { link = "DiagnosticError", default = true })
-end
-
-local function output_line_highlight(line)
-	if line == "You" then
-		return "AcpUserHeader"
-	end
-	if line == "Agent" then
-		return "AcpAgentHeader"
-	end
-	if line:match("^Status:%s+error") then
-		return "AcpError"
-	end
-	if line:match("^Status:") then
-		return "AcpStatus"
-	end
-	if line:match("^ACP:") then
-		return "AcpStatus"
-	end
-	if line:match("^Tool") or line:match("^Wrote ") then
-		return "AcpTool"
-	end
-	if line:match("^Terminal:") then
-		return "AcpTool"
-	end
-	if line:match("^Thought:") then
-		return "AcpThought"
-	end
-	if line:match("^stderr:") then
-		return "AcpError"
-	end
+	output.define_highlights()
 end
 
 local function refresh_output_highlights(state)
@@ -110,11 +76,19 @@ local function refresh_output_highlights(state)
 	vim.api.nvim_buf_clear_namespace(state.output_buf, output_ns, 0, -1)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 	for index, line in ipairs(lines) do
-		local highlight = output_line_highlight(line)
-		if highlight then
-			vim.api.nvim_buf_set_extmark(state.output_buf, output_ns, index - 1, 0, {
-				line_hl_group = highlight,
-			})
+		local style = output.line_style(line)
+		if style then
+			local opts = {
+				priority = 80,
+			}
+			if style.line_hl_group then
+				opts.line_hl_group = style.line_hl_group
+			end
+			if style.badge then
+				opts.virt_text = { { style.badge, style.badge_hl or "AcpBadge" } }
+				opts.virt_text_pos = "right_align"
+			end
+			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, index - 1, 0, opts)
 		end
 	end
 end
@@ -158,6 +132,57 @@ local function set_panel_lines(bufnr, lines)
 	vim.bo[bufnr].modifiable = true
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 	vim.bo[bufnr].modifiable = false
+end
+
+local function refresh_output_dashboard(state)
+	if not valid_buf(state.output_buf) then
+		return
+	end
+
+	local lines = output.dashboard_lines(state)
+	local old_count = state.output_dashboard_lines or #lines
+	state.output_dashboard_lines = #lines
+	set_output_lines(state, 0, old_count, lines)
+end
+
+local function refresh_output_chrome(state)
+	if not valid_win(state.output_win) then
+		return
+	end
+
+	local title = output.window_title(state, {
+		change_count = changes.count(state),
+	})
+	local win_config = vim.api.nvim_win_get_config(state.output_win)
+	if win_config.relative ~= "" then
+		win_config.title = title
+		pcall(vim.api.nvim_win_set_config, state.output_win, win_config)
+	else
+		vim.wo[state.output_win].winbar = output.winbar(state, {
+			change_count = changes.count(state),
+		})
+	end
+end
+
+local function jump_output_section(state, direction)
+	if not state or not valid_buf(state.output_buf) then
+		return
+	end
+
+	local winid = vim.api.nvim_get_current_win()
+	if vim.api.nvim_win_get_buf(winid) ~= state.output_buf then
+		winid = vim.fn.bufwinid(state.output_buf)
+	end
+	if not valid_win(winid) then
+		return
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local current = vim.api.nvim_win_get_cursor(winid)[1]
+	local target = output.next_section(lines, current, direction)
+	if target then
+		vim.api.nvim_win_set_cursor(winid, { target, 0 })
+	end
 end
 
 local function follow_output(state)
@@ -294,6 +319,7 @@ local function set_run_status(state, status)
 	end
 
 	state.run_status = status
+	refresh_output_chrome(state)
 	follow_output(state)
 	refresh_session_panels()
 end
@@ -790,13 +816,13 @@ local function apply_window_options(state)
 		end)
 	end
 
-	if state.mode ~= "float" then
-		if valid_win(state.output_win) then
-			vim.wo[state.output_win].winbar = (" ACP %s "):format(state.adapter)
-		end
-		if state.mode == "window" and valid_win(state.input_win) then
-			vim.wo[state.input_win].winbar = prompt_title(state)
-		end
+	if valid_win(state.output_win) then
+		vim.wo[state.output_win].cursorline = true
+		refresh_output_chrome(state)
+	end
+
+	if state.mode ~= "float" and state.mode == "window" and valid_win(state.input_win) then
+		vim.wo[state.input_win].winbar = prompt_title(state)
 	end
 end
 
@@ -811,7 +837,9 @@ local function apply_float_layout(state)
 		height = dims.output_height,
 		style = "minimal",
 		border = "rounded",
-		title = (" ACP %s "):format(state.adapter),
+		title = output.window_title(state, {
+			change_count = changes.count(state),
+		}),
 		title_pos = "left",
 		zindex = 40,
 	}
@@ -964,10 +992,9 @@ local function create_buffers(state)
 		swapfile = false,
 	})
 
-	set_output_lines(state, 0, -1, {
-		("ACP: %s"):format(state.adapter),
-		"",
-	})
+	local dashboard = output.dashboard_lines(state)
+	state.output_dashboard_lines = #dashboard
+	set_output_lines(state, 0, -1, dashboard)
 	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
 end
 
@@ -1086,6 +1113,12 @@ local function register_keymaps(state)
 	end
 
 	vim.keymap.set("n", "<leader>ac", add_context, { buffer = state.input_buf, desc = "Add ACP editor context" })
+	vim.keymap.set("n", "[[", function()
+		jump_output_section(state, -1)
+	end, { buffer = state.output_buf, desc = "Previous ACP output section" })
+	vim.keymap.set("n", "]]", function()
+		jump_output_section(state, 1)
+	end, { buffer = state.output_buf, desc = "Next ACP output section" })
 	vim.keymap.set({ "n", "i" }, "<M-p>", previous_prompt, { buffer = state.input_buf, desc = "Previous ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<M-n>", next_prompt, { buffer = state.input_buf, desc = "Next ACP prompt" })
 	vim.keymap.set("i", "<CR>", "<CR>", { buffer = state.input_buf, desc = "Insert newline" })
@@ -1393,6 +1426,7 @@ local function chat_handlers(state, opts)
 			local display = entry and entry.display or vim.fn.fnamemodify(path, ":.")
 			set_run_status(state, ("wrote %s"):format(display))
 			append_lines(state, { "", ("Wrote %s"):format(display), "Use :AcpChanges to review changed files.", "" })
+			refresh_output_chrome(state)
 			refresh_session_panels()
 		end,
 		session_info = function(update)
@@ -1400,11 +1434,15 @@ local function chat_handlers(state, opts)
 				set_tab_title(state, update.title)
 			end
 			if metadata.apply_session(state, update) then
+				refresh_output_dashboard(state)
+				refresh_output_chrome(state)
 				refresh_prompt_chrome(state)
 			end
 		end,
 		usage = function(update)
 			if metadata.apply_session(state, update) then
+				refresh_output_dashboard(state)
+				refresh_output_chrome(state)
 				refresh_prompt_chrome(state)
 			end
 		end,

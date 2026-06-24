@@ -9,6 +9,7 @@ local acp_health = require("acp.health")
 local file_review = require("acp.file_review")
 local hover = require("acp.hover")
 local history = require("acp.history")
+local acp_output = require("acp.output")
 local permission = require("acp.permission")
 local references = require("acp.references")
 local symbols = require("acp.symbols")
@@ -160,6 +161,27 @@ test("health renderer uses Neovim health reporters", function()
 		"ok:adapter ready",
 		"warn:metadata partial",
 	})
+end)
+
+test("output dashboard and section helpers are rendered", function()
+	local lines = acp_output.dashboard_lines({
+		id = 7,
+		adapter = "test",
+		mode = "window",
+		model = "test-model",
+		context_window = 1000,
+	})
+	local text = table.concat(lines, "\n")
+
+	ok(text:find("ACP: test", 1, true))
+	ok(text:find("Session: #7 | Mode: window", 1, true))
+	ok(text:find("Model: test-model | Context: 1k", 1, true))
+	ok(text:find("Keys: [[/]] sections", 1, true))
+
+	eq(acp_output.line_style("You").line_hl_group, "AcpUserHeader")
+	eq(acp_output.line_style("Status: error: failed").line_hl_group, "AcpStatusError")
+	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 1, 1), 3)
+	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 5, -1), 3)
 end)
 
 test("LSP references are flattened and rendered for picker", function()
@@ -560,6 +582,83 @@ test("prompt history recalls sent prompts and restores draft", function()
 	vim.notify = original_notify
 	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("output buffer shows dashboard, chrome, and section navigation", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_name(source_buf, vim.fn.tempname() .. ".lua")
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = 1",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+
+	local input_buf
+	local output_buf
+	local output_win
+	local original_notify = vim.notify
+	vim.notify = function() end
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow test")
+		input_buf = vim.api.nvim_get_current_buf()
+		local input_name = vim.api.nvim_buf_get_name(input_buf)
+		local output_name = input_name:gsub("/input$", "/output")
+		for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+			if vim.api.nvim_buf_get_name(bufnr) == output_name then
+				output_buf = bufnr
+				break
+			end
+		end
+		ok(output_buf, "output buffer should exist")
+		output_win = vim.fn.bufwinid(output_buf)
+		ok(output_win and output_win > 0, "output window should be visible")
+
+		local dashboard = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, 6, false), "\n")
+		ok(dashboard:find("ACP: test", 1, true))
+		ok(dashboard:find("Session: #", 1, true))
+		ok(dashboard:find("Model: test-model | Context: 1k", 1, true))
+		ok(dashboard:find("Source:", 1, true))
+		ok(dashboard:find("Keys: [[/]] sections", 1, true))
+		ok(vim.wo[output_win].winbar:find("ACP test #", 1, true))
+
+		local ns = vim.api.nvim_create_namespace("acp.nvim.output")
+		local marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
+		local highlighted_header = false
+		for _, mark in ipairs(marks) do
+			if mark[4] and mark[4].line_hl_group == "AcpOutputHeader" then
+				highlighted_header = true
+				break
+			end
+		end
+		ok(highlighted_header, "output header should be highlighted")
+
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "hello output" })
+		vim.cmd("AcpSend")
+		local lines = vim.api.nvim_buf_get_lines(output_buf, 0, -1, false)
+		local text = table.concat(lines, "\n")
+		ok(text:find("You", 1, true))
+		ok(text:find("Agent", 1, true))
+		ok(text:find("Status: error: failed to start session", 1, true))
+
+		vim.api.nvim_set_current_win(output_win)
+		vim.api.nvim_win_set_cursor(output_win, { 1, 0 })
+		local keys = vim.api.nvim_replace_termcodes("]]", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local line = vim.api.nvim_win_get_cursor(output_win)[1]
+		eq(vim.api.nvim_buf_get_lines(output_buf, line - 1, line, false)[1], "You")
+	end)
+
+	vim.notify = original_notify
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 	end
 	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
 	if not passed then

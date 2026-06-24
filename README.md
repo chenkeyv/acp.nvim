@@ -8,8 +8,10 @@ This plugin provides an editor-native ACP chat surface:
 - side panel for open ACP sessions
 - floating session picker from any buffer
 - plain output buffer for streamed agent responses
+- visual output dashboard with source, model, context window, and key workflow hints
 - output-visible run status for active prompts, tools, and completion
-- Neovim highlight groups for readable transcript sections
+- live output winbar/title with status, model, context, and changed-file counts
+- Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
 - non-blocking adapter startup and session creation
 - floating slash-command picker for adapter-advertised commands
 - native slash-command completion in the prompt buffer
@@ -129,6 +131,11 @@ In the prompt buffer:
 - `<leader>ar` opens source-buffer LSP references
 - `<leader>al` opens source-buffer LSP symbols
 - `<leader>at` opens source-buffer Tree-sitter nodes
+
+In the output buffer:
+
+- `]]` jumps to the next transcript section
+- `[[` jumps to the previous transcript section
 
 The chat-opening and draft commands accept a line range, so opening ACP from
 Visual mode preserves the selected lines for `:AcpAddContext`,
