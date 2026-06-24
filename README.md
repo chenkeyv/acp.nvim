@@ -7,7 +7,7 @@ This plugin provides an editor-native ACP chat surface:
 - dedicated ACP tab by default
 - side panel for open ACP sessions
 - command-style ACP action palette for discovering session and global workflows
-- floating session picker from any buffer
+- searchable floating pickers for actions, sessions, output, diagnostics, LSP, and Tree-sitter workflows
 - plain output buffer for streamed agent responses
 - visual output dashboard with source, model, context window, and key workflow hints
 - output-visible run status for active prompts, tools, and completion
@@ -152,6 +152,13 @@ In the output buffer:
 - `<leader>av` opens the output outline
 - `<leader>ak` opens the ACP action palette
 - `<leader>az` toggles the fold under the cursor
+
+In floating ACP pickers:
+
+- `/` filters visible picker rows
+- `<C-l>` clears the active picker filter
+- `<Enter>` selects the row under the cursor
+- `q` or `<Esc>` closes the picker
 
 The chat-opening and draft commands accept a line range, so opening ACP from
 Visual mode preserves the selected lines for `:AcpAddContext`,

@@ -14,6 +14,20 @@ local function set_buf_options(bufnr, opts)
 	end
 end
 
+local function matches_query(line, query)
+	if query == "" then
+		return true
+	end
+
+	line = line:lower()
+	for term in query:lower():gmatch("%S+") do
+		if not line:find(term, 1, true) then
+			return false
+		end
+	end
+	return true
+end
+
 function M.window_config(lines, opts)
 	opts = opts or {}
 
@@ -56,6 +70,9 @@ end
 function M.open(opts)
 	opts = opts or {}
 	local lines = opts.lines or { "" }
+	local source_lines = vim.deepcopy(lines)
+	local query = ""
+	local display_rows = {}
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	if opts.name then
 		vim.api.nvim_buf_set_name(bufnr, opts.name)
@@ -67,17 +84,59 @@ function M.open(opts)
 		modifiable = true,
 		swapfile = false,
 	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
 
-	local winid = vim.api.nvim_open_win(bufnr, true, M.window_config(lines, {
+	local config_opts = {
 		min_width = opts.min_width,
 		min_height = opts.min_height,
 		padding = opts.padding,
 		title = opts.title,
 		title_pos = opts.title_pos,
 		zindex = opts.zindex,
-	}))
+	}
+
+	local function filtered_lines()
+		local visible = {}
+		local rows = {}
+
+		if query ~= "" then
+			table.insert(visible, ("Filter: %s"):format(query))
+			rows[#visible] = nil
+			table.insert(visible, "")
+			rows[#visible] = nil
+		end
+
+		for index, line in ipairs(source_lines) do
+			if matches_query(line, query) then
+				table.insert(visible, line)
+				rows[#visible] = index
+			end
+		end
+
+		if query ~= "" then
+			if #visible == 2 then
+				table.insert(visible, "No matching picker entries.")
+				rows[#visible] = nil
+			end
+			table.insert(visible, "")
+			rows[#visible] = nil
+			table.insert(visible, "Press <Enter> to select, <C-l> to clear, or q/<Esc> to close.")
+			rows[#visible] = nil
+		end
+
+		return visible, rows
+	end
+
+	local rendered
+	local function render()
+		rendered, display_rows = filtered_lines()
+		vim.bo[bufnr].modifiable = true
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, rendered)
+		vim.bo[bufnr].modifiable = false
+	end
+
+	render()
+
+	local winid = vim.api.nvim_open_win(bufnr, true, M.window_config(rendered, config_opts))
 	vim.wo[winid].cursorline = true
 	pcall(vim.api.nvim_win_set_cursor, winid, { opts.initial_line or 3, 0 })
 
@@ -97,11 +156,50 @@ function M.open(opts)
 		return vim.api.nvim_win_get_cursor(winid)[1]
 	end
 
+	function view.source_row()
+		local row = view.row()
+		if not row then
+			return nil
+		end
+		if query == "" then
+			return row
+		end
+		return display_rows[row]
+	end
+
+	function view.filter(next_query)
+		query = next_query or ""
+		render()
+		if valid_win(winid) then
+			pcall(vim.api.nvim_win_set_config, winid, M.window_config(rendered, config_opts))
+			local target = math.max(1, math.min(opts.initial_line or 3, #rendered))
+			if query ~= "" then
+				target = 1
+				for row = 1, #rendered do
+					if display_rows[row] then
+						target = row
+						break
+					end
+				end
+			end
+			pcall(vim.api.nvim_win_set_cursor, winid, { target, 0 })
+		end
+	end
+
 	if opts.on_submit then
 		vim.keymap.set("n", opts.submit_key or "<CR>", function()
-			opts.on_submit(view.row(), view)
+			opts.on_submit(view.source_row(), view)
 		end, { buffer = bufnr, nowait = true, desc = opts.submit_desc or "Select ACP item" })
 	end
+
+	vim.keymap.set("n", "/", function()
+		local next_query = vim.fn.input("ACP filter: ", query)
+		view.filter(next_query)
+	end, { buffer = bufnr, nowait = true, desc = "Filter ACP picker" })
+
+	vim.keymap.set("n", "<C-l>", function()
+		view.filter("")
+	end, { buffer = bufnr, nowait = true, desc = "Clear ACP picker filter" })
 
 	for _, key in ipairs(opts.close_keys or { "q", "<Esc>" }) do
 		vim.keymap.set("n", key, function()

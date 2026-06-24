@@ -12,6 +12,7 @@ local hover = require("acp.hover")
 local history = require("acp.history")
 local acp_output = require("acp.output")
 local permission = require("acp.permission")
+local picker = require("acp.picker")
 local references = require("acp.references")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
@@ -122,6 +123,37 @@ test("action picker lines render workflow details", function()
 	ok(text:find("[session]", 1, true))
 	eq(line_actions[3].run, run)
 	eq(line_actions[4].run, run)
+end)
+
+test("floating picker filters rows while preserving source row mapping", function()
+	local view = picker.open({
+		name = "ACP://test-picker",
+		filetype = "acp-test-picker",
+		lines = {
+			"ACP Test Picker",
+			"",
+			"alpha action",
+			"beta action",
+			"gamma detail",
+			"",
+			"Press <Enter> to select.",
+		},
+		title = " ACP test picker ",
+	})
+
+	view.filter("beta")
+	local filtered = table.concat(vim.api.nvim_buf_get_lines(view.bufnr, 0, -1, false), "\n")
+	ok(filtered:find("Filter: beta", 1, true))
+	ok(filtered:find("beta action", 1, true))
+	ok(not filtered:find("alpha action", 1, true))
+	vim.api.nvim_win_set_cursor(view.winid, { 3, 0 })
+	eq(view.source_row(), 4)
+
+	view.filter("")
+	local restored = table.concat(vim.api.nvim_buf_get_lines(view.bufnr, 0, -1, false), "\n")
+	ok(restored:find("alpha action", 1, true))
+	eq(view.source_row(), 3)
+	view.close()
 end)
 
 test("health report checks adapter commands and metadata", function()
