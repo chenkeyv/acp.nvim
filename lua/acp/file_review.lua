@@ -34,25 +34,51 @@ local function unified_diff(before, after)
 	}
 end
 
+local function requests_for(request)
+	if type(request) ~= "table" then
+		return {}
+	end
+	if type(request.files) == "table" then
+		return request.files
+	end
+	return { request }
+end
+
+local function request_path(request)
+	return request.display_path or request.path or "[No Name]"
+end
+
 function M.lines(request)
-	request = request or {}
-	local path = request.display_path or request.path or "[No Name]"
-	local before = request.before or ""
-	local after = request.after or ""
+	local requests = requests_for(request)
+	local count = #requests
 	local lines = {
 		"File write review",
-		("File: %s"):format(path),
-		("Current: %d line(s)"):format(line_count(before)),
-		("Proposed: %d line(s)"):format(line_count(after)),
+		("Files: %d"):format(count),
 		"",
-		"1. Apply write",
+		count == 1 and "1. Apply write" or ("1. Apply %d writes"):format(count),
 		"2. Cancel",
 		"",
-		("--- %s (current)"):format(path),
-		("+++ %s (proposed)"):format(path),
 	}
 
-	vim.list_extend(lines, unified_diff(before, after))
+	for index, item in ipairs(requests) do
+		local path = request_path(item)
+		local before = item.before or ""
+		local after = item.after or ""
+		if count == 1 then
+			table.insert(lines, ("File: %s"):format(path))
+		else
+			table.insert(lines, ("File %d/%d: %s"):format(index, count, path))
+		end
+		table.insert(lines, ("Current: %d line(s)"):format(line_count(before)))
+		table.insert(lines, ("Proposed: %d line(s)"):format(line_count(after)))
+		table.insert(lines, ("--- %s (current)"):format(path))
+		table.insert(lines, ("+++ %s (proposed)"):format(path))
+		vim.list_extend(lines, unified_diff(before, after))
+		if index < count then
+			table.insert(lines, "")
+		end
+	end
+
 	return lines
 end
 

@@ -19,7 +19,7 @@ This plugin provides an editor-native ACP chat surface:
 - context and review draft commands for source/Visual-mode workflows
 - LSP diagnostic fix drafts from the current buffer or visual range
 - floating permission chooser with numbered actions
-- floating file-write review with a diff preview before applying agent edits
+- floating batch file-write review with diff previews before applying agent edits
 - quickfix navigation for files changed during an ACP session
 - floating Markdown input prompt for completion-friendly editing
 - `codex-acp` and `claude-agent-acp` adapter presets
@@ -127,5 +127,5 @@ NVIM_LOG_FILE=/tmp/acp.nvim-nvim.log nvim --headless -u tests/minimal_init.lua -
 
 ## Status
 
-This is an early ACP client. Terminal operations, adapter-backed session
-restoration, and batch pre-apply review workflows are not implemented yet.
+This is an early ACP client. Terminal operations and adapter-backed session
+restoration are not implemented yet.

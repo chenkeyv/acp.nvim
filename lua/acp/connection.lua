@@ -95,6 +95,14 @@ local function write_text_file(path, content)
 	vim.fn.writefile(vim.split(content, "\n", { plain = true }), path)
 end
 
+local function file_write_review_delay(adapter)
+	local delay = adapter and tonumber(adapter.file_write_review_delay_ms)
+	if delay ~= nil then
+		return delay
+	end
+	return 80
+end
+
 local Connection = {}
 Connection.__index = Connection
 
@@ -106,6 +114,9 @@ function Connection.new(config)
 		line_buffer = jsonrpc.LineBuffer.new(),
 		next_id = 1,
 		pending = {},
+		pending_file_writes = {},
+		file_write_review_scheduled = false,
+		file_write_review_active = false,
 		session_id = nil,
 		initialized = false,
 		authenticated = false,
@@ -577,6 +588,65 @@ function Connection:handle_fs_read(id, params)
 	self:send_error(id, ("Read failed: %s"):format(content))
 end
 
+function Connection:apply_file_write(request)
+	local ok, err = pcall(write_text_file, request.path, request.content)
+	if ok then
+		if self.active_handlers and self.active_handlers.file_written then
+			self.active_handlers.file_written(request.path)
+		end
+		return self:send_result(request.id, nil)
+	end
+
+	self:send_error(request.id, ("Write failed: %s"):format(err))
+end
+
+function Connection:flush_file_write_review()
+	if self.file_write_review_active or #self.pending_file_writes == 0 then
+		return
+	end
+
+	local batch = self.pending_file_writes
+	self.pending_file_writes = {}
+	self.file_write_review_active = true
+
+	file_review.select({
+		files = batch,
+	}, function(approved)
+		self.file_write_review_active = false
+		if not approved then
+			for _, request in ipairs(batch) do
+				self:send_error(request.id, "File write cancelled", jsonrpc.errors.internal_error)
+			end
+		else
+			for _, request in ipairs(batch) do
+				self:apply_file_write(request)
+			end
+		end
+
+		if #self.pending_file_writes > 0 then
+			self:schedule_file_write_review()
+		end
+	end)
+end
+
+function Connection:schedule_file_write_review()
+	if self.file_write_review_active or self.file_write_review_scheduled then
+		return
+	end
+
+	local delay = file_write_review_delay(self.adapter)
+	if delay <= 0 then
+		self:flush_file_write_review()
+		return
+	end
+
+	self.file_write_review_scheduled = true
+	vim.defer_fn(function()
+		self.file_write_review_scheduled = false
+		self:flush_file_write_review()
+	end, delay)
+end
+
 function Connection:handle_fs_write(id, params)
 	local path = resolve_path(params and params.path, self.cwd)
 	local content = params and params.content
@@ -587,26 +657,16 @@ function Connection:handle_fs_write(id, params)
 		return self:send_error(id, "Refusing to write outside cwd", jsonrpc.errors.invalid_params)
 	end
 
-	file_review.select({
+	table.insert(self.pending_file_writes, {
+		id = id,
 		path = path,
 		display_path = vim.fn.fnamemodify(path, ":."),
 		before = read_existing_text(path),
 		after = content,
-	}, function(approved)
-		if not approved then
-			return self:send_error(id, "File write cancelled", jsonrpc.errors.internal_error)
-		end
+		content = content,
+	})
 
-		local ok, err = pcall(write_text_file, path, content)
-		if ok then
-			if self.active_handlers and self.active_handlers.file_written then
-				self.active_handlers.file_written(path)
-			end
-			return self:send_result(id, nil)
-		end
-
-		self:send_error(id, ("Write failed: %s"):format(err))
-	end)
+	self:schedule_file_write_review()
 end
 
 function Connection:handle_request(message)
@@ -677,6 +737,7 @@ function Connection:handle_exit(result)
 	if self.active_handlers and self.active_handlers.error then
 		self.active_handlers.error(("ACP agent exited with code %s"):format(code))
 	end
+	self.pending_file_writes = {}
 
 	local message = ("ACP agent exited with code %s"):format(code)
 	for id, pending in pairs(self.pending) do
@@ -702,6 +763,7 @@ function Connection:stop()
 	if self.handle then
 		self.handle:kill(15)
 	end
+	self.pending_file_writes = {}
 	self.handle = nil
 	self.active_handlers = nil
 end

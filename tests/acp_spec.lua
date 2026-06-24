@@ -314,7 +314,7 @@ test("filesystem requests are scoped to cwd", function()
 	vim.fn.mkdir(root, "p")
 
 	local connection = Connection.new({
-		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 10 },
+		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 10, file_write_review_delay_ms = 0 },
 		cwd = root,
 	})
 	local writes = {}
@@ -721,13 +721,94 @@ test("file write review renders a diff preview", function()
 	ok(text:find("+local value = 2", 1, true))
 end)
 
+test("file write review renders batched diffs", function()
+	local lines = file_review.lines({
+		files = {
+			{
+				display_path = "lua/one.lua",
+				before = "return 1\n",
+				after = "return 2\n",
+			},
+			{
+				display_path = "lua/two.lua",
+				before = "",
+				after = "return true\n",
+			},
+		},
+	})
+	local text = table.concat(lines, "\n")
+
+	ok(text:find("Files: 2", 1, true))
+	ok(text:find("1. Apply 2 writes", 1, true))
+	ok(text:find("File 1/2: lua/one.lua", 1, true))
+	ok(text:find("File 2/2: lua/two.lua", 1, true))
+	ok(text:find("-return 1", 1, true))
+	ok(text:find("+return 2", 1, true))
+	ok(text:find("+return true", 1, true))
+end)
+
+test("quick file writes are reviewed as one batch", function()
+	local root = vim.fn.tempname()
+	vim.fn.mkdir(root, "p")
+
+	local connection = Connection.new({
+		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 10, file_write_review_delay_ms = 20 },
+		cwd = root,
+	})
+	local writes = {}
+	function connection:write(message)
+		table.insert(writes, message)
+		return true
+	end
+
+	local review_count = 0
+	local reviewed_request
+	local original_select = file_review.select
+	file_review.select = function(request, callback)
+		review_count = review_count + 1
+		reviewed_request = request
+		callback(true)
+	end
+
+	local passed, err = pcall(function()
+		connection:handle_fs_write(41, {
+			path = "one.txt",
+			content = "one",
+		})
+		connection:handle_fs_write(42, {
+			path = "nested/two.txt",
+			content = "two",
+		})
+		ok(vim.wait(200, function()
+			return #writes == 2
+		end, 5), "batched write responses should be sent")
+	end)
+
+	file_review.select = original_select
+	if not passed then
+		vim.fn.delete(root, "rf")
+		error(err, 2)
+	end
+
+	eq(review_count, 1)
+	eq(#reviewed_request.files, 2)
+	eq(writes[1].id, 41)
+	eq(writes[1].result, vim.NIL)
+	eq(writes[2].id, 42)
+	eq(writes[2].result, vim.NIL)
+	eq(table.concat(vim.fn.readfile(vim.fs.joinpath(root, "one.txt")), "\n"), "one")
+	eq(table.concat(vim.fn.readfile(vim.fs.joinpath(root, "nested", "two.txt")), "\n"), "two")
+
+	vim.fn.delete(root, "rf")
+end)
+
 test("file write cancellation leaves file unchanged", function()
 	local root = vim.fn.tempname()
 	vim.fn.mkdir(root, "p")
 	vim.fn.writefile({ "before" }, vim.fs.joinpath(root, "example.txt"))
 
 	local connection = Connection.new({
-		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 10 },
+		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 10, file_write_review_delay_ms = 0 },
 		cwd = root,
 	})
 	local writes = {}
