@@ -2848,6 +2848,14 @@ function M.setup(opts)
 		M.open_source_actions()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpRefreshSource", function(command)
+		M.refresh_source({
+			range = command_source_range(command),
+		})
+	end, {
+		range = true,
+	})
+
 	vim.api.nvim_create_user_command("AcpChanges", function()
 		M.open_changes()
 	end, {})
@@ -3282,6 +3290,9 @@ local function action_palette_items(state)
 		add_action(items, "Source actions", "Show actions for the source buffer linked to this session", ":AcpSourceActions", "source", function()
 			M.open_source_actions()
 		end)
+		add_action(items, "Refresh source", "Update this session's source context from the current source cursor or range", ":AcpRefreshSource", "source", function()
+			M.refresh_source()
+		end)
 		add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "session", function()
 			M.open_output()
 		end)
@@ -3453,6 +3464,47 @@ local function add_marked_source_context(state)
 	return true
 end
 
+local function refresh_source_context(state, opts)
+	opts = opts or {}
+	if not state then
+		return false
+	end
+
+	local current_state = state_for_current_buffer()
+	local bufnr
+	local winid
+	local range
+	if current_state == state then
+		if not state.source or not valid_buf(state.source.bufnr) then
+			notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+			return false
+		end
+		bufnr = state.source.bufnr
+		winid = state.source.winid
+		range = opts.range or state.source.range
+	else
+		bufnr = vim.api.nvim_get_current_buf()
+		winid = vim.api.nvim_get_current_win()
+		range = opts.range
+	end
+
+	if not valid_buf(bufnr) then
+		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
+		return false
+	end
+
+	clear_source_marks(state)
+	unlink_source_state(state)
+	state.source = context.capture(bufnr, winid, range)
+	link_source_state(state)
+	refresh_source_marks(state)
+	refresh_output_dashboard(state)
+	refresh_output_chrome(state)
+	refresh_prompt_chrome(state)
+	refresh_session_panels()
+	return true
+end
+
 local function source_action_items(state)
 	local items = {}
 
@@ -3471,6 +3523,9 @@ local function source_action_items(state)
 	end)
 	add("Add marked context", "Insert this marked source range into the prompt", "<leader>ac", "source", function()
 		add_marked_source_context(state)
+	end)
+	add("Refresh source", "Update this ACP session to the current source cursor or range", ":AcpRefreshSource", "source", function()
+		refresh_source_context(state)
 	end)
 	add("Prompt actions", "Open composer-focused actions for the linked ACP session", "?", "prompt", function()
 		focus_session(state)
@@ -4168,6 +4223,15 @@ function M.open_source_actions()
 	end
 
 	open_source_actions(state)
+end
+
+function M.refresh_source(opts)
+	local state = current_source_action_state()
+	if not state then
+		return
+	end
+
+	refresh_source_context(state, opts)
 end
 
 function M.close()

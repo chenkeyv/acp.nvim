@@ -90,6 +90,7 @@ test("setup registers public user commands", function()
 		"AcpActions",
 		"AcpPromptActions",
 		"AcpSourceActions",
+		"AcpRefreshSource",
 		"AcpChanges",
 		"AcpChangesQuickfix",
 		"AcpOutput",
@@ -1606,6 +1607,12 @@ test("chat marks captured source ranges and clears them on close", function()
 		local source_win = vim.fn.bufwinid(source_buf)
 		ok(source_win ~= -1, "source buffer should remain visible")
 		vim.api.nvim_set_current_win(source_win)
+		vim.api.nvim_win_set_cursor(source_win, { 3, 0 })
+		vim.cmd("AcpRefreshSource")
+		marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })
+		eq(#marks, 1)
+		eq(marks[1][2] + 1, 3)
+
 		vim.cmd("AcpSourceActions")
 		local source_actions_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[source_actions_buf].filetype, "acp-source-actions")
@@ -1613,6 +1620,7 @@ test("chat marks captured source ranges and clears them on close", function()
 		local actions_text = table.concat(action_lines, "\n")
 		ok(actions_text:find("Focus chat", 1, true))
 		ok(actions_text:find("Add marked context", 1, true))
+		ok(actions_text:find("Refresh source", 1, true))
 		ok(actions_text:find("Tree-sitter nodes", 1, true))
 		ok(actions_text:find("Search output", 1, true))
 
@@ -1621,7 +1629,7 @@ test("chat marks captured source ranges and clears them on close", function()
 			local bufnr = vim.api.nvim_win_get_buf(winid)
 			if bufnr ~= source_actions_buf and vim.bo[bufnr].buftype == "nofile" then
 				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
-				if preview:find("local value = 1", 1, true) then
+				if preview:find("print(value + other)", 1, true) then
 					preview_found = true
 				end
 			end
@@ -1642,7 +1650,7 @@ test("chat marks captured source ranges and clears them on close", function()
 		eq(vim.api.nvim_get_current_buf(), input_buf)
 		local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
 		ok(prompt:find("Context", 1, true))
-		ok(prompt:find("local value = 1", 1, true))
+		ok(prompt:find("print(value + other)", 1, true))
 
 		vim.cmd("AcpClose")
 		marks = vim.api.nvim_buf_get_extmarks(source_buf, ns, 0, -1, { details = true })

@@ -58,6 +58,7 @@ This plugin provides an editor-native ACP chat surface:
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
 - visual/range context capture for selected code
 - source-buffer virtual marks showing the code linked to an open ACP session
+- source-context refresh for moving a live session to the current cursor or range
 - source-buffer action lens for focusing the linked chat and adding source/LSP/Tree-sitter context
 - context and review draft commands for source/Visual-mode workflows
 - LSP diagnostic fix drafts from the current buffer or visual range
@@ -157,6 +158,7 @@ vim.g.acp_nvim_config = {
 - `:AcpRestore [adapter]` lists adapter-backed sessions and restores the selected session
 - `:AcpHistoryDraft [adapter]` opens saved transcript history and drafts a new chat from the selected transcript
 - `:AcpAddContext` inserts source-buffer context into the current prompt
+- `:AcpRefreshSource` updates the linked source context to the current cursor or range
 - `:AcpFixDiagnostics [adapter]` opens chat with a diagnostics-focused draft prompt
 - `:AcpHealth [adapter]` checks the adapter command and prompt metadata wiring
 - `:checkhealth acp` checks configured adapter commands and prompt metadata wiring
@@ -232,11 +234,12 @@ In floating ACP pickers:
 In source buffers linked to an ACP session:
 
 - marked context ranges show an ACP lens with session status and `:AcpSourceActions`
-- `:AcpSourceActions` focuses the linked chat or opens source, LSP, Tree-sitter, and output workflows
+- `:AcpSourceActions` focuses the linked chat or opens source refresh, LSP, Tree-sitter, and output workflows
+- `:AcpRefreshSource` moves the linked chat's source context to the current cursor or Visual range
 
 The chat-opening and draft commands accept a line range, so opening ACP from
 Visual mode preserves the selected lines for `:AcpAddContext`,
-`:AcpChatContext`, `:AcpReview`, and `:AcpFixDiagnostics`.
+`:AcpChatContext`, `:AcpReview`, `:AcpRefreshSource`, and `:AcpFixDiagnostics`.
 
 ## Development
 

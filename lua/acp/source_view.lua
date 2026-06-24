@@ -24,7 +24,7 @@ function M.marks(state)
 
 	local status = state.run_status or (state.busy and "running" or "ready")
 	local label = (" ACP #%s %s "):format(tostring(state.id or "?"), status)
-	local lens = (" ACP #%s source context  :AcpSourceActions focus/add/LSP/Tree-sitter "):format(
+	local lens = (" ACP #%s source context  :AcpSourceActions focus/add/refresh/LSP/Tree-sitter "):format(
 		tostring(state.id or "?")
 	)
 	local marks = {}
