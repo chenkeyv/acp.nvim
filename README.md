@@ -58,6 +58,7 @@ This plugin provides an editor-native ACP chat surface:
 - editor context insertion from the source buffer, bounded Tree-sitter node text, LSP clients, and diagnostics
 - visual/range context capture for selected code
 - source-buffer virtual marks showing the code linked to an open ACP session
+- source-buffer diagnostic badges for linked context ranges
 - source-context refresh for moving a live session to the current cursor or range
 - source-buffer action lens for focusing the linked chat and adding source/LSP/Tree-sitter context
 - context and review draft commands for source/Visual-mode workflows
@@ -233,7 +234,7 @@ In floating ACP pickers:
 
 In source buffers linked to an ACP session:
 
-- marked context ranges show an ACP lens with session status and `:AcpSourceActions`
+- marked context ranges show an ACP lens with session status, diagnostic badges, and `:AcpSourceActions`
 - `:AcpSourceActions` focuses the linked chat or opens source refresh, LSP, Tree-sitter, and output workflows
 - `:AcpRefreshSource` moves the linked chat's source context to the current cursor or Visual range
 

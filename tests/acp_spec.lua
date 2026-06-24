@@ -280,6 +280,61 @@ test("source view renders context range marks", function()
 	eq(marks[2].opts.virt_text, nil)
 end)
 
+test("source view summarizes diagnostics in linked context range", function()
+	local bufnr = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"local value = 1",
+		"value = value + 1",
+		"print(value)",
+		"return value",
+	})
+	local ns = vim.api.nvim_create_namespace("acp.nvim.test.source_view")
+	vim.diagnostic.set(ns, bufnr, {
+		{
+			lnum = 1,
+			col = 0,
+			message = "error in range",
+			severity = vim.diagnostic.severity.ERROR,
+		},
+		{
+			lnum = 2,
+			col = 0,
+			message = "warning in range",
+			severity = vim.diagnostic.severity.WARN,
+		},
+		{
+			lnum = 3,
+			col = 0,
+			message = "hint outside range",
+			severity = vim.diagnostic.severity.HINT,
+		},
+	})
+
+	local marks = source_view.marks({
+		id = 9,
+		source = {
+			bufnr = bufnr,
+			cursor = { 2, 0 },
+			range = {
+				line1 = 2,
+				line2 = 3,
+			},
+		},
+	})
+	local label = ""
+	for _, chunk in ipairs(marks[1].opts.virt_text) do
+		label = label .. chunk[1]
+	end
+
+	ok(label:find("E1", 1, true))
+	ok(label:find("W1", 1, true))
+	ok(not label:find("H1", 1, true))
+	ok(marks[1].opts.virt_lines[1][1][1]:find("diagnostics E1 W1", 1, true))
+
+	vim.diagnostic.reset(ns, bufnr)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
 test("health report checks adapter commands and metadata", function()
 	local items = acp_health.items({
 		default_adapter = "test",
