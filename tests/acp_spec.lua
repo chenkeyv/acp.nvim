@@ -1,6 +1,7 @@
 local jsonrpc = require("acp.jsonrpc")
 local acp_changes = require("acp.changes")
 local acp_commands = require("acp.commands")
+local acp_config = require("acp.config")
 local acp_context = require("acp.context")
 local acp_diagnostics = require("acp.diagnostics")
 local file_review = require("acp.file_review")
@@ -74,6 +75,7 @@ test("setup registers public user commands", function()
 		"AcpSessions",
 		"AcpChanges",
 		"AcpCommands",
+		"AcpConfig",
 		"AcpHistory",
 		"AcpRestore",
 		"AcpHistoryDraft",
@@ -83,6 +85,46 @@ test("setup registers public user commands", function()
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
+end)
+
+test("config option picker lines render selectable options", function()
+	local lines, line_options = acp_config.picker_lines({
+		{
+			id = "mode",
+			name = "Session Mode",
+			description = "Controls permissions",
+			category = "mode",
+			type = "select",
+			currentValue = "ask",
+			options = {
+				{ value = "ask", name = "Ask", description = "Request permission" },
+				{ value = "code", name = "Code" },
+			},
+		},
+		{
+			id = "ignored",
+			name = "Ignored",
+			type = "text",
+			currentValue = "no",
+			options = {
+				{ value = "no", name = "No" },
+			},
+		},
+	})
+	local text = table.concat(lines, "\n")
+
+	ok(text:find("Session Mode: Ask [mode]", 1, true))
+	ok(text:find("Controls permissions", 1, true))
+	ok(not text:find("Ignored", 1, true))
+	eq(line_options[3].id, "mode")
+
+	local value_lines, line_values = acp_config.value_lines(line_options[3])
+	local value_text = table.concat(value_lines, "\n")
+	ok(value_text:find("1. Ask *", 1, true))
+	ok(value_text:find("Request permission", 1, true))
+	ok(value_text:find("2. Code", 1, true))
+	eq(line_values[3].value, "ask")
+	eq(line_values[5].value, "code")
 end)
 
 test("slash command picker lines and draft text are rendered", function()
@@ -129,6 +171,37 @@ test("available commands updates are forwarded to active handlers", function()
 	})
 
 	eq(received[1].name, "plan")
+end)
+
+test("config option updates are forwarded to active handlers", function()
+	local connection = Connection.new({
+		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 10 },
+		cwd = vim.fn.getcwd(),
+	})
+	local received
+	connection.active_handlers = {
+		config_options = function(options)
+			received = options
+		end,
+	}
+
+	connection:handle_session_update({
+		sessionUpdate = "config_option_update",
+		configOptions = {
+			{
+				id = "mode",
+				name = "Session Mode",
+				type = "select",
+				currentValue = "ask",
+				options = {
+					{ value = "ask", name = "Ask" },
+				},
+			},
+		},
+	})
+
+	eq(received[1].id, "mode")
+	eq(connection.config_options[1].id, "mode")
 end)
 
 test("prompt history recalls sent prompts and restores draft", function()
@@ -454,9 +527,13 @@ test("async prompt starts session without blocking before sending prompt", funct
 
 	local started = false
 	local done_reason
+	local config_options
 	ok(connection:prompt_async("hello", {
 		started = function()
 			started = true
+		end,
+		config_options = function(options)
+			config_options = options
 		end,
 		done = function(reason)
 			done_reason = reason
@@ -485,12 +562,24 @@ test("async prompt starts session without blocking before sending prompt", funct
 		id = writes[2].id,
 		result = {
 			sessionId = "session-1",
+			configOptions = {
+				{
+					id = "mode",
+					name = "Session Mode",
+					type = "select",
+					currentValue = "ask",
+					options = {
+						{ value = "ask", name = "Ask" },
+					},
+				},
+			},
 		},
 	}))
 
 	eq(#writes, 3)
 	eq(writes[3].method, "session/prompt")
 	eq(writes[3].params.sessionId, "session-1")
+	eq(config_options[1].id, "mode")
 	eq(started, true)
 
 	connection:handle_line(vim.json.encode({
@@ -502,6 +591,62 @@ test("async prompt starts session without blocking before sending prompt", funct
 	}))
 
 	eq(done_reason, "end_turn")
+end)
+
+test("set config option sends request and applies returned options", function()
+	local connection = Connection.new({
+		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 1000 },
+		cwd = vim.fn.getcwd(),
+	})
+	connection.session_id = "session-1"
+
+	local writes = {}
+	function connection:write(message)
+		table.insert(writes, message)
+		return true
+	end
+
+	local received
+	connection.active_handlers = {
+		config_options = function(options)
+			received = options
+		end,
+	}
+	local callback_ok
+	local callback_result
+	ok(connection:set_config_option_async("mode", "code", function(success, result)
+		callback_ok = success
+		callback_result = result
+	end))
+
+	eq(writes[1].method, "session/set_config_option")
+	eq(writes[1].params.sessionId, "session-1")
+	eq(writes[1].params.configId, "mode")
+	eq(writes[1].params.value, "code")
+
+	connection:handle_line(vim.json.encode({
+		jsonrpc = "2.0",
+		id = writes[1].id,
+		result = {
+			configOptions = {
+				{
+					id = "mode",
+					name = "Session Mode",
+					type = "select",
+					currentValue = "code",
+					options = {
+						{ value = "ask", name = "Ask" },
+						{ value = "code", name = "Code" },
+					},
+				},
+			},
+		},
+	}))
+
+	eq(callback_ok, true)
+	eq(callback_result.configOptions[1].currentValue, "code")
+	eq(connection.config_options[1].currentValue, "code")
+	eq(received[1].currentValue, "code")
 end)
 
 test("adapter session list paginates when supported", function()

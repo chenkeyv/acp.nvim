@@ -12,6 +12,7 @@ local methods = {
 	session_list = "session/list",
 	session_load = "session/load",
 	session_resume = "session/resume",
+	session_set_config_option = "session/set_config_option",
 	session_prompt = "session/prompt",
 	session_update = "session/update",
 	session_request_permission = "session/request_permission",
@@ -201,6 +202,7 @@ function Connection.new(config)
 		initialized = false,
 		authenticated = false,
 		active_handlers = nil,
+		config_options = nil,
 	}, Connection)
 	connection.terminals = terminal.new({
 		on_output = function(event)
@@ -498,12 +500,15 @@ function Connection:ensure_session()
 	end
 
 	self.session_id = result.sessionId
+	self:apply_session_state(result)
 	return true
 end
 
 function Connection:ensure_session_async(callback)
 	if self.session_id then
-		callback(true)
+		callback(true, nil, {
+			configOptions = self.config_options,
+		})
 		return true
 	end
 
@@ -525,7 +530,8 @@ function Connection:ensure_session_async(callback)
 			end
 
 			self.session_id = result.sessionId
-			callback(true)
+			self:apply_session_state(result)
+			callback(true, nil, result)
 		end)
 	end)
 end
@@ -611,8 +617,50 @@ function Connection:restore_session_async(session_info, handlers, callback)
 			end
 
 			self.session_id = session_id
+			self:apply_session_state(result, handlers)
 			callback(true, mode, result)
 		end)
+	end)
+end
+
+function Connection:apply_session_state(result, handlers)
+	if type(result) ~= "table" then
+		return
+	end
+
+	if type(result.configOptions) == "table" then
+		self.config_options = result.configOptions
+		local active = handlers or self.active_handlers
+		if active and active.config_options then
+			active.config_options(result.configOptions)
+		end
+	end
+end
+
+function Connection:set_config_option_async(config_id, value, callback)
+	if not self.session_id then
+		if callback then
+			callback(false, "ACP session is not started")
+		end
+		return false
+	end
+
+	return self:request_async(methods.session_set_config_option, {
+		sessionId = self.session_id,
+		configId = config_id,
+		value = value,
+	}, function(result, request_err)
+		if request_err or type(result) ~= "table" then
+			if callback then
+				callback(false, request_err or "ACP config update failed")
+			end
+			return
+		end
+
+		self:apply_session_state(result)
+		if callback then
+			callback(true, result)
+		end
 	end)
 end
 
@@ -645,7 +693,7 @@ end
 function Connection:prompt_async(text, handlers)
 	handlers = handlers or {}
 
-	return self:ensure_session_async(function(ok, err)
+	return self:ensure_session_async(function(ok, err, session_result)
 		if not ok then
 			if handlers.error then
 				handlers.error(err or "failed to start session")
@@ -654,6 +702,7 @@ function Connection:prompt_async(text, handlers)
 		end
 
 		self.active_handlers = handlers
+		self:apply_session_state(session_result, handlers)
 		local id = self:next_request_id()
 		self.pending[id] = { async = true }
 
@@ -760,6 +809,10 @@ function Connection:handle_session_update(update)
 		self.active_handlers.usage(update)
 	elseif update.sessionUpdate == "available_commands_update" and self.active_handlers.available_commands then
 		self.active_handlers.available_commands(update.availableCommands or {})
+	elseif update.sessionUpdate == "config_option_update" then
+		self:apply_session_state({
+			configOptions = update.configOptions or {},
+		})
 	end
 end
 

@@ -1,6 +1,7 @@
 local Connection = require("acp.connection").Connection
 local changes = require("acp.changes")
 local acp_commands = require("acp.commands")
+local acp_config = require("acp.config")
 local context = require("acp.context")
 local diagnostics = require("acp.diagnostics")
 local history = require("acp.history")
@@ -868,6 +869,9 @@ local function register_keymaps(state)
 	local open_commands = function()
 		M.open_commands()
 	end
+	local open_config = function()
+		M.open_config()
+	end
 	local previous_prompt = function()
 		M.prompt_previous()
 	end
@@ -880,6 +884,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Open ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
+		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
 		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
 		vim.keymap.set("n", "<leader>an", next_prompt, { buffer = bufnr, desc = "Next ACP prompt" })
 	end
@@ -1019,6 +1024,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpCommands", function()
 		M.open_commands()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpConfig", function()
+		M.open_config()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpHistory", function()
@@ -1178,6 +1187,14 @@ local function chat_handlers(state, opts)
 			state.available_commands = commands
 			set_run_status(state, ("%d command(s) available"):format(#commands))
 			refresh_session_panels()
+		end,
+		config_options = function(options)
+			state.config_options = options
+			if not state.busy then
+				set_run_status(state, ("%d config option(s) available"):format(#acp_config.select_options(options)))
+			else
+				refresh_session_panels()
+			end
 		end,
 		stderr = function(text)
 			state.stream_role = nil
@@ -1514,6 +1531,120 @@ local function open_command_picker(state)
 	return true
 end
 
+local function open_config_value_picker(state, option)
+	local lines, line_values = acp_config.value_lines(option)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/config/%s"):format(state.adapter, state.id, option.id))
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-sessions",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+
+	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
+	vim.wo[winid].cursorline = true
+	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
+
+	vim.keymap.set("n", "<CR>", function()
+		local choice = line_values[vim.api.nvim_win_get_cursor(winid)[1]]
+		if not choice then
+			return
+		end
+
+		close_picker(winid, bufnr)
+		local option_name = acp_config.option_label(option)
+		local value_name = acp_config.value_label(option, choice.value)
+		set_run_status(state, ("setting config: %s"):format(option_name))
+		local ok = state.connection:set_config_option_async(option.id, choice.value, function(success, result_or_err)
+			if not success then
+				set_run_status(state, ("error: %s"):format(result_or_err))
+				return
+			end
+
+			if type(result_or_err) == "table" and type(result_or_err.configOptions) == "table" then
+				state.config_options = result_or_err.configOptions
+			end
+			set_run_status(state, ("config: %s = %s"):format(option_name, value_name))
+			refresh_session_panels()
+		end)
+
+		if not ok then
+			set_run_status(state, "error: failed to set config option")
+		end
+	end, { buffer = bufnr, nowait = true, desc = "Set ACP config option" })
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			close_picker(winid, bufnr)
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP config values" })
+	end
+
+	return true
+end
+
+local function open_config_picker(state)
+	if #acp_config.select_options(state.config_options) == 0 then
+		if not state.connection.session_id then
+			set_run_status(state, "loading config")
+			local ok = state.connection:ensure_session_async(function(success, result_or_err, session_result)
+				if not success then
+					set_run_status(state, ("error: %s"):format(result_or_err or "failed to load config"))
+					return
+				end
+				if type(session_result) == "table" and type(session_result.configOptions) == "table" then
+					state.config_options = session_result.configOptions
+				end
+				open_config_picker(state)
+			end)
+			if not ok then
+				set_run_status(state, "error: failed to load config")
+			end
+			return ok
+		end
+
+		notify("No ACP config options advertised for this session", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_options = acp_config.picker_lines(state.config_options)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_name(bufnr, ("ACP://%s/%d/config"):format(state.adapter, state.id))
+	set_buf_options(bufnr, {
+		bufhidden = "wipe",
+		buftype = "nofile",
+		filetype = "acp-sessions",
+		modifiable = true,
+		swapfile = false,
+	})
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+	vim.bo[bufnr].modifiable = false
+
+	local winid = vim.api.nvim_open_win(bufnr, true, session_picker_config(lines))
+	vim.wo[winid].cursorline = true
+	pcall(vim.api.nvim_win_set_cursor, winid, { 3, 0 })
+
+	vim.keymap.set("n", "<CR>", function()
+		local option = line_options[vim.api.nvim_win_get_cursor(winid)[1]]
+		if not option then
+			return
+		end
+		close_picker(winid, bufnr)
+		open_config_value_picker(state, option)
+	end, { buffer = bufnr, nowait = true, desc = "Open ACP config values" })
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			close_picker(winid, bufnr)
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP config" })
+	end
+
+	return true
+end
+
 function M.select_session()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local line = vim.api.nvim_win_get_cursor(0)[1]
@@ -1608,6 +1739,15 @@ function M.open_commands()
 	end
 
 	open_command_picker(state)
+end
+
+function M.open_config()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	open_config_picker(state)
 end
 
 function M.prompt_previous()
