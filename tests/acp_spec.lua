@@ -14,6 +14,7 @@ local acp_output = require("acp.output")
 local permission = require("acp.permission")
 local picker = require("acp.picker")
 local references = require("acp.references")
+local session_view = require("acp.session_view")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
 local Connection = require("acp.connection").Connection
@@ -154,6 +155,36 @@ test("floating picker filters rows while preserving source row mapping", functio
 	ok(restored:find("alpha action", 1, true))
 	eq(view.source_row(), 3)
 	view.close()
+end)
+
+test("session panel view renders status and badges", function()
+	local lines, line_ids, styles = session_view.panel({
+		{
+			id = 1,
+			adapter = "test",
+			model = "test-model",
+			run_status = "streaming",
+		},
+		{
+			id = 2,
+			adapter = "test",
+			run_status = "error: failed",
+		},
+	}, 1, function(session)
+		return session.id == 1 and 2 or 0
+	end)
+
+	local text = table.concat(lines, "\n")
+	ok(text:find("Sessions", 1, true))
+	ok(text:find("> #1 test test-model", 1, true))
+	ok(text:find("streaming  2 change(s)", 1, true))
+	ok(text:find("error: failed", 1, true))
+	eq(line_ids[3], 1)
+	eq(line_ids[4], 1)
+	eq(styles[1].line_hl_group, "AcpSessionHeader")
+	eq(styles[3].line_hl_group, "AcpSessionCurrent")
+	eq(styles[4].line_hl_group, "AcpSessionBusy")
+	eq(styles[6].line_hl_group, "AcpSessionError")
 end)
 
 test("health report checks adapter commands and metadata", function()
@@ -786,6 +817,31 @@ test("sessions command opens a picker from source buffers", function()
 	vim.cmd("AcpChatWindow test")
 	local input_buf = vim.api.nvim_get_current_buf()
 	ok(vim.api.nvim_buf_get_name(input_buf):find("/input", 1, true))
+	local session_name = vim.api.nvim_buf_get_name(input_buf):gsub("/input$", "/sessions")
+	local session_buf
+	for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_get_name(bufnr) == session_name then
+			session_buf = bufnr
+			break
+		end
+	end
+	ok(session_buf, "session panel buffer should exist")
+	local ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
+	local marks = vim.api.nvim_buf_get_extmarks(session_buf, ns, 0, -1, { details = true })
+	local current_line = false
+	local idle_badge = false
+	for _, mark in ipairs(marks) do
+		if mark[4] and mark[4].line_hl_group == "AcpSessionCurrent" then
+			current_line = true
+		end
+		for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
+			if chunk[1] and chunk[1]:find("IDLE", 1, true) then
+				idle_badge = true
+			end
+		end
+	end
+	ok(current_line, "session panel should highlight the current session")
+	ok(idle_badge, "session panel should render a status badge")
 
 	vim.api.nvim_set_current_win(source_win)
 	vim.cmd("AcpSessions")

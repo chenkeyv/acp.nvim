@@ -13,6 +13,7 @@ local metadata = require("acp.metadata")
 local output = require("acp.output")
 local picker = require("acp.picker")
 local references = require("acp.references")
+local session_view = require("acp.session_view")
 local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
 
@@ -53,6 +54,7 @@ local sessions = {}
 local next_session_id = 1
 local session_panel_lines = {}
 local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
+local session_panel_ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
 
 local function notify(message, level)
 	vim.notify(message, level or vim.log.levels.INFO, { title = "ACP" })
@@ -68,6 +70,7 @@ end
 
 local function define_highlights()
 	output.define_highlights()
+	session_view.define_highlights()
 end
 
 local function refresh_output_highlights(state)
@@ -182,6 +185,27 @@ local function set_panel_lines(bufnr, lines)
 	vim.bo[bufnr].modifiable = true
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 	vim.bo[bufnr].modifiable = false
+end
+
+local function refresh_session_panel_highlights(bufnr, styles)
+	if not valid_buf(bufnr) then
+		return
+	end
+
+	vim.api.nvim_buf_clear_namespace(bufnr, session_panel_ns, 0, -1)
+	for line_number, style in pairs(styles or {}) do
+		local opts = {
+			priority = 80,
+		}
+		if style.line_hl_group then
+			opts.line_hl_group = style.line_hl_group
+		end
+		if style.virt_text then
+			opts.virt_text = style.virt_text
+			opts.virt_text_pos = "right_align"
+		end
+		pcall(vim.api.nvim_buf_set_extmark, bufnr, session_panel_ns, line_number - 1, 0, opts)
+	end
 end
 
 local function refresh_output_dashboard(state)
@@ -417,19 +441,10 @@ local function render_session_panel(state)
 		return
 	end
 
-	local lines = { "Sessions", "" }
-	local line_ids = {}
-	for _, session in ipairs(sorted_sessions()) do
-		local marker = session.id == state.id and ">" or " "
-		local model = session.model and session.model ~= "" and (" " .. session.model) or ""
-		table.insert(lines, ("%s #%d %s%s"):format(marker, session.id, session.adapter, model))
-		line_ids[#lines] = session.id
-		table.insert(lines, ("  %s"):format(session_status(session)))
-		line_ids[#lines] = session.id
-	end
-
+	local lines, line_ids, styles = session_view.panel(sorted_sessions(), state.id, changes.count)
 	session_panel_lines[state.session_panel_buf] = line_ids
 	set_panel_lines(state.session_panel_buf, lines)
+	refresh_session_panel_highlights(state.session_panel_buf, styles)
 end
 
 local function refresh_session_panels()

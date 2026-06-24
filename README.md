@@ -6,6 +6,7 @@ This plugin provides an editor-native ACP chat surface:
 
 - dedicated ACP tab by default
 - side panel for open ACP sessions
+- visual session sidebar with current-session highlighting and status badges
 - command-style ACP action palette for discovering session and global workflows
 - searchable floating pickers for actions, sessions, output, diagnostics, LSP, and Tree-sitter workflows
 - plain output buffer for streamed agent responses
