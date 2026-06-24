@@ -1449,6 +1449,16 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local direct_code_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[direct_code_buf].filetype, "lua")
 		eq(table.concat(vim.api.nvim_buf_get_lines(direct_code_buf, 0, -1, false), "\n"), "print('from acp')")
+		ok(vim.wo[0].winbar:find("ACP lua code", 1, true))
+		ok(vim.wo[0].winbar:find("<leader>aY yank", 1, true))
+		ok(
+			vim.b[direct_code_buf].acp_code_block_syntax == "treesitter"
+				or vim.b[direct_code_buf].acp_code_block_syntax == "filetype"
+		)
+		eq(vim.wo[0].number, true)
+		eq(vim.wo[0].wrap, false)
+		ok(vim.fn.maparg("<leader>aY", "n", false, true).buffer == 1)
+		ok(vim.fn.maparg("q", "n", false, true).buffer == 1)
 		pcall(vim.cmd, "tabclose!")
 		vim.api.nvim_set_current_win(output_win)
 		vim.cmd("AcpCodeBlocks")

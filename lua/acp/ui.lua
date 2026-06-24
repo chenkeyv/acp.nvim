@@ -786,6 +786,17 @@ local function code_block_title(block)
 	return (" %s lines %d-%d "):format(block.language or "code", block.start_line or 1, block.end_line or 1)
 end
 
+local function code_block_scratch_winbar(block, syntax)
+	local line_count = block.line_count or #((block and block.lines) or {})
+	local language = block.language or block.filetype or "code"
+	return (" ACP %s code | %d line%s | %s | <leader>aY yank | q close "):format(
+		language,
+		line_count,
+		line_count == 1 and "" or "s",
+		syntax or "filetype"
+	)
+end
+
 local function close_output_inspector(state)
 	if not state then
 		return
@@ -874,9 +885,32 @@ local function open_output_code_block_buffer(state, block)
 	})
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, block.lines)
 	vim.b[bufnr].acp_output_source = state.output_buf
+	local syntax = "filetype"
+	if vim.treesitter and vim.treesitter.start and block.filetype and block.filetype ~= "text" then
+		local ok = pcall(vim.treesitter.start, bufnr, block.filetype)
+		syntax = ok and "treesitter" or "filetype"
+	end
+	vim.b[bufnr].acp_code_block_syntax = syntax
+	vim.keymap.set("n", "q", function()
+		pcall(vim.cmd, "tabclose")
+	end, { buffer = bufnr, desc = "Close ACP code block" })
+	vim.keymap.set("n", "<leader>aY", function()
+		local text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+		if text ~= "" then
+			text = text .. "\n"
+		end
+		vim.fn.setreg('"', text, "l")
+		notify(("Yanked ACP %s code block (%d line%s)"):format(block.language or "output", #block.lines, #block.lines == 1 and "" or "s"))
+	end, { buffer = bufnr, desc = "Yank ACP code block" })
 
 	vim.cmd("tabnew")
 	vim.api.nvim_win_set_buf(0, bufnr)
+	vim.wo[0].cursorline = true
+	vim.wo[0].number = true
+	vim.wo[0].relativenumber = false
+	vim.wo[0].signcolumn = "yes:1"
+	vim.wo[0].wrap = false
+	vim.wo[0].winbar = code_block_scratch_winbar(block, syntax):gsub("%%", "%%%%")
 	return true
 end
 

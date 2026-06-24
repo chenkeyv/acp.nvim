@@ -30,6 +30,7 @@ This plugin provides an editor-native ACP chat surface:
 - hover-style `K` inspector for output references, code blocks, problems, and sections
 - cursor-aware code-block yank action that copies fenced output without Markdown fences
 - searchable output code-block picker with language-aware previews and scratch buffers
+- code-block scratch buffers with winbar actions, Tree-sitter/filetype status, and yank/close keymaps
 - virtual code-block headers with language, line count, injection status, and action hints
 - searchable output location picker for jumping from transcript file references into source
 - quickfix export for transcript file references
