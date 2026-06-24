@@ -135,6 +135,15 @@ local function short_label(value, limit)
 	return label
 end
 
+local function position_percent(line, total)
+	total = tonumber(total) or 0
+	if total <= 0 then
+		return nil
+	end
+	line = math.max(1, math.min(tonumber(line) or 1, total))
+	return ("%3d%%"):format(math.floor((line / total) * 100 + 0.5))
+end
+
 local function source_label(source)
 	if not source or not source.bufnr or not vim.api.nvim_buf_is_valid(source.bufnr) then
 		return "none"
@@ -464,6 +473,7 @@ end
 
 function M.sections(lines)
 	local sections = {}
+	local total = #(lines or {})
 	for index, line in ipairs(lines or {}) do
 		if M.is_section(line) then
 			local kind, title = section_label(line)
@@ -472,6 +482,7 @@ function M.sections(lines)
 				kind = kind,
 				title = clean(title) or kind,
 				preview = preview_after(lines, index),
+				total_lines = total,
 			})
 		end
 	end
@@ -620,15 +631,19 @@ function M.section_summaries(lines)
 	return summaries
 end
 
-function M.outline_lines(sections)
+function M.outline_lines(sections, opts)
+	opts = opts or {}
 	local lines = { "ACP Output Outline", "" }
 	local line_sections = {}
+	local total = opts.total_lines
 	for _, section in ipairs(sections or {}) do
+		total = total or section.total_lines
 		local title = section.title
 		if #title > 88 then
 			title = title:sub(1, 85) .. "..."
 		end
-		table.insert(lines, ("%4d  %-7s  %s"):format(section.line, section.kind, title))
+		local progress = position_percent(section.line, total) or "   ?"
+		table.insert(lines, ("%4d  %s  %-7s  %s"):format(section.line, progress, section.kind, title))
 		line_sections[#lines] = section
 		if section.preview then
 			table.insert(lines, ("      %s"):format(section.preview))
@@ -1123,6 +1138,7 @@ function M.transcript_entries(lines, opts)
 	opts = opts or {}
 	local limit = opts.limit or 500
 	local entries = {}
+	local total = #(lines or {})
 
 	for index, line in ipairs(lines or {}) do
 		local text = clean(line)
@@ -1135,6 +1151,7 @@ function M.transcript_entries(lines, opts)
 				line = index,
 				kind = kind,
 				text = text,
+				total_lines = total,
 			})
 			if #entries >= limit then
 				return entries
@@ -1145,16 +1162,20 @@ function M.transcript_entries(lines, opts)
 	return entries
 end
 
-function M.transcript_entry_lines(entries)
+function M.transcript_entry_lines(entries, opts)
+	opts = opts or {}
 	local lines = { "ACP Output Search", "" }
 	local line_entries = {}
+	local total = opts.total_lines
 
 	for _, entry in ipairs(entries or {}) do
+		total = total or entry.total_lines
 		local text = entry.text or ""
 		if #text > 104 then
 			text = text:sub(1, 101) .. "..."
 		end
-		table.insert(lines, ("%4d  %-7s  %s"):format(entry.line or 1, entry.kind or "TEXT", text))
+		local progress = position_percent(entry.line, total) or "   ?"
+		table.insert(lines, ("%4d  %s  %-7s  %s"):format(entry.line or 1, progress, entry.kind or "TEXT", text))
 		line_entries[#lines] = entry
 	end
 
