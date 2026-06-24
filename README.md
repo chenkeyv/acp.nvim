@@ -22,6 +22,7 @@ This plugin provides an editor-native ACP chat surface:
 - follow-up prompt drafting from the current output section
 - direct `gf` navigation from transcript file references into source
 - context-aware `<Enter>` action for opening transcript references and code blocks
+- cursor-aware code-block yank action that copies fenced output without Markdown fences
 - searchable output code-block picker with language-aware previews and scratch buffers
 - searchable output location picker for jumping from transcript file references into source
 - quickfix export for transcript file references
@@ -126,6 +127,7 @@ vim.g.acp_nvim_config = {
 - `:AcpOutputDraft` inserts the current output section as follow-up prompt context
 - `:AcpOutputOpen` opens the local file reference or code block under the output cursor
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
+- `:AcpCodeBlockYank` yanks the fenced code block under the output cursor
 - `:AcpOutputLocations` opens local file references from the current output with source previews
 - `:AcpOutputQuickfix` sends local file references from the current output to quickfix
 - `:AcpOutputProblems` opens transcript errors and stderr as native diagnostics in the location list
@@ -164,6 +166,7 @@ In the prompt buffer:
 - `<leader>ai` inserts the current output section as follow-up prompt context
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
+- `<leader>aY` yanks the code block under the cursor
 - `<leader>ag` opens output file references
 - `<leader>ae` opens output errors/stderr in the location list
 - `<leader>ad` opens source-buffer diagnostics
@@ -192,6 +195,7 @@ In the output buffer:
 - `<leader>ai` inserts the current output section as follow-up prompt context
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
+- `<leader>aY` yanks the code block under the cursor
 - `<leader>ag` opens output file references
 - `<leader>ae` opens output errors/stderr in the location list
 - `<leader>ak` opens the ACP action palette

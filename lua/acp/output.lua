@@ -663,6 +663,13 @@ function M.code_block_at(lines, lnum)
 	return nil
 end
 
+function M.code_block_text(block)
+	if not block or not block.lines then
+		return nil
+	end
+	return table.concat(block.lines, "\n")
+end
+
 function M.code_block_lines(blocks)
 	local lines = { "ACP Output Code Blocks", "" }
 	local line_blocks = {}
@@ -682,7 +689,7 @@ function M.code_block_lines(blocks)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to open a scratch buffer, / to filter, or q/<Esc> to close.")
+	table.insert(lines, "Press <Enter> to open a scratch buffer, <leader>aY to yank at cursor, / to filter, or q/<Esc> to close.")
 	return lines, line_blocks
 end
 
@@ -830,7 +837,7 @@ function M.cursor_hint(lines, lnum, col, opts)
 		return "actions: <Enter> open ref | gf source | <leader>ai draft"
 	end
 	if M.code_block_at(lines, line_number) then
-		return "actions: <Enter> open code | <leader>ab blocks | <leader>ai draft"
+		return "actions: <Enter> open code | <leader>aY yank code | <leader>ab blocks"
 	end
 	if line:match("^Status:%s+error") or line:match("^stderr:") or line:match("^Terminal output truncated") then
 		return "actions: <leader>ae problems | <leader>ai draft"

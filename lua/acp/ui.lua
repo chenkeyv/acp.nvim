@@ -1361,6 +1361,43 @@ local function output_cursor_context(state)
 	}
 end
 
+local function yank_output_code_block(state)
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local context_info = output_cursor_context(state)
+	if not context_info then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	local block = context_info.code_block
+	if not block then
+		notify("No ACP code block found under the cursor", vim.log.levels.WARN)
+		return false
+	end
+
+	local text = output.code_block_text(block)
+	if not text or text == "" then
+		notify("ACP code block under the cursor is empty", vim.log.levels.WARN)
+		return false
+	end
+
+	vim.fn.setreg('"', text, "l")
+	pulse_output_section(state, {
+		line1 = block.start_line,
+		line2 = block.end_line,
+	})
+	local count = block.line_count or #block.lines
+	notify(
+		("Yanked ACP %s code block (%d line%s)"):format(block.language or "output", count, count == 1 and "" or "s"),
+		vim.log.levels.INFO
+	)
+	return true
+end
+
 local function open_output_reference_at_cursor(state)
 	if not state or not valid_buf(state.output_buf) then
 		notify("No ACP output buffer is available", vim.log.levels.WARN)
@@ -2024,6 +2061,9 @@ local function register_keymaps(state)
 	local open_code_blocks = function()
 		open_output_code_blocks(state)
 	end
+	local yank_code_block = function()
+		yank_output_code_block(state)
+	end
 	local open_locations = function()
 		open_output_locations(state)
 	end
@@ -2078,6 +2118,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ay", yank_section, { buffer = bufnr, desc = "Yank current ACP output section" })
 		vim.keymap.set("n", "<leader>ai", draft_section, { buffer = bufnr, desc = "Draft from current ACP output section" })
 		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
+		vim.keymap.set("n", "<leader>aY", yank_code_block, { buffer = bufnr, desc = "Yank ACP output code block" })
 		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
 		vim.keymap.set("n", "<leader>ae", open_problems, { buffer = bufnr, desc = "Open ACP output problems" })
 		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
@@ -2263,6 +2304,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
 		M.open_code_blocks()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCodeBlockYank", function()
+		M.yank_code_block()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpOutputLocations", function()
@@ -2654,6 +2699,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
 			M.open_code_blocks()
+		end)
+		add_action(items, "Yank code block", "Copy the fenced code block under the output cursor", "<leader>aY", "session", function()
+			M.yank_code_block()
 		end)
 		add_action(items, "Output locations", "Preview and jump to file references in the transcript", "<leader>ag", "session", function()
 			M.open_output_locations()
@@ -3409,6 +3457,15 @@ function M.open_code_blocks()
 	end
 
 	open_output_code_blocks(state)
+end
+
+function M.yank_code_block()
+	local state = current_state()
+	if not state then
+		return
+	end
+
+	yank_output_code_block(state)
 end
 
 function M.open_output_locations()

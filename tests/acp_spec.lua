@@ -93,6 +93,7 @@ test("setup registers public user commands", function()
 		"AcpOutputDraft",
 		"AcpOutputOpen",
 		"AcpCodeBlocks",
+		"AcpCodeBlockYank",
 		"AcpOutputLocations",
 		"AcpOutputQuickfix",
 		"AcpOutputProblems",
@@ -441,11 +442,13 @@ test("output dashboard and section helpers are rendered", function()
 	local block_at = acp_output.code_block_at({ "Agent", "```lua", "print(1)", "```" }, 3)
 	eq(block_at.language, "lua")
 	eq(block_at.lines[1], "print(1)")
-	ok(acp_output.cursor_hint({ "Agent", "```lua", "print(1)", "```" }, 3, 0):find("open code", 1, true))
+	eq(acp_output.code_block_text(block_at), "print(1)")
+	ok(acp_output.cursor_hint({ "Agent", "```lua", "print(1)", "```" }, 3, 0):find("yank code", 1, true))
 	local block_picker, line_blocks = acp_output.code_block_lines(blocks)
 	local block_text = table.concat(block_picker, "\n")
 	ok(block_text:find("ACP Output Code Blocks", 1, true))
 	ok(block_text:find("lua", 1, true))
+	ok(block_text:find("<leader>aY to yank", 1, true))
 	eq(line_blocks[3].language, "lua")
 
 	local ref_file = vim.fn.tempname() .. ".lua"
@@ -1181,6 +1184,18 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		end
 		ok(code_line, "output should contain a code block")
 		vim.api.nvim_win_set_cursor(output_win, { code_line, 0 })
+		unnamed_register = vim.fn.getreg('"')
+		unnamed_register_type = vim.fn.getregtype('"')
+		vim.cmd("AcpCodeBlockYank")
+		eq(vim.fn.getreg('"'), "print('from acp')\n")
+		eq(vim.fn.getregtype('"'), "V")
+		local code_pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
+		local code_pulse_marks = vim.api.nvim_buf_get_extmarks(output_buf, code_pulse_ns, 0, -1, { details = true })
+		ok(#code_pulse_marks > 0, "yanking code should pulse the output code block")
+		vim.fn.setreg('"', unnamed_register, unnamed_register_type)
+		unnamed_register = nil
+		unnamed_register_type = nil
+
 		vim.cmd("AcpOutputOpen")
 		local direct_code_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[direct_code_buf].filetype, "lua")
@@ -1358,13 +1373,17 @@ test("actions command opens a session action palette", function()
 		eq(vim.bo[action_buf].filetype, "acp-actions")
 		local action_lines = vim.api.nvim_buf_get_lines(action_buf, 0, -1, false)
 		local output_outline_row
+		local yank_code_block = false
 		for index, line in ipairs(action_lines) do
 			if line:find("Output outline", 1, true) then
 				output_outline_row = index
-				break
+			end
+			if line:find("Yank code block", 1, true) then
+				yank_code_block = true
 			end
 		end
 		ok(output_outline_row, "action palette should include output outline")
+		ok(yank_code_block, "action palette should include code block yank")
 
 		vim.api.nvim_win_set_cursor(0, { output_outline_row, 0 })
 		local keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
