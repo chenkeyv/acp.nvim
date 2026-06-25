@@ -6060,6 +6060,11 @@ test("history saves transcript metadata and lists entries", function()
 		"You",
 		"",
 		"hello",
+		"Agent",
+		"```lua",
+		"print('history')",
+		"```",
+		"See lua/acp/history.lua:1",
 	})
 	ok(path, "history path should be returned")
 	ok(vim.fn.filereadable(path) == 1, "history file should exist")
@@ -6083,6 +6088,11 @@ test("history saves transcript metadata and lists entries", function()
 	eq(found.title, "History Test")
 	eq(found.adapter, "test-adapter")
 	eq(found.model, "test-model")
+	eq(found.metrics.lines, 8)
+	eq(found.metrics.sections, 3)
+	eq(found.metrics.code_blocks, 1)
+	eq(found.metrics.locations, 1)
+	ok(found.summary:find("8 lines  3 sections  1 code  1 loc", 1, true))
 
 	vim.fn.delete(path)
 end)
@@ -6135,6 +6145,8 @@ test("history browser opens when entries exist", function()
 	ok(history.open_browser(), "history browser should open")
 	local bufnr = vim.api.nvim_get_current_buf()
 	eq(vim.bo[bufnr].filetype, "acp-history")
+	local browser_text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+	ok(browser_text:find("1 line  1 section  0 code  0 locs", 1, true))
 
 	local preview_found = false
 	for _, winid in ipairs(vim.api.nvim_list_wins()) do

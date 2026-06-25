@@ -83,6 +83,65 @@ local function transcript_lines(lines)
 	return transcript
 end
 
+local function transcript_metrics(lines)
+	local metrics = {
+		lines = 0,
+		sections = 0,
+		code_blocks = 0,
+		locations = 0,
+	}
+	local in_code = false
+
+	for _, line in ipairs(transcript_lines(lines)) do
+		if line ~= "" then
+			metrics.lines = metrics.lines + 1
+		end
+		if
+			line == "You"
+			or line == "Agent"
+			or line:match("^ACP:")
+			or line:match("^Status:")
+			or line:match("^Tool")
+			or line:match("^Terminal:")
+			or line:match("^Terminal output truncated")
+			or line:match("^Wrote ")
+			or line:match("^Thought:")
+			or line:match("^stderr:")
+		then
+			metrics.sections = metrics.sections + 1
+		end
+		if line:match("^%s*```") then
+			if not in_code then
+				metrics.code_blocks = metrics.code_blocks + 1
+				in_code = true
+			else
+				in_code = false
+			end
+		end
+		for _ in line:gmatch("[^%s%[%]%(%){}<>,;]+:%d+:?%d*") do
+			metrics.locations = metrics.locations + 1
+		end
+	end
+
+	return metrics
+end
+
+local function metrics_label(metrics)
+	metrics = metrics or {}
+	local lines = metrics.lines or 0
+	local sections = metrics.sections or 0
+	local locations = metrics.locations or 0
+	return ("%d line%s  %d section%s  %d code  %d loc%s"):format(
+		lines,
+		lines == 1 and "" or "s",
+		sections,
+		sections == 1 and "" or "s",
+		metrics.code_blocks or 0,
+		locations,
+		locations == 1 and "" or "s"
+	)
+end
+
 local function bounded_lines(lines, opts)
 	local max_lines = opts.max_lines or 240
 	local max_chars = opts.max_chars or 24000
@@ -106,12 +165,13 @@ local function bounded_lines(lines, opts)
 end
 
 local function entry_for(path)
-	local ok, lines = pcall(vim.fn.readfile, path, "", 12)
+	local ok, lines = pcall(vim.fn.readfile, path)
 	if not ok then
 		return nil
 	end
 
 	local stat = vim.uv.fs_stat(path)
+	local metrics = transcript_metrics(lines)
 	return {
 		path = path,
 		name = vim.fs.basename(path),
@@ -119,6 +179,8 @@ local function entry_for(path)
 		adapter = header_value(lines, "Adapter") or "?",
 		model = header_value(lines, "Model") or "?",
 		updated = header_value(lines, "Updated") or "?",
+		metrics = metrics,
+		summary = metrics_label(metrics),
 		mtime = stat and stat.mtime and stat.mtime.sec or 0,
 	}
 end
@@ -199,6 +261,8 @@ local function browser_lines(entries, opts)
 		table.insert(lines, ("%d. %s"):format(index, entry.title))
 		line_entries[#lines] = entry
 		table.insert(lines, ("   %s  %s  %s"):format(entry.updated, entry.adapter, entry.model))
+		line_entries[#lines] = entry
+		table.insert(lines, ("   %s"):format(entry.summary or metrics_label(entry.metrics)))
 		line_entries[#lines] = entry
 	end
 	table.insert(lines, "")
