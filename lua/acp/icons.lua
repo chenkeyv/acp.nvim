@@ -15,6 +15,7 @@ local M = {
 	history = "󰋚",
 	idle = "",
 	key = "󰌌",
+	lsp = "",
 	map = "󰍍",
 	model = "󰚩",
 	note = "󰎚",
@@ -29,6 +30,7 @@ local M = {
 	status = "󰐊",
 	terminal = "",
 	tool = "",
+	treesitter = "",
 	user = "",
 	warning = "",
 }
