@@ -49,6 +49,13 @@ function M.completion_start(line, cursor_col)
 	return start - 1
 end
 
+local function completion_menu(command)
+	if command.input and command.input.hint and command.input.hint ~= "" then
+		return ("%s %s"):format(icons.key, command.input.hint)
+	end
+	return icons.title("ACP")
+end
+
 function M.completion_items(commands, base)
 	base = base or ""
 	if base:sub(1, 1) ~= "/" then
@@ -72,11 +79,7 @@ function M.completion_items(commands, base)
 				if command.description and command.description ~= "" then
 					item.info = command.description
 				end
-				if command.input and command.input.hint and command.input.hint ~= "" then
-					item.menu = command.input.hint
-				else
-					item.menu = "ACP"
-				end
+				item.menu = completion_menu(command)
 				table.insert(items, item)
 			end
 		end

@@ -1,3 +1,5 @@
+local icons = require("acp.icons")
+
 local M = {}
 
 local function with_icon(icon, text)
@@ -181,7 +183,7 @@ end
 
 function M.provider(opts)
 	return vim.tbl_deep_extend("force", {
-		name = "ACP",
+		name = icons.title("ACP"),
 		module = "acp.blink",
 		score_offset = 80,
 		enabled = function()

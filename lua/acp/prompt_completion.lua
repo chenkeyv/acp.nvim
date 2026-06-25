@@ -174,6 +174,10 @@ local workflow_icons = {
 	workspace_diagnostics = icons.diagnostics,
 }
 
+local function workflow_menu(workflow)
+	return ("%s %s"):format(workflow_icons[workflow.id] or icons.action, workflow.menu)
+end
+
 function M.start(line, cursor_col)
 	line = line or ""
 	cursor_col = cursor_col or #line
@@ -205,7 +209,7 @@ function M.workflow_items(base)
 				abbr = ("%s %s"):format(workflow_icons[workflow.id] or icons.action, workflow.trigger),
 				icon = workflow_icons[workflow.id] or icons.action,
 				kind = "Snippet",
-				menu = workflow.menu,
+				menu = workflow_menu(workflow),
 				info = workflow.info,
 				dup = 0,
 				user_data = workflow_user_data(workflow.id),
