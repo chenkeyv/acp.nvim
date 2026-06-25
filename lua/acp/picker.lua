@@ -201,6 +201,10 @@ local function preview_winbar(preview, syntax)
 	)
 end
 
+local function escape_winbar(text)
+	return tostring(text or ""):gsub("%%", "%%%%")
+end
+
 function M.window_config(lines, opts)
 	opts = opts or {}
 
@@ -247,6 +251,8 @@ function M.open(opts)
 	local source_lines = vim.deepcopy(lines)
 	local query = ""
 	local display_rows = {}
+	local result_count = 0
+	local result_total = 0
 	local preview_bufnr
 	local preview_winid
 	local bufnr = vim.api.nvim_create_buf(false, true)
@@ -288,6 +294,8 @@ function M.open(opts)
 				end
 			end
 		end
+		result_count = query == "" and total_count or match_count
+		result_total = total_count
 
 		if query ~= "" then
 			local noun = match_count == 1 and "result" or "results"
@@ -338,6 +346,30 @@ function M.open(opts)
 		bufnr = bufnr,
 		winid = winid,
 	}
+
+	local function picker_winbar()
+		local title =
+			decorated_title(opts.title or " ACP ", opts.title_icon or icons.acp):gsub("^%s+", ""):gsub("%s+$", "")
+		local filter = query ~= "" and ("  %s filter:%s"):format(icons.search, query) or ""
+		return (" %s  %s %d/%d%s  %s / filter  %s <C-l> clear  %s q close "):format(
+			title,
+			icons.map,
+			result_count,
+			result_total,
+			filter,
+			icons.search,
+			icons.key,
+			icons.key
+		)
+	end
+
+	local function update_picker_winbar()
+		if valid_win(winid) then
+			vim.wo[winid].winbar = escape_winbar(picker_winbar())
+		end
+	end
+
+	update_picker_winbar()
 
 	function view.close()
 		if valid_win(preview_winid) then
@@ -439,7 +471,7 @@ function M.open(opts)
 			vim.wo[preview_winid].relativenumber = false
 			vim.wo[preview_winid].wrap = false
 		end
-		vim.wo[preview_winid].winbar = preview_winbar(preview, syntax):gsub("%%", "%%%%")
+		vim.wo[preview_winid].winbar = escape_winbar(preview_winbar(preview, syntax))
 		pcall(vim.api.nvim_win_set_cursor, preview_winid, { math.max(1, preview.cursor_line or 1), 0 })
 	end
 
@@ -459,6 +491,7 @@ function M.open(opts)
 				end
 			end
 			pcall(vim.api.nvim_win_set_cursor, winid, { target, 0 })
+			update_picker_winbar()
 		end
 		view.update_preview()
 	end

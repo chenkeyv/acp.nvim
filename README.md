@@ -357,6 +357,7 @@ In code-block scratch buffers:
 
 In floating ACP pickers:
 
+- picker winbars show the active title, row counts, filter query, and core keys
 - `/` filters visible picker rows and shows the active match count
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker

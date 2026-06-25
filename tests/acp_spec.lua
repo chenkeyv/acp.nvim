@@ -249,6 +249,11 @@ test("floating picker filters rows while preserving source row mapping", functio
 		title = " ACP test picker ",
 	})
 
+	ok(vim.wo[view.winid].winbar:find(icons.acp, 1, true))
+	ok(vim.wo[view.winid].winbar:find("ACP test picker", 1, true))
+	ok(vim.wo[view.winid].winbar:find("5/5", 1, true))
+	ok(vim.wo[view.winid].winbar:find("/ filter", 1, true))
+
 	view.filter("beta")
 	local filtered = table.concat(vim.api.nvim_buf_get_lines(view.bufnr, 0, -1, false), "\n")
 	ok(filtered:find(icons.search, 1, true))
@@ -256,12 +261,16 @@ test("floating picker filters rows while preserving source row mapping", functio
 	ok(filtered:find("1/5 result", 1, true))
 	ok(filtered:find("beta action", 1, true))
 	ok(not filtered:find("alpha action", 1, true))
+	ok(vim.wo[view.winid].winbar:find("1/5", 1, true))
+	ok(vim.wo[view.winid].winbar:find("filter:beta", 1, true))
 	vim.api.nvim_win_set_cursor(view.winid, { 3, 0 })
 	eq(view.source_row(), 4)
 
 	view.filter("")
 	local restored = table.concat(vim.api.nvim_buf_get_lines(view.bufnr, 0, -1, false), "\n")
 	ok(restored:find("alpha action", 1, true))
+	ok(vim.wo[view.winid].winbar:find("5/5", 1, true))
+	ok(not vim.wo[view.winid].winbar:find("filter:", 1, true))
 	eq(view.source_row(), 3)
 	view.close()
 end)
