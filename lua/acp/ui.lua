@@ -1921,16 +1921,33 @@ refresh_prompt_hints = function(state)
 	vim.api.nvim_buf_clear_namespace(state.input_buf, prompt_ns, 0, -1)
 	local lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
 	local info = prompt_view.info(lines, {
+		adapter = state.adapter,
+		blink = vim.b[state.input_buf].acp_blink_source == true,
 		busy = state.busy,
+		context_window = state.context_window,
+		model = state.model,
+		run_status = state.run_status,
+		source = state.source,
 	})
 	if info.empty then
 		pcall(vim.api.nvim_buf_set_extmark, state.input_buf, prompt_ns, 0, 0, {
+			virt_lines = info.ribbon and { info.ribbon } or nil,
+			virt_lines_above = true,
 			virt_text = { { info.ghost, "AcpPromptGhost" } },
 			virt_text_pos = "eol",
 			hl_mode = "combine",
 			priority = 80,
 		})
 		return
+	end
+
+	if info.ribbon then
+		pcall(vim.api.nvim_buf_set_extmark, state.input_buf, prompt_ns, 0, 0, {
+			virt_lines = { info.ribbon },
+			virt_lines_above = true,
+			hl_mode = "combine",
+			priority = 80,
+		})
 	end
 
 	local row = math.max(0, #lines - 1)

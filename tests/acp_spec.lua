@@ -280,11 +280,37 @@ test("prompt view renders ghost text and draft stats", function()
 	local busy = prompt_view.info({ "" }, { busy = true })
 	ok(busy.ghost:find("responding", 1, true))
 
-	local draft = prompt_view.info({ "hello ACP", "with context" })
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_name(source_buf, vim.fs.joinpath(vim.fn.getcwd(), "prompt_source.lua"))
+	vim.bo[source_buf].filetype = "lua"
+	local draft = prompt_view.info({ "hello ACP", "with context" }, {
+		adapter = "test",
+		blink = true,
+		context_window = 1000,
+		model = "test-model",
+		run_status = "streaming",
+		source = {
+			bufnr = source_buf,
+			cursor = { 3, 0 },
+		},
+	})
+	local ribbon = {}
+	for _, chunk in ipairs(draft.ribbon or {}) do
+		table.insert(ribbon, chunk[1])
+	end
+	local ribbon_text = table.concat(ribbon)
 	ok(not draft.empty)
+	ok(ribbon_text:find("ACP", 1, true))
+	ok(ribbon_text:find("test", 1, true))
+	ok(ribbon_text:find("model test-model", 1, true))
+	ok(ribbon_text:find("ctx 1k", 1, true))
+	ok(ribbon_text:find("status streaming", 1, true))
+	ok(ribbon_text:find("[lua]", 1, true))
+	ok(ribbon_text:find("blink", 1, true))
 	ok(draft.stats:find("2 lines", 1, true))
 	ok(draft.stats:find("22 chars", 1, true))
 	ok(draft.stats:find("4 words", 1, true))
+	pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 end)
 
 test("session panel view renders status and badges", function()
@@ -2264,14 +2290,26 @@ test("prompt history recalls sent prompts and restores draft", function()
 		local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 		local marks = vim.api.nvim_buf_get_extmarks(input_buf, prompt_ns, 0, -1, { details = true })
 		local ghost = false
+		local ribbon = false
 		for _, mark in ipairs(marks) do
 			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
 				if chunk[1] and chunk[1]:find("Ask ACP", 1, true) then
 					ghost = true
 				end
 			end
+			for _, line in ipairs((mark[4] and mark[4].virt_lines) or {}) do
+				local text = {}
+				for _, chunk in ipairs(line) do
+					table.insert(text, chunk[1] or "")
+				end
+				text = table.concat(text)
+				if text:find("ACP", 1, true) and text:find("test", 1, true) and text:find("blink", 1, true) then
+					ribbon = true
+				end
+			end
 		end
 		ok(ghost, "empty prompt should show ghost text")
+		ok(ribbon, "empty prompt should show a session ribbon")
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "@con" })
 		vim.api.nvim_win_set_cursor(0, { 1, 4 })
