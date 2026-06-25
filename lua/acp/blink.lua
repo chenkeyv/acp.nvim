@@ -1,5 +1,12 @@
 local M = {}
 
+local function with_icon(icon, text)
+	if icon and icon ~= "" then
+		return ("%s %s"):format(icon, text)
+	end
+	return text
+end
+
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
 end
@@ -79,7 +86,7 @@ local function completion_documentation(item, scope)
 	local lines = {
 		item.abbr or item.word or "ACP completion",
 		"",
-		scope,
+		with_icon(item.icon, scope),
 	}
 	if item.menu and item.menu ~= "" then
 		table.insert(lines, ("context: %s"):format(item.menu))
@@ -113,7 +120,7 @@ local function map_item(item, index, range, state_id)
 	}
 
 	mapped.labelDetails = {
-		detail = ("  %s"):format(scope),
+		detail = ("  %s"):format(with_icon(item.icon, scope)),
 		description = item.menu,
 	}
 	mapped.documentation = {

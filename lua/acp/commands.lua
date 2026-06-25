@@ -1,3 +1,5 @@
+local icons = require("acp.icons")
+
 local M = {}
 
 function M.picker_lines(commands)
@@ -61,7 +63,8 @@ function M.completion_items(commands, base)
 			if word then
 				local item = {
 					word = word,
-					abbr = "/" .. name,
+					abbr = ("%s /%s"):format(icons.terminal, name),
+					icon = icons.terminal,
 					kind = "Function",
 					dup = 0,
 				}

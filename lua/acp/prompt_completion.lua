@@ -1,4 +1,5 @@
 local commands = require("acp.commands")
+local icons = require("acp.icons")
 
 local M = {}
 
@@ -147,6 +148,32 @@ local function workflow_user_data(id)
 	return "acp.nvim:" .. id
 end
 
+local workflow_icons = {
+	callers = icons.lsp,
+	callees = icons.lsp,
+	code_actions = icons.code,
+	code_lens = icons.code,
+	context = icons.source,
+	diagnostics = icons.diagnostics,
+	document_colors = icons.color,
+	document_links = icons.reference,
+	folding_ranges = icons.fold,
+	hover = icons.lsp,
+	inlay_hints = icons.lsp,
+	output = icons.map,
+	references = icons.reference,
+	rename = icons.lsp,
+	selection = icons.lsp,
+	signature = icons.lsp,
+	smart_context = icons.context,
+	subtypes = icons.lsp,
+	supertypes = icons.lsp,
+	symbols = icons.lsp,
+	treesitter = icons.treesitter,
+	workspace = icons.lsp,
+	workspace_diagnostics = icons.diagnostics,
+}
+
 function M.start(line, cursor_col)
 	line = line or ""
 	cursor_col = cursor_col or #line
@@ -175,7 +202,8 @@ function M.workflow_items(base)
 		if workflow.trigger:lower():sub(1, #prefix) == prefix then
 			table.insert(items, {
 				word = workflow.trigger,
-				abbr = workflow.trigger,
+				abbr = ("%s %s"):format(workflow_icons[workflow.id] or icons.action, workflow.trigger),
+				icon = workflow_icons[workflow.id] or icons.action,
 				kind = "Snippet",
 				menu = workflow.menu,
 				info = workflow.info,
