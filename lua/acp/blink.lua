@@ -84,11 +84,24 @@ local function completion_scope(item)
 	return "ACP completion"
 end
 
+local function completion_action(item)
+	local word = item and item.word or ""
+	if type(item and item.user_data) == "string" and item.user_data:match("^acp%.nvim:") then
+		return "runs ACP workflow"
+	end
+	if word:sub(1, 1) == "/" then
+		return "drafts adapter command"
+	end
+	return "inserts completion text"
+end
+
 local function completion_documentation(item, scope)
 	local lines = {
 		item.abbr or item.word or "ACP completion",
 		"",
 		with_icon(item.icon, scope),
+		("insert: %s"):format(item.word or ""),
+		("action: %s"):format(completion_action(item)),
 	}
 	if item.menu and item.menu ~= "" then
 		table.insert(lines, ("context: %s"):format(item.menu))

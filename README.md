@@ -167,9 +167,9 @@ require("blink.cmp").setup({
 ```
 
 The ACP source is enabled only in ACP prompt buffers. Completion items include
-workflow or adapter-command scope labels plus plaintext documentation. `<C-Space>`
-prefers this source when it is configured and falls back to the native
-`completefunc` completion otherwise.
+workflow or adapter-command scope labels, insert/action details, and plaintext
+documentation. `<C-Space>` prefers this source when it is configured and falls
+back to the native `completefunc` completion otherwise.
 
 ## Commands
 
