@@ -213,6 +213,16 @@ test("action picker lines render workflow details", function()
 	ok(not text:find("[session]", 1, true))
 	eq(line_actions[3].run, run)
 	eq(line_actions[4].run, run)
+
+	local preview = actions.preview(line_actions[3])
+	local preview_text = table.concat(preview.lines, "\n")
+	eq(preview.filetype, "acp")
+	ok(preview.title:find(icons.map, 1, true))
+	ok(preview_text:find("Output outline", 1, true))
+	ok(preview_text:find("Jump across transcript sections", 1, true))
+	ok(preview_text:find("Scope: session", 1, true))
+	ok(preview_text:find("Key: <leader>av", 1, true))
+	ok(preview_text:find("<Enter> to run", 1, true))
 end)
 
 test("floating picker filters rows while preserving source row mapping", function()
@@ -3666,6 +3676,18 @@ test("actions command opens a session action palette", function()
 		local action_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[action_buf].filetype, "acp-actions")
 		local action_lines = vim.api.nvim_buf_get_lines(action_buf, 0, -1, false)
+		local action_preview_found = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local bufnr = vim.api.nvim_win_get_buf(winid)
+			if bufnr ~= action_buf and vim.bo[bufnr].buftype == "nofile" and vim.bo[bufnr].filetype == "acp" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+				if preview:find("Send prompt", 1, true) and preview:find("Scope: session", 1, true) then
+					action_preview_found = true
+					break
+				end
+			end
+		end
+		ok(action_preview_found, "action palette should show an action preview")
 		local output_outline_row
 		local output_map = false
 		local output_items = false

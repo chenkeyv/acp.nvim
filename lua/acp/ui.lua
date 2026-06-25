@@ -4877,6 +4877,7 @@ local function open_action_palette(state, origin_win)
 		title_icon = icons.action,
 		submit_desc = "Run ACP action",
 		close_desc = "Close ACP actions",
+		preview = actions.previewer(line_actions),
 		on_submit = function(row, view)
 			local action = line_actions[row]
 			if not action then
@@ -6595,9 +6596,9 @@ function M.open_output_help()
 		title_icon = icons.help,
 		submit_desc = "Run ACP output workflow",
 		close_desc = "Close ACP output help",
-		preview = function()
+		preview = actions.previewer(line_actions, function()
 			return M.output_help_preview(state)
-		end,
+		end),
 		on_submit = function(row, view)
 			local action = line_actions[row]
 			if not action then

@@ -164,4 +164,55 @@ function M.picker_lines(actions)
 	return lines, line_actions
 end
 
+function M.preview(action)
+	if type(action) ~= "table" then
+		return nil
+	end
+
+	local label = clean(action.label) or "Action"
+	local detail = clean(action.detail)
+	local key = clean(action.key)
+	local scope = clean(action.scope)
+	local icon = action_icon(action)
+	local lines = { icons.title(label, icon), "" }
+
+	if detail then
+		table.insert(lines, ("%s %s"):format(icons.note, detail))
+	end
+	if scope then
+		table.insert(lines, ("%s Scope: %s"):format(scope_icon(scope), scope))
+	end
+	if key then
+		table.insert(lines, ("%s Key: %s"):format(icons.key, key))
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, ("%s Press <Enter> to run this workflow."):format(icons.send))
+	table.insert(lines, ("%s q/<Esc> closes the picker."):format(icons.key))
+
+	return {
+		lines = lines,
+		filetype = "acp",
+		title = (" %s ACP action "):format(icon),
+		title_icon = icon,
+	}
+end
+
+function M.previewer(line_actions, fallback)
+	return function(row, view)
+		local preview = M.preview(line_actions and line_actions[row])
+		if not preview then
+			return fallback and fallback(row, view) or nil
+		end
+
+		local extra = fallback and fallback(row, view) or nil
+		if extra and type(extra.lines) == "table" and #extra.lines > 0 then
+			table.insert(preview.lines, "")
+			table.insert(preview.lines, ("%s Context"):format(icons.inspect))
+			vim.list_extend(preview.lines, extra.lines)
+		end
+		return preview
+	end
+end
+
 return M
