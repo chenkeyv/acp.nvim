@@ -82,6 +82,7 @@ end
 
 local set_buf_options
 local refresh_output_chrome
+local append_input_text
 
 local function define_highlights()
 	output.define_highlights()
@@ -1121,7 +1122,7 @@ end
 local function code_block_scratch_winbar(block, syntax)
 	local line_count = block.line_count or #((block and block.lines) or {})
 	local language = block.language or block.filetype or "code"
-	return (" ACP %s code | %d line%s | %s | <leader>at scope | gO output | <leader>aY yank | q close "):format(
+	return (" ACP %s code | %d line%s | %s | <leader>at scope | <leader>ai draft | gO output | <leader>aY yank | q close "):format(
 		language,
 		line_count,
 		line_count == 1 and "" or "s",
@@ -1268,6 +1269,66 @@ local function open_output_code_block_buffer(state, block)
 		return true
 	end
 
+	local function draft_code_context()
+		if not valid_buf(bufnr) then
+			return false
+		end
+
+		local winid = valid_win(scratch_win) and scratch_win or vim.api.nvim_get_current_win()
+		local cursor = vim.api.nvim_win_get_cursor(winid)
+		local node_list = nil
+		local node_err = nil
+		if vim.treesitter and vim.treesitter.get_node then
+			node_list, node_err = treesitter.nodes(bufnr, cursor)
+		end
+
+		local selected_node = node_list and node_list[1] or nil
+		local line1, line2 = treesitter.range_lines(selected_node)
+		local instruction = "Use this ACP output code block as context for a follow-up."
+		local source_range = {
+			line1 = 1,
+			line2 = vim.api.nvim_buf_line_count(bufnr),
+		}
+		local details = {
+			("Origin: output lines %d-%d"):format(block.start_line or 1, block.end_line or block.start_line or 1),
+		}
+
+		if selected_node and line1 then
+			source_range = {
+				line1 = line1,
+				line2 = line2,
+			}
+			instruction = "Use this Tree-sitter scope from an ACP output code block as context for a follow-up."
+			table.insert(details, ("Scope: %s lines %d-%d"):format(selected_node.type or "node", line1, line2 or line1))
+		elseif node_err then
+			table.insert(details, ("Tree-sitter scope unavailable: %s"):format(node_err))
+		end
+
+		local rendered = context.render(context.capture(bufnr, winid, source_range), {
+			buffer_diagnostic_limit = 0,
+			diagnostic_limit = 0,
+			selection_limit = 160,
+			treesitter_text_lines = 40,
+		})
+		if not rendered then
+			notify("Could not draft ACP output code context", vim.log.levels.WARN)
+			return false
+		end
+
+		append_input_text(state, table.concat({
+			instruction,
+			table.concat(details, "\n"),
+			"",
+			rendered,
+			"",
+			"Request:",
+		}, "\n"))
+		if valid_win(state.input_win) then
+			vim.api.nvim_set_current_win(state.input_win)
+		end
+		return true
+	end
+
 	local function open_code_treesitter_scope()
 		local winid = valid_win(scratch_win) and scratch_win or vim.api.nvim_get_current_win()
 		local cursor = vim.api.nvim_win_get_cursor(winid)
@@ -1338,6 +1399,10 @@ local function open_output_code_block_buffer(state, block)
 	vim.keymap.set("n", "<leader>at", open_code_treesitter_scope, {
 		buffer = bufnr,
 		desc = "Open ACP code block Tree-sitter scope",
+	})
+	vim.keymap.set("n", "<leader>ai", draft_code_context, {
+		buffer = bufnr,
+		desc = "Draft ACP code block context",
 	})
 	vim.keymap.set("n", "<leader>aY", function()
 		local text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
@@ -1808,7 +1873,7 @@ local function clear_input(state)
 	set_input_text(state, "")
 end
 
-local function append_input_text(state, text)
+append_input_text = function(state, text)
 	if not valid_buf(state.input_buf) or not text or text == "" then
 		return
 	end

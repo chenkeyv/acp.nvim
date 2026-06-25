@@ -2756,6 +2756,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(table.concat(vim.api.nvim_buf_get_lines(direct_code_buf, 0, -1, false), "\n"), "print('from acp')")
 		ok(vim.wo[0].winbar:find("ACP lua code", 1, true))
 		ok(vim.wo[0].winbar:find("<leader>at scope", 1, true))
+		ok(vim.wo[0].winbar:find("<leader>ai draft", 1, true))
 		ok(vim.wo[0].winbar:find("gO output", 1, true))
 		ok(vim.wo[0].winbar:find("<leader>aY yank", 1, true))
 		ok(
@@ -2769,6 +2770,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(vim.wo[0].wrap, false)
 		ok(vim.fn.maparg("<leader>aY", "n", false, true).buffer == 1)
 		ok(vim.fn.maparg("<leader>at", "n", false, true).buffer == 1)
+		ok(vim.fn.maparg("<leader>ai", "n", false, true).buffer == 1)
 		ok(vim.fn.maparg("gO", "n", false, true).buffer == 1)
 		ok(vim.fn.maparg("q", "n", false, true).buffer == 1)
 
@@ -2811,9 +2813,13 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 
 		local original_treesitter = vim.treesitter
 		local original_get_node = original_treesitter and original_treesitter.get_node
+		local original_get_node_text = original_treesitter and original_treesitter.get_node_text
 		vim.treesitter = vim.treesitter or {}
 		vim.treesitter.get_node = function()
 			return child
+		end
+		vim.treesitter.get_node_text = function()
+			return "print('from acp')"
 		end
 		local scope_passed, scope_err = pcall(function()
 			local scope_map = vim.fn.maparg("<leader>at", "n", false, true)
@@ -2828,9 +2834,25 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			vim.api.nvim_feedkeys(keys, "xt", false)
 			eq(vim.api.nvim_get_current_buf(), direct_code_buf)
 			eq(vim.api.nvim_win_get_cursor(0)[1], 1)
+
+			vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "" })
+			local draft_map = vim.fn.maparg("<leader>ai", "n", false, true)
+			ok(type(draft_map.callback) == "function", "code scratch should expose prompt draft callback")
+			draft_map.callback()
+			eq(vim.api.nvim_get_current_buf(), input_buf)
+			local code_prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+			ok(code_prompt:find("Use this Tree%-sitter scope from an ACP output code block", 1, false))
+			ok(code_prompt:find("Origin: output lines", 1, true))
+			ok(code_prompt:find("Scope: function_call lines 1%-1", 1, false))
+			ok(code_prompt:find("Tree%-sitter text:", 1, false))
+			ok(code_prompt:find("print%('from acp'%)", 1, false))
+			ok(code_prompt:find("Request:", 1, true))
+			vim.api.nvim_set_current_tabpage(scratch_tab)
+			vim.api.nvim_set_current_win(scratch_win)
 		end)
 		if original_treesitter then
 			vim.treesitter.get_node = original_get_node
+			vim.treesitter.get_node_text = original_get_node_text
 		else
 			vim.treesitter = nil
 		end
