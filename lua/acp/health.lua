@@ -48,6 +48,56 @@ local function blink_available(opts)
 	return ok and type(cmp.show) == "function"
 end
 
+local function option_or_check(opts, key, check)
+	if opts and opts[key] ~= nil then
+		return opts[key] == true
+	end
+	return check()
+end
+
+local function diagnostics_available(opts)
+	return option_or_check(opts, "diagnostics_available", function()
+		return type(vim.diagnostic) == "table"
+			and type(vim.diagnostic.get) == "function"
+			and type(vim.diagnostic.set) == "function"
+	end)
+end
+
+local function lsp_request_available(opts)
+	return option_or_check(opts, "lsp_request_available", function()
+		return type(vim.lsp) == "table" and type(vim.lsp.buf_request_all) == "function"
+	end)
+end
+
+local function treesitter_available(opts)
+	return option_or_check(opts, "treesitter_available", function()
+		return type(vim.treesitter) == "table"
+			and type(vim.treesitter.start) == "function"
+			and type(vim.treesitter.get_node) == "function"
+			and type(vim.treesitter.get_node_text) == "function"
+	end)
+end
+
+local function feature_items(items, opts)
+	if diagnostics_available(opts) then
+		add(items, "ok", "Neovim diagnostics API available")
+	else
+		add(items, "error", "Neovim diagnostics API is missing; ACP diagnostics require vim.diagnostic")
+	end
+
+	if lsp_request_available(opts) then
+		add(items, "ok", "Neovim LSP async request API available")
+	else
+		add(items, "warn", "Neovim LSP async request API is missing; ACP LSP workflows require vim.lsp.buf_request_all")
+	end
+
+	if treesitter_available(opts) then
+		add(items, "ok", "Tree-sitter APIs available for ACP context and previews")
+	else
+		add(items, "warn", "Tree-sitter APIs are incomplete; ACP Tree-sitter context and preview features will be limited")
+	end
+end
+
 local function adapter_items(items, name, adapter, config)
 	add(items, "info", ("Adapter: %s"):format(name))
 	if type(adapter) ~= "table" then
@@ -127,6 +177,8 @@ function M.items(config, opts)
 	else
 		add(items, "warn", "blink.cmp is missing; ACP prompt completion requires blink.cmp")
 	end
+
+	feature_items(items, opts)
 
 	for _, name in ipairs(names) do
 		adapter_items(items, name, config.adapters and config.adapters[name], config)

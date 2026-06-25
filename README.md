@@ -104,7 +104,7 @@ This plugin provides an editor-native ACP chat surface:
 - previewed changed-file picker with quickfix export for files written by the agent
 - floating diagnostics picker for drafting focused fixes
 - floating Markdown input prompt for completion-friendly editing
-- native `:checkhealth acp` diagnostics for adapter commands and metadata
+- native `:checkhealth acp` diagnostics for adapter commands, prompt metadata, blink.cmp, diagnostics, LSP, and Tree-sitter
 - `codex-acp` and `claude-agent-acp` adapter presets
 - basic ACP JSON-RPC, session, prompt, permission, terminal, and file read/write support
 
@@ -266,8 +266,8 @@ install a native `completefunc` fallback. `:checkhealth acp` reports whether
 - `:AcpAddContext` inserts source-buffer context into the current prompt
 - `:AcpRefreshSource` updates the linked source context to the current cursor or range
 - `:AcpFixDiagnostics [adapter]` opens chat with a diagnostics-focused draft prompt
-- `:AcpHealth [adapter]` checks the adapter command and prompt metadata wiring
-- `:checkhealth acp` checks configured adapter commands and prompt metadata wiring
+- `:AcpHealth [adapter]` checks adapter commands, prompt metadata, blink.cmp, diagnostics, LSP, and Tree-sitter wiring
+- `:checkhealth acp` checks configured adapters plus Neovim feature APIs used by ACP workflows
 
 In the sessions panel:
 

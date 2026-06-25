@@ -881,12 +881,21 @@ test("health report checks adapter commands and metadata", function()
 				},
 			},
 		},
-	}, { adapter_name = "test", blink_available = true })
+	}, {
+		adapter_name = "test",
+		blink_available = true,
+		diagnostics_available = true,
+		lsp_request_available = true,
+		treesitter_available = true,
+	})
 	local text = table.concat(vim.tbl_map(function(item)
 		return ("%s:%s"):format(item.level, item.message)
 	end, items), "\n")
 
 	ok(text:find("ok:blink.cmp available for ACP prompt completion", 1, true))
+	ok(text:find("ok:Neovim diagnostics API available", 1, true))
+	ok(text:find("ok:Neovim LSP async request API available", 1, true))
+	ok(text:find("ok:Tree-sitter APIs available for ACP context and previews", 1, true))
 	ok(text:find("error:test adapter command is missing: missing-acp-test-command", 1, true))
 	ok(text:find("info:Prompt metadata model: test-model", 1, true))
 	ok(text:find("info:Prompt metadata context window: 1000", 1, true))
@@ -900,12 +909,21 @@ test("health report checks adapter commands and metadata", function()
 				metadata = "codex",
 			},
 		},
-	}, { adapter_name = "codex", blink_available = false })
+	}, {
+		adapter_name = "codex",
+		blink_available = false,
+		diagnostics_available = false,
+		lsp_request_available = false,
+		treesitter_available = false,
+	})
 	local codex_text = table.concat(vim.tbl_map(function(item)
 		return ("%s:%s"):format(item.level, item.message)
 	end, codex_items), "\n")
 
 	ok(codex_text:find("warn:blink.cmp is missing; ACP prompt completion requires blink.cmp", 1, true))
+	ok(codex_text:find("error:Neovim diagnostics API is missing; ACP diagnostics require vim.diagnostic", 1, true))
+	ok(codex_text:find("warn:Neovim LSP async request API is missing; ACP LSP workflows require vim.lsp.buf_request_all", 1, true))
+	ok(codex_text:find("warn:Tree-sitter APIs are incomplete; ACP Tree-sitter context and preview features will be limited", 1, true))
 	ok(codex_text:find("error:codex adapter command is missing: missing-acp-test-command", 1, true))
 	ok(codex_text:find("warn:Codex CLI is missing: missing-codex-test-command", 1, true))
 end)
