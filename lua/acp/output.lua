@@ -2,8 +2,7 @@ local icons = require("acp.icons")
 
 local M = {}
 
-local animation_frames = { "|", "/", "-", "\\" }
-local motion_frames = { "[>   ]", "[=>  ]", "[ => ]", "[  =>]", "[   >]", "[  <=]", "[ <= ]", "[<=  ]" }
+local animation_frames = { icons.pulse_empty, icons.pulse_mid, icons.pulse_full, icons.pulse_mid }
 local filetype_aliases = {
 	bash = "sh",
 	js = "javascript",
@@ -17,6 +16,26 @@ local filetype_aliases = {
 }
 
 local reference_token_pattern = "[^%s%[%]%(%){}<>,;]+:%d+:?%d*"
+
+local function motion_frame(position, width)
+	width = width or 5
+	local cells = {}
+	for index = 1, width do
+		cells[index] = index == position and icons.location or icons.pulse_empty
+	end
+	return table.concat(cells)
+end
+
+local motion_frames = {
+	motion_frame(1),
+	motion_frame(2),
+	motion_frame(3),
+	motion_frame(4),
+	motion_frame(5),
+	motion_frame(4),
+	motion_frame(3),
+	motion_frame(2),
+}
 
 local function clean(value)
 	if value == nil or value == "" or value == vim.NIL then
@@ -160,7 +179,7 @@ local function progress_bar(line, total, width)
 	width = math.max(3, width)
 	total = tonumber(total) or 0
 	if total <= 0 then
-		return "[" .. string.rep("-", width) .. "]"
+		return string.rep(icons.pulse_empty, width)
 	end
 
 	local ratio = math.max(0, math.min(1, (tonumber(line) or 1) / total))
@@ -169,7 +188,7 @@ local function progress_bar(line, total, width)
 		filled = math.max(1, filled)
 	end
 	filled = math.min(width, filled)
-	return "[" .. string.rep("=", filled) .. string.rep("-", width - filled) .. "]"
+	return string.rep(icons.pulse_full, filled) .. string.rep(icons.pulse_empty, width - filled)
 end
 
 local function source_label(source)
@@ -1734,7 +1753,7 @@ function M.next_output_item(lines, current, direction, opts)
 end
 
 local skyline_tokens = {
-	empty = ".",
+	empty = icons.pulse_empty,
 	section = icons.section,
 	reference = icons.reference,
 	code = icons.code,
@@ -1778,7 +1797,7 @@ function M.skyline(lines, opts)
 
 	local total = #lines
 	if total == 0 then
-		return "[" .. table.concat(cells) .. "]"
+		return table.concat(cells)
 	end
 
 	for _, section in ipairs(M.sections(lines)) do
@@ -1795,7 +1814,7 @@ function M.skyline(lines, opts)
 		skyline_mark(cells, total, opts.current_line, skyline_tokens.current)
 	end
 
-	return "[" .. table.concat(cells) .. "]"
+	return table.concat(cells)
 end
 
 function M.skyline_chunks(lines, opts)

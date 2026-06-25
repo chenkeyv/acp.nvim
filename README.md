@@ -26,7 +26,7 @@ This plugin provides an editor-native ACP chat surface:
 - unified output item picker for references, code blocks, and problems with previews
 - searchable output transcript picker with progress, context previews, and jump-to-line navigation
 - persistent floating output map with progress rails, previews, quickfix export, summary counts, and live section/problem/code/reference navigation
-- ambient output skyline HUD with animated transcript shape, injection, status, and problem signals
+- ambient output skyline HUD with Nerd Font pulse rails, injection, status, and problem signals
 - current-section yank action with a short visual pulse in the output buffer
 - follow-up prompt drafting from the current output section
 - direct `gf` navigation from transcript file references into source
