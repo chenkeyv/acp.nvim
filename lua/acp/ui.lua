@@ -5581,6 +5581,9 @@ local function open_config_value_picker(state, option)
 		title_icon = icons.config,
 		submit_desc = "Set ACP config option",
 		close_desc = "Close ACP config values",
+		preview = function(row)
+			return acp_config.value_preview(option, line_values[row])
+		end,
 		on_submit = function(row, view)
 			local choice = line_values[row]
 			if not choice then
@@ -5646,6 +5649,9 @@ local function open_config_picker(state)
 		title_icon = icons.config,
 		submit_desc = "Open ACP config values",
 		close_desc = "Close ACP config",
+		preview = function(row)
+			return acp_config.preview(line_options[row])
+		end,
 		on_submit = function(row, view)
 			local option = line_options[row]
 			if not option then

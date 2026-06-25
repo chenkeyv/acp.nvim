@@ -62,7 +62,7 @@ This plugin provides an editor-native ACP chat surface:
 - prompt-buffer session ribbon with linked-source diagnostics, ghost text, and draft statistics while composing
 - prompt-focused action picker with source, LSP, Tree-sitter, output, and session workflows
 - smart context drafting that combines source, Tree-sitter, diagnostics, and available LSP signals
-- floating session config picker for adapter-advertised model, mode, and reasoning options
+- floating session config picker with value previews for adapter-advertised model, mode, and reasoning options
 - per-session prompt history recall
 - searchable, previewable plain-text transcript history with winbar metadata, highlights, and section/code/location metrics under Neovim state
 - saved transcript replay into a new chat draft
@@ -215,7 +215,7 @@ prefers this source when it is configured and falls back to the native
 - `:AcpWorkspaceDiagnostics` opens diagnostics across loaded project buffers
 - `:AcpWorkspaceDiagnosticsQuickfix` sends loaded-buffer diagnostics to quickfix
 - `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
-- `:AcpConfig` opens a picker for config options advertised by the current ACP session
+- `:AcpConfig` opens a previewed picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
 - `:AcpCodeLens` opens an LSP code-lens picker for the source buffer
 - `:AcpCodeLensQuickfix` sends LSP code lenses to quickfix
@@ -301,7 +301,7 @@ In the prompt buffer:
 - `<leader>aD` sends source-buffer diagnostics to quickfix
 - `<leader>af` previews the current session's changed files
 - `<leader>a/` opens advertised ACP slash commands
-- `<leader>ao` opens advertised ACP config options
+- `<leader>ao` opens advertised ACP config options with value previews
 - `<leader>ak` opens the ACP action palette
 - `<leader>aa` opens source-buffer LSP code actions
 - `<leader>ah` inserts source-buffer LSP hover documentation
