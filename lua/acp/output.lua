@@ -925,8 +925,92 @@ function M.output_map_lines(entries, opts)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to jump, or q/<Esc> to close.")
+	table.insert(lines, "Press <Enter> to jump, K to preview, Q for quickfix, or q/<Esc> to close.")
 	return lines, line_entries
+end
+
+local function output_line_context(lines, entry)
+	if not entry or not entry.line then
+		return nil
+	end
+
+	lines = lines or {}
+	local line_count = #lines
+	if line_count == 0 then
+		return nil
+	end
+
+	local line = math.max(1, math.min(entry.line, line_count))
+	local start_line = math.max(1, line - 5)
+	local end_line = math.min(line_count, line + 5)
+	local preview = {}
+	for index = start_line, end_line do
+		local marker = index == line and ">" or " "
+		table.insert(preview, ("%s %4d  %s"):format(marker, index, lines[index] or ""))
+	end
+
+	return {
+		lines = preview,
+		filetype = "acp",
+		title = (" ACP output line %d "):format(line),
+		cursor_line = line - start_line + 1,
+	}
+end
+
+function M.output_map_preview(lines, entry)
+	if not entry then
+		return nil
+	end
+
+	lines = lines or {}
+	if entry.kind == "code" then
+		local block = M.code_block_at(lines, entry.line)
+		if block then
+			return {
+				lines = block.lines,
+				filetype = block.filetype or "text",
+				title = (" ACP %s code lines %d-%d "):format(
+					block.language or "code",
+					block.start_line or 1,
+					block.end_line or 1
+				),
+				cursor_line = 1,
+			}
+		end
+	end
+
+	if entry.kind == "section" then
+		local section_lines, range = M.section_lines(lines, entry.line, { trim_blank = false })
+		if section_lines and range then
+			return {
+				lines = section_lines,
+				filetype = "acp",
+				title = (" ACP %s section lines %d-%d "):format(
+					range.kind or "output",
+					range.line1 or 1,
+					range.line2 or 1
+				),
+				cursor_line = 1,
+			}
+		end
+	end
+
+	return output_line_context(lines, entry)
+end
+
+function M.output_map_quickfix_items(entries, bufnr)
+	local items = {}
+	for _, entry in ipairs(entries or {}) do
+		local kind = (entry.kind or "item"):upper()
+		local label = clean(entry.label) or "ACP output map entry"
+		table.insert(items, {
+			bufnr = bufnr,
+			lnum = entry.line or 1,
+			col = entry.col or 1,
+			text = ("%s: %s"):format(kind, label),
+		})
+	end
+	return items
 end
 
 function M.animation_frame(index)

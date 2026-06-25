@@ -537,6 +537,66 @@ local function open_output_map(state)
 		return false
 	end
 
+	local function output_map_entry_at_cursor()
+		if not valid_buf(state.output_map_buf) then
+			return nil
+		end
+
+		local row = vim.api.nvim_win_get_cursor(0)[1]
+		return output_map_lines[state.output_map_buf] and output_map_lines[state.output_map_buf][row]
+	end
+
+	local function preview_output_map_entry()
+		local entry = output_map_entry_at_cursor()
+		if not entry then
+			notify("No ACP output map entry under the cursor", vim.log.levels.WARN)
+			return false
+		end
+
+		local output_lines = valid_buf(state.output_buf) and vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false) or {}
+		local preview = output.output_map_preview(output_lines, entry)
+		if not preview then
+			notify("No ACP output map preview available", vim.log.levels.WARN)
+			return false
+		end
+
+		local preview_buf, preview_win = vim.lsp.util.open_floating_preview(preview.lines, preview.filetype or "acp", {
+			border = "rounded",
+			focusable = true,
+			max_height = math.max(4, math.floor(vim.o.lines * 0.45)),
+			max_width = math.max(48, math.floor(vim.o.columns * 0.62)),
+			title = preview.title or " ACP output map preview ",
+		})
+		if valid_win(preview_win) then
+			vim.wo[preview_win].cursorline = true
+			pcall(vim.api.nvim_win_set_cursor, preview_win, { math.max(1, preview.cursor_line or 1), 0 })
+		end
+		if valid_buf(preview_buf) then
+			vim.keymap.set("n", "q", function()
+				if valid_win(preview_win) then
+					pcall(vim.api.nvim_win_close, preview_win, true)
+				end
+			end, { buffer = preview_buf, desc = "Close ACP output map preview" })
+		end
+		return true
+	end
+
+	local function open_output_map_quickfix()
+		local output_lines = valid_buf(state.output_buf) and vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false) or {}
+		local entries = output.output_map_entries(output_lines, { cwd = state.cwd })
+		if #entries == 0 then
+			notify("No ACP output map entries found", vim.log.levels.WARN)
+			return false
+		end
+
+		vim.fn.setqflist({}, " ", {
+			title = ("ACP output map #%s"):format(tostring(state.id or "?")),
+			items = output.output_map_quickfix_items(entries, state.output_buf),
+		})
+		vim.cmd("copen")
+		return true
+	end
+
 	if not valid_buf(state.output_map_buf) then
 		state.output_map_buf = vim.api.nvim_create_buf(false, true)
 		states[state.output_map_buf] = state
@@ -557,6 +617,12 @@ local function open_output_map(state)
 		vim.keymap.set("n", "<CR>", function()
 			jump_output_map_entry(state)
 		end, { buffer = state.output_map_buf, desc = "Jump to ACP output map entry" })
+		vim.keymap.set("n", "K", function()
+			preview_output_map_entry()
+		end, { buffer = state.output_map_buf, desc = "Preview ACP output map entry" })
+		vim.keymap.set("n", "Q", function()
+			open_output_map_quickfix()
+		end, { buffer = state.output_map_buf, nowait = true, desc = "Open ACP output map quickfix" })
 		if state.group then
 			local map_buf = state.output_map_buf
 			vim.api.nvim_create_autocmd("BufWipeout", {

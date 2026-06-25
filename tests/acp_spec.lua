@@ -981,7 +981,24 @@ test("output dashboard and section helpers are rendered", function()
 	ok(map_text:find("REFERENCE", 1, true))
 	ok(map_text:find("> [=====-----]", 1, true))
 	ok(map_text:find("<Enter> to jump", 1, true))
+	ok(map_text:find("K to preview", 1, true))
+	ok(map_text:find("Q for quickfix", 1, true))
 	eq(line_entries[7].kind, "code")
+	local map_preview = acp_output.output_map_preview({
+		"Status: error: failed",
+		"Agent",
+		"```lua",
+		"print(1)",
+		"```",
+		ref_line,
+	}, map_entries[4])
+	eq(map_preview.filetype, "lua")
+	ok(table.concat(map_preview.lines, "\n"):find("print(1)", 1, true))
+	local map_qf = acp_output.output_map_quickfix_items(map_entries, 99)
+	eq(#map_qf, 5)
+	eq(map_qf[1].bufnr, 99)
+	ok(map_qf[1].text:find("SECTION", 1, true))
+	ok(map_qf[4].text:find("CODE", 1, true))
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 1).kind, "code")
 	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 6, -1).kind, "code")
 	local current_problem = acp_output.current_output_item({
@@ -3036,6 +3053,8 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(output_map_text:find("PROBLEM", 1, true))
 		ok(output_map_text:find("CODE", 1, true))
 		ok(output_map_text:find("REFERENCE", 1, true))
+		eq(vim.fn.maparg("K", "n", false, true).desc, "Preview ACP output map entry")
+		eq(vim.fn.maparg("Q", "n", false, true).desc, "Open ACP output map quickfix")
 		local map_code_row
 		for index, map_line in ipairs(output_map) do
 			if map_line:find("CODE", 1, true) then

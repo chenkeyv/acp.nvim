@@ -24,7 +24,7 @@ This plugin provides an editor-native ACP chat surface:
 - cursor-aware current-item highlighting for references, code blocks, and problems
 - unified output item picker for references, code blocks, and problems with previews
 - searchable output transcript picker with progress, context previews, and jump-to-line navigation
-- persistent floating output map with progress rails, summary counts, and live section/problem/code/reference navigation
+- persistent floating output map with progress rails, previews, quickfix export, summary counts, and live section/problem/code/reference navigation
 - ambient output skyline HUD with animated transcript shape, injection, status, and problem signals
 - current-section yank action with a short visual pulse in the output buffer
 - follow-up prompt drafting from the current output section
@@ -282,7 +282,7 @@ In the prompt buffer:
 - `<C-Space>` opens blink/native ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@workspace-diagnostics`/`@code-lens`/`@colors`/`@links`/`@folds`/`@rename`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@supertypes`/`@subtypes`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
-- `<leader>am` opens a persistent output map with progress rails and item counts
+- `<leader>am` opens a persistent output map with progress rails, item counts, previews, and quickfix export
 - `<leader>aO` opens output references, code blocks, and problems
 - `<leader>ay` yanks the current output section
 - `<leader>ai` inserts the current output section as follow-up prompt context
@@ -328,7 +328,7 @@ In the output buffer:
 - `K` previews the reference, code block, problem, or section under the cursor
 - `gf` opens the local file reference under the cursor
 - `<leader>ax` searches output transcript lines
-- `<leader>am` opens a persistent output map
+- `<leader>am` opens a persistent output map; inside it, `K` previews an entry and `Q` exports entries to quickfix
 - `<leader>aO` opens output references, code blocks, and problems
 - `<leader>ay` yanks the current output section
 - `<leader>ai` inserts the current output section as follow-up prompt context
