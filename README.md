@@ -206,6 +206,7 @@ install a native `completefunc` fallback. `:checkhealth acp` reports whether
 - `:AcpOutputNextItem` / `:AcpOutputPrevItem` jump between output references, code blocks, and problems
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
 - `:AcpCodeBlocksQuickfix` sends fenced output code blocks to quickfix
+- `:AcpCodeBlockDraft` inserts the fenced code block under the output cursor as follow-up prompt context
 - `:AcpCodeBlockYank` yanks the fenced code block under the output cursor
 - `:AcpOutputLocations` opens local file references from the current output with source previews
 - `:AcpOutputQuickfix` sends local file references from the current output to quickfix
@@ -340,6 +341,7 @@ In the output buffer:
 - `<leader>ai` inserts the current output section as follow-up prompt context
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
+- `:AcpCodeBlockDraft` drafts the code block under the cursor into the prompt
 - `<leader>aY` yanks the code block under the cursor
 - `<leader>ag` opens output file references
 - `<leader>ae` opens output errors/stderr in the location list

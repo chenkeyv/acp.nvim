@@ -2063,6 +2063,7 @@ function M.cursor_hint_chunks(lines, lnum, col, opts)
 					{ icons.help, "? menu" },
 					{ icons.inspect, "K inspect" },
 					{ icons.enter, "<Enter> open code" },
+					{ icons.prompt, ":AcpCodeBlockDraft draft" },
 					{ icons.yank, "<leader>aY yank" },
 					{ icons.jump, "]o/[o items" },
 				}),

@@ -2574,6 +2574,9 @@ local function output_action_items(state, context_info)
 		end)
 	end
 	if context_info.code_block then
+		add("Draft code block", "Insert this fenced code block as follow-up prompt context", ":AcpCodeBlockDraft", function()
+			M.draft_code_block()
+		end)
 		add("Yank code block", "Copy the fenced code block without Markdown fences", "<leader>aY", function()
 			yank_output_code_block(state)
 		end)
@@ -4079,6 +4082,10 @@ function M.setup(opts)
 		M.open_code_blocks_quickfix()
 	end, {})
 
+	vim.api.nvim_create_user_command("AcpCodeBlockDraft", function()
+		M.draft_code_block()
+	end, {})
+
 	vim.api.nvim_create_user_command("AcpCodeBlockYank", function()
 		M.yank_code_block()
 	end, {})
@@ -4677,6 +4684,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Code blocks quickfix", "Send fenced output code blocks to quickfix", ":AcpCodeBlocksQuickfix", "session", function()
 			M.open_code_blocks_quickfix()
+		end)
+		add_action(items, "Draft code block", "Insert the fenced code block under the output cursor into the prompt", ":AcpCodeBlockDraft", "session", function()
+			M.draft_code_block()
 		end)
 		add_action(items, "Yank code block", "Copy the fenced code block under the output cursor", "<leader>aY", "session", function()
 			M.yank_code_block()
@@ -6512,6 +6522,9 @@ function M.output_help_items(state)
 		})
 		vim.cmd("copen")
 	end)
+	add_action(items, "Draft code block", "Insert the fenced code block under the output cursor into the prompt", ":AcpCodeBlockDraft", "output", function()
+		M.draft_code_block()
+	end)
 	add_action(items, "Output locations", "Browse local file references from the transcript", "<leader>ag", "output", function()
 		open_output_locations(state)
 	end)
@@ -6670,6 +6683,68 @@ function M.open_code_blocks_quickfix()
 		items = output.code_block_quickfix_items(blocks, state.output_buf),
 	})
 	vim.cmd("copen")
+end
+
+function M.draft_code_block()
+	local state = current_state()
+	if not state or not valid_buf(state.output_buf) or not valid_buf(state.input_buf) then
+		notify("No ACP code block is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local context_info = output_cursor_context(state)
+	if not context_info then
+		notify("ACP output window is not visible", vim.log.levels.WARN)
+		return false
+	end
+
+	local block = context_info.code_block
+	if not block then
+		notify("No ACP code block found under the cursor", vim.log.levels.WARN)
+		return false
+	end
+
+	local text = output.code_block_text(block)
+	if not text or text == "" then
+		notify("ACP code block under the cursor is empty", vim.log.levels.WARN)
+		return false
+	end
+
+	local language = tostring(block.language or block.filetype or "text"):gsub("%s+", "")
+	if language == "" then
+		language = "text"
+	end
+	append_input_text(
+		state,
+		table.concat({
+			"Use this ACP output code block as context for a follow-up.",
+			"",
+			("ACP output code block (%s, output lines %d-%d):"):format(
+				language,
+				block.start_line or 1,
+				block.end_line or block.start_line or 1
+			),
+			"",
+			("```%s"):format(language),
+			text,
+			"```",
+			"",
+			"Request:",
+		}, "\n")
+	)
+	pulse_output_section(state, {
+		line1 = block.start_line,
+		line2 = block.end_line,
+	})
+	if valid_win(state.input_win) then
+		vim.api.nvim_set_current_win(state.input_win)
+	end
+	local count = block.line_count or #block.lines
+	notify(
+		("Drafted ACP %s code block into prompt (%d line%s)"):format(language, count, count == 1 and "" or "s"),
+		vim.log.levels.INFO
+	)
+	return true
 end
 
 function M.yank_code_block()

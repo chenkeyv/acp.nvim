@@ -124,6 +124,7 @@ test("setup registers public user commands", function()
 		"AcpOutputPrevItem",
 		"AcpCodeBlocks",
 		"AcpCodeBlocksQuickfix",
+		"AcpCodeBlockDraft",
 		"AcpCodeBlockYank",
 		"AcpOutputLocations",
 		"AcpOutputQuickfix",
@@ -1230,6 +1231,7 @@ test("output dashboard and section helpers are rendered", function()
 	})
 	ok(code_hint:find("code lua", 1, true))
 	ok(code_hint:find("Tree-sitter injection", 1, true))
+	ok(code_hint:find(":AcpCodeBlockDraft draft", 1, true))
 	ok(code_hint:find("]o/[o items", 1, true))
 	local code_hint_chunks = acp_output.cursor_hint_chunks({ "Agent", "```lua", "print(1)", "```" }, 3, 0, {
 		language_injection = true,
@@ -3088,6 +3090,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local output_help_text = table.concat(vim.api.nvim_buf_get_lines(output_help_buf, 0, -1, false), "\n")
 		ok(output_help_text:find("Output map", 1, true))
 		ok(output_help_text:find("Code blocks quickfix", 1, true))
+		ok(output_help_text:find("Draft code block", 1, true))
 		ok(output_help_text:find("<leader>ax", 1, true))
 		local help_preview_found = false
 		for _, winid in ipairs(vim.api.nvim_list_wins()) do
@@ -3312,8 +3315,12 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(vim.bo[output_actions_buf].filetype, "acp-output-actions")
 		local action_lines = vim.api.nvim_buf_get_lines(output_actions_buf, 0, -1, false)
 		local yank_code_row
+		local draft_code_action = false
 		local code_quickfix_action = false
 		for index, action_line in ipairs(action_lines) do
+			if action_line:find("Draft code block", 1, true) then
+				draft_code_action = true
+			end
 			if action_line:find("Code blocks quickfix", 1, true) then
 				code_quickfix_action = true
 			end
@@ -3322,6 +3329,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(yank_code_row, "output actions should include code-block actions")
+		ok(draft_code_action, "output actions should include code-block draft")
 		ok(code_quickfix_action, "output actions should include code-block quickfix")
 		vim.api.nvim_win_set_cursor(0, { yank_code_row, 0 })
 		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
@@ -3342,6 +3350,18 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.fn.setreg('"', unnamed_register, unnamed_register_type)
 		unnamed_register = nil
 		unnamed_register_type = nil
+
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "" })
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd("AcpCodeBlockDraft")
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+		local output_code_prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
+		ok(output_code_prompt:find("Use this ACP output code block as context", 1, true))
+		ok(output_code_prompt:find("ACP output code block %(lua, output lines %d+%-%d+%):", 1, false))
+		ok(output_code_prompt:find("```lua", 1, true))
+		ok(output_code_prompt:find("print%('from acp'%)", 1, false))
+		ok(output_code_prompt:find("Request:", 1, true))
+		vim.api.nvim_set_current_win(output_win)
 
 		vim.cmd("AcpOutputOpen")
 		local direct_code_buf = vim.api.nvim_get_current_buf()
@@ -3824,6 +3844,7 @@ test("actions command opens a session action palette", function()
 		local inspect_output = false
 		local output_actions = false
 		local code_blocks_quickfix = false
+		local draft_code_block = false
 		local yank_code_block = false
 		local diagnostics_quickfix = false
 		local smart_context_action = false
@@ -3878,6 +3899,9 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Code blocks quickfix", 1, true) then
 				code_blocks_quickfix = true
+			end
+			if line:find("Draft code block", 1, true) then
+				draft_code_block = true
 			end
 			if line:find("Yank code block", 1, true) then
 				yank_code_block = true
@@ -3986,6 +4010,7 @@ test("actions command opens a session action palette", function()
 		ok(inspect_output, "action palette should include output inspect")
 		ok(output_actions, "action palette should include output actions")
 		ok(code_blocks_quickfix, "action palette should include code blocks quickfix")
+		ok(draft_code_block, "action palette should include code block draft")
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
 		ok(workspace_diagnostics, "action palette should include workspace diagnostics")
