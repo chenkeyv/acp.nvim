@@ -160,7 +160,7 @@ function M.picker_lines(actions)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, ("Press <Enter> to run, or q/<Esc> to close. %s"):format(icons.key))
+	table.insert(lines, ("%s <Enter> run  %s q/<Esc> close"):format(icons.enter, icons.close))
 	return lines, line_actions
 end
 
@@ -187,8 +187,8 @@ function M.preview(action)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, ("%s Press <Enter> to run this workflow."):format(icons.send))
-	table.insert(lines, ("%s q/<Esc> closes the picker."):format(icons.key))
+	table.insert(lines, ("%s <Enter> runs this workflow."):format(icons.enter))
+	table.insert(lines, ("%s q/<Esc> closes the picker."):format(icons.close))
 
 	return {
 		lines = lines,

@@ -216,7 +216,10 @@ local function refresh_output_highlights(state)
 				if line_number == block.start_line then
 					local prefix = state.output_language_injection and " inject:" or " lang:"
 					opts.virt_text = {
-						{ ("%s%s->%s "):format(prefix, block.language, block.filetype or "text"), "AcpInjectedLanguage" },
+						{
+							("%s%s %s %s "):format(prefix, block.language, icons.arrow_right, block.filetype or "text"),
+							"AcpInjectedLanguage",
+						},
 					}
 					opts.virt_text_pos = "right_align"
 					opts.virt_lines = {
@@ -7433,7 +7436,7 @@ function M.rename_symbol()
 			end
 			append_input_text(state, prompt)
 			if not state.busy then
-				set_run_status(state, ("rename: %s -> %s"):format(current_name, new_name))
+				set_run_status(state, ("rename: %s %s %s"):format(current_name, icons.arrow_right, new_name))
 			end
 			if valid_win(state.input_win) then
 				vim.api.nvim_set_current_win(state.input_win)

@@ -75,7 +75,7 @@ local function apply_highlights(bufnr, lines)
 		elseif line:find("No matching picker entries", 1, true) then
 			add_line_hl(bufnr, row, "AcpPickerEmpty")
 			highlight_first_token(bufnr, row, line, "AcpPickerIcon")
-		elseif line:match("^Press ") then
+		elseif line:match("^Press ") or line:find(icons.key, 1, true) == 1 then
 			add_line_hl(bufnr, row, "AcpPickerFooter")
 			highlight_key_tokens(bufnr, row, line)
 			local first, last = line:find(icons.key, 1, true)

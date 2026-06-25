@@ -165,6 +165,18 @@ local function flatten_chunks(chunks)
 	return table.concat(text)
 end
 
+local function ui_hint(icon, text)
+	return ("%s %s"):format(icon or icons.key, text or "")
+end
+
+local function ui_hints(items)
+	local parts = {}
+	for _, item in ipairs(items or {}) do
+		table.insert(parts, ui_hint(item[1], item[2]))
+	end
+	return table.concat(parts, "  ")
+end
+
 local function position_percent(line, total)
 	total = tonumber(total) or 0
 	if total <= 0 then
@@ -282,16 +294,17 @@ end
 function M.dashboard_lines(state, opts)
 	opts = opts or {}
 	local key_hints = (
-		"Keys: %s ? actions | %s K inspect | %s ]o/[o items | %s <leader>ax search | %s gf refs | %s <leader>ay yank | %s [[/]] sections | %s <leader>av outline"
-	):format(
-		icons.key,
-		icons.inspect,
-		icons.jump,
-		icons.search,
-		icons.reference,
-		icons.yank,
-		icons.section,
-		icons.map
+		"Keys: "
+		.. ui_hints({
+			{ icons.help, "? actions" },
+			{ icons.inspect, "K inspect" },
+			{ icons.jump, "]o/[o items" },
+			{ icons.search, "<leader>ax search" },
+			{ icons.reference, "gf refs" },
+			{ icons.yank, "<leader>ay yank" },
+			{ icons.section, "[[/]] sections" },
+			{ icons.map, "<leader>av outline" },
+		})
 	)
 	return {
 		("ACP: %s  %s"):format(clean(state and state.adapter) or "?", icons.acp),
@@ -381,7 +394,7 @@ function M.activity_separator(line)
 			icons.tool,
 			"TOOL UPDATE:",
 			short_label((line:gsub("^Tool update:%s*", ""))),
-			"K inspect  " .. icons.jump .. " ]o/[o items"
+			ui_hints({ { icons.inspect, "K inspect" }, { icons.jump, "]o/[o items" } })
 		)
 	end
 	if line:match("^Tool:") then
@@ -389,7 +402,7 @@ function M.activity_separator(line)
 			icons.tool,
 			"TOOL:",
 			short_label((line:gsub("^Tool:%s*", ""))),
-			"K inspect  " .. icons.jump .. " ]o/[o items"
+			ui_hints({ { icons.inspect, "K inspect" }, { icons.jump, "]o/[o items" } })
 		)
 	end
 	if line:match("^Terminal:") then
@@ -397,14 +410,19 @@ function M.activity_separator(line)
 			icons.terminal,
 			"TERMINAL:",
 			short_label((line:gsub("^Terminal:%s*", ""))),
-			"K inspect  " .. icons.jump .. " ]o/[o items"
+			ui_hints({ { icons.inspect, "K inspect" }, { icons.jump, "]o/[o items" } })
 		)
 	end
 	if line:match("^Terminal output truncated") then
-		return section_separator(icons.warning, "TERMINAL WARNING:", "output truncated", "<leader>ae problems")
+		return section_separator(icons.warning, "TERMINAL WARNING:", "output truncated", ui_hint(icons.error, "<leader>ae problems"))
 	end
 	if line:match("^stderr:") then
-		return section_separator(icons.error, "STDERR:", "problem output", "K inspect  <leader>ae problems")
+		return section_separator(
+			icons.error,
+			"STDERR:",
+			"problem output",
+			ui_hints({ { icons.inspect, "K inspect" }, { icons.error, "<leader>ae problems" } })
+		)
 	end
 end
 
@@ -417,32 +435,32 @@ function M.activity_lens_chunks(line, frame)
 	if line:match("^Tool update:") then
 		label = (" %s TOOL UPDATE "):format(icons.tool)
 		title = clean(line:gsub("^Tool update:%s*", "")) or "updated"
-		hint = "K inspect | ]o/[o items | ? actions"
+		hint = ui_hints({ { icons.inspect, "K inspect" }, { icons.jump, "]o/[o items" }, { icons.help, "? actions" } })
 		hl = "AcpOutputActivityTool"
 	elseif line:match("^Tool:") then
 		label = (" %s TOOL CALL "):format(icons.tool)
 		title = clean(line:gsub("^Tool:%s*", "")) or "tool"
-		hint = "K inspect | ]o/[o items | ? actions"
+		hint = ui_hints({ { icons.inspect, "K inspect" }, { icons.jump, "]o/[o items" }, { icons.help, "? actions" } })
 		hl = "AcpOutputActivityTool"
 	elseif line:match("^Terminal:") then
 		label = (" %s TERMINAL "):format(icons.terminal)
 		title = clean(line:gsub("^Terminal:%s*", "")) or "terminal"
-		hint = "streaming output | K inspect | <leader>ae problems"
+		hint = ui_hints({ { icons.terminal, "streaming output" }, { icons.inspect, "K inspect" }, { icons.error, "<leader>ae problems" } })
 		hl = "AcpOutputActivityTerminal"
 	elseif line:match("^Terminal output truncated") then
 		label = (" %s TERMINAL WARN "):format(icons.warning)
 		title = "output truncated"
-		hint = "<leader>ae problems | K inspect"
+		hint = ui_hints({ { icons.error, "<leader>ae problems" }, { icons.inspect, "K inspect" } })
 		hl = "AcpOutputActivityProblem"
 	elseif line:match("^stderr:") then
 		label = (" %s STDERR "):format(icons.error)
 		title = clean(line:gsub("^stderr:%s*", "")) or "problem output"
-		hint = "<leader>ae problems | K inspect"
+		hint = ui_hints({ { icons.error, "<leader>ae problems" }, { icons.inspect, "K inspect" } })
 		hl = "AcpOutputActivityProblem"
 	elseif line:match("^Wrote ") then
 		label = (" %s FILE WRITE "):format(icons.file)
 		title = clean(line:gsub("^Wrote%s+", "")) or "file"
-		hint = ":AcpChanges preview | <leader>af files"
+		hint = ui_hints({ { icons.changes, ":AcpChanges preview" }, { icons.file, "<leader>af files" } })
 		hl = "AcpOutputActivityFile"
 	else
 		return nil
@@ -902,7 +920,7 @@ function M.outline_lines(sections, opts)
 		end
 	end
 	table.insert(lines, "")
-	table.insert(lines, ("Press <Enter> to jump, or q/<Esc> to close. %s"):format(icons.key))
+	table.insert(lines, ui_hints({ { icons.enter, "<Enter> jump" }, { icons.close, "q/<Esc> close" } }))
 	return lines, line_sections
 end
 
@@ -1000,7 +1018,8 @@ function M.output_map_lines(entries, opts)
 		end
 		local line1 = tonumber(entry.line) or 1
 		local line2 = tonumber(entry.line2) or line1
-		local marker = current_line and current_line >= line1 and current_line <= line2 and icons.location or " "
+		local marker = current_line and current_line >= line1 and current_line <= line2 and icons.location
+			or icons.pulse_empty
 		local progress = position_percent(line1, total) or "   ?"
 		local bar = progress_bar(line1, total, opts.bar_width or 10)
 		local token = map_kind_tokens[entry.kind] or icons.map
@@ -1017,13 +1036,18 @@ function M.output_map_lines(entries, opts)
 	end
 
 	if #lines == 3 then
-		table.insert(lines, "No transcript map entries yet")
+		table.insert(lines, ("%s No transcript map entries yet"):format(icons.note))
 	end
 
 	table.insert(lines, "")
 	table.insert(
 		lines,
-		("Press <Enter> to jump, K to preview, Q for quickfix, or q/<Esc> to close. %s"):format(icons.key)
+		ui_hints({
+			{ icons.enter, "<Enter> jump" },
+			{ icons.inspect, "K preview" },
+			{ icons.quickfix, "Q quickfix" },
+			{ icons.close, "q/<Esc> close" },
+		})
 	)
 	return lines, line_entries
 end
@@ -1044,7 +1068,7 @@ local function output_line_context(lines, entry)
 	local end_line = math.min(line_count, line + 5)
 	local preview = {}
 	for index = start_line, end_line do
-		local marker = index == line and icons.location or " "
+		local marker = index == line and icons.location or icons.pulse_empty
 		table.insert(preview, ("%s %4d  %s"):format(marker, index, lines[index] or ""))
 	end
 
@@ -1171,7 +1195,8 @@ function M.live_status_label(state, frame)
 	if #status > 32 then
 		status = status:sub(1, 29) .. "..."
 	end
-	return (" %s live: %s %s "):format(M.animation_frame(frame), status, M.motion_frame(frame)), "AcpOutputLive"
+	return (" %s %s live: %s %s "):format(M.animation_frame(frame), icons.status, status, M.motion_frame(frame)),
+		"AcpOutputLive"
 end
 
 function M.ghost_text(state, lines, frame)
@@ -1189,9 +1214,12 @@ function M.ghost_text_chunks(state, lines, frame)
 			{ ("%s FLOW "):format(icons.map), "AcpOutputSkyline" },
 			{ M.skyline(lines, { width = 18 }), "AcpOutputRail" },
 			{
-				(" | %d sections | %d code | %d refs"):format(
+				(" | %s %d sections  %s %d code  %s %d refs"):format(
+					icons.section,
 					stats.sections or 0,
+					icons.code,
 					stats.code_blocks or 0,
+					icons.reference,
 					stats.locations or 0
 				),
 				"AcpGhostText",
@@ -1202,7 +1230,14 @@ function M.ghost_text_chunks(state, lines, frame)
 	if #M.sections(lines) <= 1 then
 		return {
 			{ ("%s Ready"):format(icons.idle), "AcpOutputSkyline" },
-			{ " - draft in prompt | ? actions | <leader>ax search", "AcpGhostText" },
+			{
+				("  %s draft in prompt  %s ? actions  %s <leader>ax search"):format(
+					icons.prompt,
+					icons.help,
+					icons.search
+				),
+				"AcpGhostText",
+			},
 		}
 	end
 
@@ -1210,10 +1245,15 @@ function M.ghost_text_chunks(state, lines, frame)
 		{ ("%s Idle "):format(icons.idle), "AcpOutputIdle" },
 		{ M.skyline(lines, { width = 18 }), "AcpOutputRail" },
 		{
-			(" | %d sections | %d code | %d refs | [[/]] sections | <leader>av outline"):format(
+			(" | %s %d sections  %s %d code  %s %d refs  %s [[/]] sections  %s <leader>av outline"):format(
+				icons.section,
 				stats.sections or 0,
+				icons.code,
 				stats.code_blocks or 0,
-				stats.locations or 0
+				icons.reference,
+				stats.locations or 0,
+				icons.section,
+				icons.map
 			),
 			"AcpGhostText",
 		},
@@ -1323,12 +1363,12 @@ function M.code_block_lens(block, injection_active, frame)
 	return {
 		{ (" %s CODE "):format(icons.code), "AcpCodeBlockHeader" },
 		{ language, "AcpInjectedLanguage" },
-		{ (" -> %s "):format(filetype), "AcpCodeBlockHeader" },
-		{ ("| %s | "):format(count), "AcpCodeBlockLensMuted" },
-		{ ("%s | "):format(scope), "AcpOutputSkylineDim" },
+		{ (" %s %s "):format(icons.arrow_right, filetype), "AcpCodeBlockHeader" },
+		{ ("%s %s "):format(icons.section, count), "AcpCodeBlockLensMuted" },
+		{ ("%s %s "):format(icons.location, scope), "AcpOutputSkylineDim" },
 		{ injection, injection_hl },
-		{ (" | %s | "):format(state), state_hl },
-		{ "<Enter> open | <leader>aY yank ", "AcpOutputHint" },
+		{ (" %s %s "):format(block.closed == false and icons.busy or icons.idle, state), state_hl },
+		{ ui_hints({ { icons.enter, "<Enter> open" }, { icons.yank, "<leader>aY yank" } }) .. " ", "AcpOutputHint" },
 	}
 end
 
@@ -1388,9 +1428,9 @@ function M.injection_badge_chunks(block, injection_active, frame)
 	local injection_label = injection_active and "TS" or "fence"
 	return {
 		{ (" %s "):format(M.motion_frame(frame)), "AcpOutputMotion" },
-		{ " INJECT ", injection_hl },
+		{ (" %s INJECT "):format(icons.treesitter), injection_hl },
 		{ ("%s "):format(filetype), "AcpInjectedLanguage" },
-		{ ("%s L%d-%d "):format(injection_label, line1, line2), "AcpOutputSkylineDim" },
+		{ ("%s %s L%d-%d "):format(icons.location, injection_label, line1, line2), "AcpOutputSkylineDim" },
 	}
 end
 
@@ -1419,9 +1459,12 @@ function M.code_block_lines(blocks)
 	table.insert(lines, "")
 	table.insert(
 		lines,
-		("Press <Enter> to open a scratch buffer, Q for quickfix, / to filter, or q/<Esc> to close. %s"):format(
-			icons.key
-		)
+		ui_hints({
+			{ icons.enter, "<Enter> open scratch" },
+			{ icons.quickfix, "Q quickfix" },
+			{ icons.filter, "/ filter" },
+			{ icons.close, "q/<Esc> close" },
+		})
 	)
 	return lines, line_blocks
 end
@@ -1530,7 +1573,12 @@ function M.file_reference_lines(references)
 	table.insert(lines, "")
 	table.insert(
 		lines,
-		("Press <Enter> to jump, Q for quickfix, / to filter, or q/<Esc> to close. %s"):format(icons.key)
+		ui_hints({
+			{ icons.enter, "<Enter> jump" },
+			{ icons.quickfix, "Q quickfix" },
+			{ icons.filter, "/ filter" },
+			{ icons.close, "q/<Esc> close" },
+		})
 	)
 	return lines, line_references
 end
@@ -1744,7 +1792,12 @@ function M.output_item_lines(items, opts)
 	table.insert(lines, "")
 	table.insert(
 		lines,
-		("Type / to filter, press <Enter> to jump, Q for quickfix, or q/<Esc> to close. %s"):format(icons.key)
+		ui_hints({
+			{ icons.filter, "/ filter" },
+			{ icons.enter, "<Enter> jump" },
+			{ icons.quickfix, "Q quickfix" },
+			{ icons.close, "q/<Esc> close" },
+		})
 	)
 	return lines, line_items
 end
@@ -1877,15 +1930,22 @@ function M.skyline_chunks(lines, opts)
 		{ M.skyline(lines, { width = opts.width or 24, current_line = opts.current_line, cwd = opts.cwd }), "AcpOutputRail" },
 		{ (" %s "):format(M.animation_frame(opts.frame)), "AcpOutputSpark" },
 		{
-			("sections %d | code %d | refs %d | changes %d | "):format(
+			("%s %d sections  %s %d code  %s %d refs  %s %d changes  "):format(
+				icons.section,
 				stats.sections or 0,
+				icons.code,
 				stats.code_blocks or 0,
+				icons.reference,
 				stats.locations or 0,
+				icons.changes,
 				stats.changes or 0
 			),
 			"AcpOutputSkylineDim",
 		},
-		{ ("inject %s:%s | "):format(injection, language_label), opts.language_injection and "AcpInjectedLanguageActive" or "AcpInjectedLanguage" },
+		{
+			("%s inject %s:%s  "):format(icons.treesitter, injection, language_label),
+			opts.language_injection and "AcpInjectedLanguageActive" or "AcpInjectedLanguage",
+		},
 		{ status, status_hl },
 	}
 end
@@ -1948,7 +2008,10 @@ function M.cursor_ribbon_chunks(lines, lnum, col, opts)
 		table.insert(chunks, { (item_kind or "item"):upper(), output_item_hl(item_kind) })
 		table.insert(chunks, { item_label and (" " .. item_label) or "", "AcpOutputHint" })
 	else
-		table.insert(chunks, { " | [[/]] sections | ]o/[o items", "AcpOutputHint" })
+		table.insert(
+			chunks,
+			{ " | " .. ui_hints({ { icons.section, "[[/]] sections" }, { icons.jump, "]o/[o items" } }), "AcpOutputHint" }
+		)
 	end
 
 	return chunks
@@ -1974,7 +2037,15 @@ function M.cursor_hint_chunks(lines, lnum, col, opts)
 	if M.file_reference_at(lines, line_number, col, { cwd = opts.cwd }) then
 		return {
 			{ (" %s REF "):format(icons.reference), "AcpOutputReferenceBadge" },
-			{ " ? menu | K inspect | <Enter> open ref | ]o/[o items", "AcpOutputHint" },
+			{
+				" " .. ui_hints({
+					{ icons.help, "? menu" },
+					{ icons.inspect, "K inspect" },
+					{ icons.enter, "<Enter> open ref" },
+					{ icons.jump, "]o/[o items" },
+				}),
+				"AcpOutputHint",
+			},
 		}
 	end
 
@@ -1987,21 +2058,46 @@ function M.cursor_hint_chunks(lines, lnum, col, opts)
 			{ (" %s CODE "):format(icons.code), "AcpCodeBlockHeader" },
 			{ ("code %s "):format(filetype), "AcpInjectedLanguage" },
 			{ ("%s "):format(injection), injection_hl },
-			{ "? menu | K inspect | <Enter> open code | <leader>aY yank | ]o/[o items", "AcpOutputHint" },
+			{
+				ui_hints({
+					{ icons.help, "? menu" },
+					{ icons.inspect, "K inspect" },
+					{ icons.enter, "<Enter> open code" },
+					{ icons.yank, "<leader>aY yank" },
+					{ icons.jump, "]o/[o items" },
+				}),
+				"AcpOutputHint",
+			},
 		}
 	end
 
 	if line:match("^Status:%s+error") or line:match("^stderr:") or line:match("^Terminal output truncated") then
 		return {
 			{ (" %s PROBLEM "):format(icons.error), "AcpBadgeError" },
-			{ " ? menu | K inspect | ]o/[o items | <leader>ae problems", "AcpOutputHint" },
+			{
+				" " .. ui_hints({
+					{ icons.help, "? menu" },
+					{ icons.inspect, "K inspect" },
+					{ icons.jump, "]o/[o items" },
+					{ icons.error, "<leader>ae problems" },
+				}),
+				"AcpOutputHint",
+			},
 		}
 	end
 
 	if M.is_section(line) then
 		return {
 			{ (" %s SECTION "):format(icons.section), "AcpSectionStats" },
-			{ " ? menu | K inspect | <leader>ai draft | <leader>ay yank", "AcpOutputHint" },
+			{
+				" " .. ui_hints({
+					{ icons.help, "? menu" },
+					{ icons.inspect, "K inspect" },
+					{ icons.prompt, "<leader>ai draft" },
+					{ icons.yank, "<leader>ay yank" },
+				}),
+				"AcpOutputHint",
+			},
 		}
 	end
 	return nil
@@ -2085,7 +2181,14 @@ function M.transcript_entry_lines(entries, opts)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, ("Type / to filter, press <Enter> to jump, or q/<Esc> to close. %s"):format(icons.key))
+	table.insert(
+		lines,
+		ui_hints({
+			{ icons.filter, "/ filter" },
+			{ icons.enter, "<Enter> jump" },
+			{ icons.close, "q/<Esc> close" },
+		})
+	)
 	return lines, line_entries
 end
 

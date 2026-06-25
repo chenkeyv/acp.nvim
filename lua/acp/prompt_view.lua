@@ -179,7 +179,12 @@ function M.info(lines, opts)
 
 	if content == "" then
 		local hint = opts.busy and ("%s Agent is responding - <leader>aq stop"):format(icons.busy)
-			or ("%s Ask ACP - <C-s> send | ? actions | @context completion"):format(icons.prompt)
+			or ("%s Ask ACP  %s <C-s> send  %s ? actions  %s @context completion"):format(
+				icons.prompt,
+				icons.send,
+				icons.help,
+				icons.source
+			)
 		return {
 			empty = true,
 			ghost = hint,

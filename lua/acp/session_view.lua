@@ -97,7 +97,7 @@ function M.panel(sessions, current_id, change_count)
 		local changes = change_count and change_count(session) or 0
 		local status = status_label(session)
 		local badge, badge_hl = status_style(status)
-		local marker = session.id == current_id and icons.location or " "
+		local marker = session.id == current_id and icons.location or icons.pulse_empty
 		local model = clean(session.model)
 		local title = ("%s #%d %s%s %s"):format(
 			marker,
@@ -177,7 +177,7 @@ function M.restore_lines(list)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, ("Press <Enter> to restore, or q/<Esc> to close. %s"):format(icons.key))
+	table.insert(lines, ("%s <Enter> restore  %s q/<Esc> close"):format(icons.enter, icons.close))
 	return lines, line_sessions
 end
 

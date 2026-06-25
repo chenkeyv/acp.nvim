@@ -7,7 +7,7 @@ function M.title(icon, text)
 end
 
 function M.footer(text)
-	return ("%s %s"):format(text or "Press q/<Esc> to close.", icons.key)
+	return ("%s %s"):format(icons.key, text or "Press q/<Esc> to close.")
 end
 
 function M.row(index, icon, text)
