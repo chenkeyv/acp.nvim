@@ -223,6 +223,14 @@ test("action picker lines render workflow details", function()
 	ok(preview_text:find("Scope: session", 1, true))
 	ok(preview_text:find("Key: <leader>av", 1, true))
 	ok(preview_text:find("<Enter> to run", 1, true))
+
+	local combined = actions.previewer(line_actions, function()
+		return { lines = { "Context payload" }, filetype = "acp" }
+	end)(3, {})
+	local combined_text = table.concat(combined.lines, "\n")
+	ok(combined_text:find("Output outline", 1, true))
+	ok(combined_text:find("Context", 1, true))
+	ok(combined_text:find("Context payload", 1, true))
 end)
 
 test("floating picker filters rows while preserving source row mapping", function()
@@ -2950,6 +2958,18 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local output_actions_text = table.concat(vim.api.nvim_buf_get_lines(output_actions_buf, 0, -1, false), "\n")
 		ok(output_actions_text:find("Inspect item", 1, true))
 		ok(output_actions_text:find("Output problems", 1, true))
+		local output_action_preview_found = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local bufnr = vim.api.nvim_win_get_buf(winid)
+			if bufnr ~= output_actions_buf and vim.bo[bufnr].buftype == "nofile" and vim.bo[bufnr].filetype == "acp" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+				if preview:find("Inspect item", 1, true) and preview:find("Context", 1, true) then
+					output_action_preview_found = true
+					break
+				end
+			end
+		end
+		ok(output_action_preview_found, "output actions should show action metadata and context preview")
 		keys = vim.api.nvim_replace_termcodes("q", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		vim.api.nvim_set_current_win(output_win)
@@ -3974,7 +3994,11 @@ test("chat marks captured source ranges and clears them on close", function()
 			local bufnr = vim.api.nvim_win_get_buf(winid)
 			if bufnr ~= source_actions_buf and vim.bo[bufnr].buftype == "nofile" then
 				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
-				if preview:find("print(value + other)", 1, true) then
+				if
+					preview:find("Focus chat", 1, true)
+					and preview:find("Context", 1, true)
+					and preview:find("print(value + other)", 1, true)
+				then
 					preview_found = true
 				end
 			end

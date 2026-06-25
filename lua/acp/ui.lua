@@ -2636,9 +2636,9 @@ local function open_output_actions(state)
 		title_icon = icons.action,
 		submit_desc = "Run ACP output action",
 		close_desc = "Close ACP output actions",
-		preview = function()
+		preview = actions.previewer(line_actions, function()
 			return output_inspector_preview(context_info)
-		end,
+		end),
 		on_submit = function(row, view)
 			local action = line_actions[row]
 			if not action then
@@ -2941,9 +2941,9 @@ local function open_prompt_actions(state)
 		title_icon = icons.prompt,
 		submit_desc = "Run ACP prompt action",
 		close_desc = "Close ACP prompt actions",
-		preview = function()
+		preview = actions.previewer(line_actions, function()
 			return prompt_actions_preview(state)
-		end,
+		end),
 		on_submit = function(row, view)
 			local action = line_actions[row]
 			if not action then
@@ -5213,13 +5213,13 @@ local function open_source_actions(state)
 		title_icon = icons.source,
 		submit_desc = "Run ACP source action",
 		close_desc = "Close ACP source actions",
-		preview = function()
+		preview = actions.previewer(line_actions, function()
 			return source_preview(
 				state.source.bufnr,
 				source_range(state.source),
 				(" ACP source #%d "):format(state.id)
 			)
-		end,
+		end),
 		on_submit = function(row, view)
 			local action = line_actions[row]
 			if not action then
