@@ -2,6 +2,8 @@ local M = {}
 local chrome = require("acp.picker_chrome")
 local icons = require("acp.icons")
 
+local review_ns = vim.api.nvim_create_namespace("acp.nvim.file_review")
+
 local function split_lines(text)
 	if text == "" then
 		return {}
@@ -50,6 +52,60 @@ local function request_path(request)
 	return request.display_path or request.path or "[No Name]"
 end
 
+function M.define_highlights()
+	vim.api.nvim_set_hl(0, "AcpFileReviewHeader", { fg = "#7aa2f7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpFileReviewApply", { fg = "#9ece6a", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpFileReviewCancel", { link = "DiagnosticWarn", default = true })
+	vim.api.nvim_set_hl(0, "AcpFileReviewPath", { fg = "#7dcfff", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpFileReviewDelete", { link = "DiffDelete", default = true })
+	vim.api.nvim_set_hl(0, "AcpFileReviewAdd", { link = "DiffAdd", default = true })
+	vim.api.nvim_set_hl(0, "AcpFileReviewHunk", { link = "DiffChange", default = true })
+	vim.api.nvim_set_hl(0, "AcpFileReviewKey", { fg = "#e0af68", bold = true, default = true })
+end
+
+local function add_line_hl(bufnr, row, group)
+	pcall(vim.api.nvim_buf_set_extmark, bufnr, review_ns, row, 0, {
+		line_hl_group = group,
+		priority = 75,
+	})
+end
+
+local function add_hl(bufnr, row, start_col, end_col, group)
+	if end_col <= start_col then
+		return
+	end
+	pcall(vim.api.nvim_buf_set_extmark, bufnr, review_ns, row, start_col, {
+		end_col = end_col,
+		hl_group = group,
+		priority = 90,
+	})
+end
+
+local function apply_highlights(bufnr, lines)
+	vim.api.nvim_buf_clear_namespace(bufnr, review_ns, 0, -1)
+	for index, line in ipairs(lines or {}) do
+		local row = index - 1
+		if line:find("File write review", 1, true) or line:match("^Files:") then
+			add_line_hl(bufnr, row, "AcpFileReviewHeader")
+			add_hl(bufnr, row, 0, #line, "AcpFileReviewHeader")
+		elseif line:match("^1%.") then
+			add_line_hl(bufnr, row, "AcpFileReviewApply")
+			add_hl(bufnr, row, 0, 2, "AcpFileReviewKey")
+		elseif line:match("^2%.") then
+			add_line_hl(bufnr, row, "AcpFileReviewCancel")
+			add_hl(bufnr, row, 0, 2, "AcpFileReviewKey")
+		elseif line:match("^File") or line:match("^Current:") or line:match("^Proposed:") then
+			add_line_hl(bufnr, row, "AcpFileReviewPath")
+		elseif line:match("^%-%-%-") or line:match("^@@") then
+			add_line_hl(bufnr, row, "AcpFileReviewHunk")
+		elseif line:sub(1, 1) == "+" then
+			add_line_hl(bufnr, row, "AcpFileReviewAdd")
+		elseif line:sub(1, 1) == "-" then
+			add_line_hl(bufnr, row, "AcpFileReviewDelete")
+		end
+	end
+end
+
 function M.lines(request)
 	local requests = requests_for(request)
 	local count = #requests
@@ -93,6 +149,18 @@ local function close_window(winid, bufnr)
 	end
 end
 
+local function file_count(request)
+	return #requests_for(request)
+end
+
+local function review_winbar(request)
+	local count = file_count(request)
+	local noun = count == 1 and "file" or "files"
+	return (" %s ACP file write  %s %d %s  %s 1/a apply  %s 2/q cancel ")
+		:format(icons.file, icons.changes, count, noun, icons.key, icons.key)
+		:gsub("%%", "%%%%")
+end
+
 local function window_config(lines)
 	local width = 0
 	for _, line in ipairs(lines) do
@@ -117,6 +185,7 @@ end
 
 function M.select(request, callback)
 	local lines = M.lines(request)
+	M.define_highlights()
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_name(bufnr, "ACP://file-review")
 	vim.bo[bufnr].buftype = "nofile"
@@ -126,10 +195,12 @@ function M.select(request, callback)
 	vim.bo[bufnr].modifiable = true
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 	vim.bo[bufnr].modifiable = false
+	apply_highlights(bufnr, lines)
 
 	local winid = vim.api.nvim_open_win(bufnr, true, window_config(lines))
 	vim.wo[winid].wrap = false
 	vim.wo[winid].cursorline = true
+	vim.wo[winid].winbar = review_winbar(request)
 
 	local done = false
 	local finish = function(approved)

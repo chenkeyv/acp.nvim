@@ -7562,6 +7562,58 @@ test("file write review renders batched diffs", function()
 	ok(text:find("+return true", 1, true))
 end)
 
+test("file write review opens with winbar and diff highlights", function()
+	local bufnr, winid = file_review.select({
+		files = {
+			{
+				display_path = "lua/one.lua",
+				before = "return 1\n",
+				after = "return 2\n",
+			},
+			{
+				display_path = "lua/two.lua",
+				before = "",
+				after = "return true\n",
+			},
+		},
+	}, function() end)
+
+	ok(vim.api.nvim_win_is_valid(winid), "file review window should open")
+	eq(vim.bo[bufnr].filetype, "diff")
+	ok(vim.wo[winid].winbar:find(icons.file, 1, true))
+	ok(vim.wo[winid].winbar:find(icons.changes, 1, true))
+	ok(vim.wo[winid].winbar:find("2 files", 1, true))
+	ok(vim.wo[winid].winbar:find("1/a apply", 1, true))
+	ok(vim.wo[winid].winbar:find("2/q cancel", 1, true))
+
+	local ns = vim.api.nvim_get_namespaces()["acp.nvim.file_review"]
+	local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+	local add_hl = false
+	local delete_hl = false
+	local apply_hl = false
+	local cancel_hl = false
+	local path_hl = false
+	local key_hl = false
+	for _, mark in ipairs(marks) do
+		local details = mark[4] or {}
+		add_hl = add_hl or details.line_hl_group == "AcpFileReviewAdd"
+		delete_hl = delete_hl or details.line_hl_group == "AcpFileReviewDelete"
+		apply_hl = apply_hl or details.line_hl_group == "AcpFileReviewApply"
+		cancel_hl = cancel_hl or details.line_hl_group == "AcpFileReviewCancel"
+		path_hl = path_hl or details.line_hl_group == "AcpFileReviewPath"
+		key_hl = key_hl or details.hl_group == "AcpFileReviewKey"
+	end
+	ok(add_hl, "file review additions should be highlighted")
+	ok(delete_hl, "file review deletions should be highlighted")
+	ok(apply_hl, "file review apply action should be highlighted")
+	ok(cancel_hl, "file review cancel action should be highlighted")
+	ok(path_hl, "file review paths should be highlighted")
+	ok(key_hl, "file review keys should be highlighted")
+
+	vim.api.nvim_win_close(winid, true)
+	pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+end)
+
 test("quick file writes are reviewed as one batch", function()
 	local root = vim.fn.tempname()
 	vim.fn.mkdir(root, "p")
