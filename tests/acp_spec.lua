@@ -7689,6 +7689,53 @@ test("permission UI formats tool details and options", function()
 	ok(text:find("2. Deny", 1, true))
 end)
 
+test("permission UI opens with winbar and highlights", function()
+	local bufnr, winid = permission.select({
+		toolCall = {
+			title = "Edit file",
+			kind = "edit",
+			description = "Patch a source file",
+		},
+		options = {
+			{
+				optionId = "allow",
+				name = "Allow",
+				description = "Apply the edit",
+			},
+			{
+				optionId = "deny",
+				name = "Deny",
+			},
+		},
+	}, function() end)
+
+	ok(vim.api.nvim_win_is_valid(winid), "permission window should open")
+	eq(vim.bo[bufnr].filetype, "acp-permission")
+	ok(vim.wo[winid].winbar:find(icons.warning, 1, true))
+	ok(vim.wo[winid].winbar:find("2 options", 1, true))
+	ok(vim.wo[winid].winbar:find("1-9 choose", 1, true))
+	ok(vim.wo[winid].winbar:find("<CR> default", 1, true))
+	ok(vim.wo[winid].winbar:find("q cancel", 1, true))
+
+	local ns = vim.api.nvim_get_namespaces()["acp.nvim.permission"]
+	local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+	local header_hl = false
+	local option_hl = false
+	local key_hl = false
+	for _, mark in ipairs(marks) do
+		local details = mark[4] or {}
+		header_hl = header_hl or details.line_hl_group == "AcpPermissionHeader"
+		option_hl = option_hl or details.line_hl_group == "AcpPermissionOption"
+		key_hl = key_hl or details.hl_group == "AcpPermissionKey"
+	end
+	ok(header_hl, "permission header should be highlighted")
+	ok(option_hl, "permission options should be highlighted")
+	ok(key_hl, "permission keys should be highlighted")
+
+	vim.api.nvim_win_close(winid, true)
+	pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+end)
+
 test("permission request sends selected outcome", function()
 	local connection = Connection.new({
 		adapter = { command = { "missing-acp-test-command" }, timeout_ms = 10 },

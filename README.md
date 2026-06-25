@@ -99,7 +99,7 @@ This plugin provides an editor-native ACP chat surface:
 - LSP diagnostic fix drafts from the current buffer or visual range
 - quickfix export for source diagnostics from ACP diagnostic workflows
 - workspace diagnostics picker across loaded project buffers with source previews and quickfix export
-- floating permission chooser with numbered actions
+- floating permission chooser with winbar status, highlighted fields, and numbered actions
 - floating terminal command approval with live output in tool calls
 - floating batch file-write review with diff previews before applying agent edits
 - previewed changed-file picker with quickfix export for files written by the agent
