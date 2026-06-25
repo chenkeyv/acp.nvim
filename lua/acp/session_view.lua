@@ -53,13 +53,13 @@ local function stats_label(stats)
 
 	local parts = {}
 	if tonumber(stats.sections) and stats.sections > 0 then
-		table.insert(parts, ("%d sec"):format(stats.sections))
+		table.insert(parts, ("%s %d sec"):format(icons.section, stats.sections))
 	end
 	if tonumber(stats.code_blocks) and stats.code_blocks > 0 then
-		table.insert(parts, ("%d code"):format(stats.code_blocks))
+		table.insert(parts, ("%s %d code"):format(icons.code, stats.code_blocks))
 	end
 	if tonumber(stats.locations) and stats.locations > 0 then
-		table.insert(parts, ("%d loc"):format(stats.locations))
+		table.insert(parts, ("%s %d loc"):format(icons.location, stats.locations))
 	end
 	if #parts == 0 then
 		return nil
@@ -75,7 +75,7 @@ local function meta_label(session)
 	end
 	local source = short(session and session.source_label, 42)
 	if source then
-		table.insert(parts, source)
+		table.insert(parts, ("%s %s"):format(icons.source, source))
 	end
 	if #parts == 0 then
 		return nil
@@ -84,7 +84,7 @@ local function meta_label(session)
 end
 
 function M.panel(sessions, current_id, change_count)
-	local lines = { "Sessions", "" }
+	local lines = { ("%s Sessions"):format(icons.session), "" }
 	local line_ids = {}
 	local styles = {
 		[1] = {
@@ -114,9 +114,9 @@ function M.panel(sessions, current_id, change_count)
 			virt_text = { { badge, badge_hl } },
 		}
 
-		local detail = status
+		local detail = ("%s %s"):format(icons.status, status)
 		if changes > 0 then
-			detail = ("%s  %d change(s)"):format(detail, changes)
+			detail = ("%s  %s %d change(s)"):format(detail, icons.changes, changes)
 		end
 		table.insert(lines, ("  %s"):format(detail))
 		line_ids[#lines] = session.id
