@@ -141,14 +141,20 @@ function M.picker_lines(actions)
 		local key = clean(action.key)
 		local key_chip = key and ("  %s %s"):format(icons.key, key) or ""
 		local scope = clean(action.scope)
-		local scope_chip = scope and (" [%s] %s"):format(scope, scope_icon(scope)) or ""
+		local scope_chip = scope and ("  %s %s"):format(scope_icon(scope), scope) or ""
 		table.insert(
 			lines,
-			("%2d. %s %-24s%s"):format(index, action_icon(action), clean(action.label) or "Action", key_chip)
+			("%2d. %s %-24s%s%s"):format(
+				index,
+				action_icon(action),
+				clean(action.label) or "Action",
+				scope_chip,
+				key_chip
+			)
 		)
 		line_actions[#lines] = action
 		if action.detail and action.detail ~= "" then
-			table.insert(lines, ("    %s %s%s"):format(icons.note, clean(action.detail) or "", scope_chip))
+			table.insert(lines, ("    %s %s"):format(icons.note, clean(action.detail) or ""))
 			line_actions[#lines] = action
 		end
 	end
