@@ -9,6 +9,7 @@ local diagnostics = require("acp.diagnostics")
 local health = require("acp.health")
 local hover = require("acp.hover")
 local history = require("acp.history")
+local icons = require("acp.icons")
 local metadata = require("acp.metadata")
 local output = require("acp.output")
 local picker = require("acp.picker")
@@ -1201,18 +1202,28 @@ end
 local function code_block_scratch_winbar(block, syntax)
 	local line_count = block.line_count or #((block and block.lines) or {})
 	local language = block.language or block.filetype or "code"
-	return (" ACP %s code | %d line%s | %s | <leader>at scope | <leader>ai draft | gO output | <leader>aY yank | q close "):format(
+	local syntax_icon = syntax == "treesitter" and icons.treesitter or icons.file
+	return (" %s ACP %s code  %s %d line%s  %s %s  %s <leader>at scope  %s <leader>ai draft  %s gO output  %s <leader>aY yank  %s q close "):format(
+		icons.code,
 		language,
+		icons.section,
 		line_count,
 		line_count == 1 and "" or "s",
-		syntax or "filetype"
+		syntax_icon,
+		syntax or "filetype",
+		icons.scope,
+		icons.prompt,
+		icons.map,
+		icons.reference,
+		icons.key
 	)
 end
 
 local function output_inspector_winbar(preview, syntax)
 	local title = preview and preview.title and preview.title:gsub("^%s+", ""):gsub("%s+$", "") or "ACP output inspect"
 	local filetype = preview and preview.filetype or "acp"
-	return (" %s | %s | %s | q close "):format(title, filetype, syntax or "filetype")
+	local syntax_icon = syntax == "treesitter" and icons.treesitter or icons.file
+	return (" %s %s  %s %s  %s %s  %s q close "):format(icons.note, title, icons.code, filetype, syntax_icon, syntax or "filetype", icons.key)
 end
 
 local function close_output_inspector(state)

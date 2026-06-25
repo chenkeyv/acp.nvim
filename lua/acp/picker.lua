@@ -178,6 +178,29 @@ local function preview_syntax(bufnr, filetype)
 	return syntax
 end
 
+local function clean_preview_title(value, fallback)
+	local title = tostring(value or fallback or "ACP preview"):gsub("^%s+", ""):gsub("%s+$", "")
+	if title == "" then
+		return fallback or "ACP preview"
+	end
+	return title
+end
+
+local function preview_winbar(preview, syntax)
+	local filetype = preview and preview.filetype or "text"
+	local syntax_label = syntax == "treesitter" and "Tree-sitter" or "filetype"
+	local syntax_icon = syntax == "treesitter" and icons.treesitter or icons.file
+	return (" %s %s  %s %s  %s %s  %s q close "):format(
+		icons.note,
+		clean_preview_title(preview and preview.title, "ACP preview"),
+		icons.code,
+		filetype or "text",
+		syntax_icon,
+		syntax_label,
+		icons.key
+	)
+end
+
 function M.window_config(lines, opts)
 	opts = opts or {}
 
@@ -386,7 +409,7 @@ function M.open(opts)
 		vim.api.nvim_buf_set_lines(preview_bufnr, 0, -1, false, preview.lines)
 		vim.bo[preview_bufnr].filetype = preview.filetype or "text"
 		vim.bo[preview_bufnr].modifiable = false
-		preview_syntax(preview_bufnr, preview.filetype or "text")
+		local syntax = preview_syntax(preview_bufnr, preview.filetype or "text")
 
 		local preview_config = preview_window_config(preview)
 		if valid_win(preview_winid) then
@@ -399,6 +422,7 @@ function M.open(opts)
 			vim.wo[preview_winid].relativenumber = false
 			vim.wo[preview_winid].wrap = false
 		end
+		vim.wo[preview_winid].winbar = preview_winbar(preview, syntax):gsub("%%", "%%%%")
 		pcall(vim.api.nvim_win_set_cursor, preview_winid, { math.max(1, preview.cursor_line or 1), 0 })
 	end
 

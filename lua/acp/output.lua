@@ -196,20 +196,20 @@ end
 local function title_parts(state, opts)
 	opts = opts or {}
 	local parts = {
-		("ACP %s #%s"):format(clean(state and state.adapter) or "?", tostring(state and state.id or "?")),
-		clean(state and state.run_status) or (state and state.busy and "running" or "idle"),
+		("%s ACP %s #%s"):format(icons.session, clean(state and state.adapter) or "?", tostring(state and state.id or "?")),
+		("%s %s"):format(icons.status, clean(state and state.run_status) or (state and state.busy and "running" or "idle")),
 	}
 
 	local model = clean(state and state.model)
 	if model then
-		table.insert(parts, model)
+		table.insert(parts, ("%s %s"):format(icons.model, model))
 	end
 	local context_window = clean(state and state.context_window)
 	if context_window then
-		table.insert(parts, ("ctx %s"):format(format_count(context_window)))
+		table.insert(parts, ("%s ctx %s"):format(icons.context, format_count(context_window)))
 	end
 	if opts.change_count and opts.change_count > 0 then
-		table.insert(parts, ("%d change(s)"):format(opts.change_count))
+		table.insert(parts, ("%s %d change(s)"):format(icons.changes, opts.change_count))
 	end
 	if opts.current_item then
 		local item_label = clean(opts.current_item.label) or opts.current_item.kind or "item"
@@ -218,7 +218,8 @@ local function title_parts(state, opts)
 		end
 		table.insert(
 			parts,
-			("item %d/%d %s: %s"):format(
+			("%s item %d/%d %s: %s"):format(
+				icons.map,
 				opts.current_item.index or 1,
 				opts.current_item.total or 1,
 				(opts.current_item.kind or "item"):upper(),
@@ -231,7 +232,7 @@ local function title_parts(state, opts)
 		if #section_title > 36 then
 			section_title = section_title:sub(1, 33) .. "..."
 		end
-		table.insert(parts, ("at %s: %s"):format(opts.current_section.kind or "SECTION", section_title))
+		table.insert(parts, ("%s at %s: %s"):format(icons.section, opts.current_section.kind or "SECTION", section_title))
 	end
 
 	return parts
