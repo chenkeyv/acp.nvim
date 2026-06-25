@@ -1121,7 +1121,7 @@ end
 local function code_block_scratch_winbar(block, syntax)
 	local line_count = block.line_count or #((block and block.lines) or {})
 	local language = block.language or block.filetype or "code"
-	return (" ACP %s code | %d line%s | %s | <leader>aY yank | q close "):format(
+	return (" ACP %s code | %d line%s | %s | <leader>at scope | gO output | <leader>aY yank | q close "):format(
 		language,
 		line_count,
 		line_count == 1 and "" or "s",
@@ -1213,6 +1213,7 @@ local function open_output_code_block_buffer(state, block)
 		return false
 	end
 
+	local scratch_win
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	pcall(
 		vim.api.nvim_buf_set_name,
@@ -1234,15 +1235,110 @@ local function open_output_code_block_buffer(state, block)
 	})
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, block.lines)
 	vim.b[bufnr].acp_output_source = state.output_buf
+	vim.b[bufnr].acp_output_source_line = block.start_line
+	vim.b[bufnr].acp_output_source_end_line = block.end_line
 	local syntax = "filetype"
 	if vim.treesitter and vim.treesitter.start and block.filetype and block.filetype ~= "text" then
 		local ok = pcall(vim.treesitter.start, bufnr, block.filetype)
 		syntax = ok and "treesitter" or "filetype"
 	end
 	vim.b[bufnr].acp_code_block_syntax = syntax
+
+	local function focus_output_source()
+		if not valid_buf(state.output_buf) then
+			notify("The source ACP output buffer is no longer available", vim.log.levels.WARN)
+			return false
+		end
+
+		local output_win = valid_win(state.output_win) and state.output_win or vim.fn.bufwinid(state.output_buf)
+		if not (output_win and output_win ~= -1 and valid_win(output_win)) then
+			notify("The source ACP output window is not visible", vim.log.levels.WARN)
+			return false
+		end
+
+		if vim.fn.win_gotoid(output_win) ~= 1 then
+			notify("Could not focus the source ACP output window", vim.log.levels.WARN)
+			return false
+		end
+
+		local line_count = vim.api.nvim_buf_line_count(state.output_buf)
+		local target = math.max(1, math.min(block.start_line or 1, line_count))
+		pcall(vim.api.nvim_win_set_cursor, output_win, { target, 0 })
+		refresh_output_chrome(state)
+		return true
+	end
+
+	local function open_code_treesitter_scope()
+		local winid = valid_win(scratch_win) and scratch_win or vim.api.nvim_get_current_win()
+		local cursor = vim.api.nvim_win_get_cursor(winid)
+		local node_list, err = treesitter.nodes(bufnr, cursor)
+		if err then
+			notify(err, vim.log.levels.WARN)
+			return false
+		end
+		if not node_list or #node_list == 0 then
+			notify("No Tree-sitter node found for this ACP code block cursor", vim.log.levels.WARN)
+			return false
+		end
+
+		local lines, line_nodes = treesitter.picker_lines(node_list, {
+			title = "ACP Code Tree-sitter Scope",
+			footer = "Press <Enter> to jump to the node, or q/<Esc> to close.",
+		})
+		picker.open({
+			name = ("ACP://%s/%s/code-tree/%d-%d"):format(
+				state.adapter or "adapter",
+				tostring(state.id or "?"),
+				block.start_line or 1,
+				block.end_line or 1
+			),
+			filetype = "acp-code-treesitter",
+			lines = lines,
+			title = " ACP code Tree-sitter scope ",
+			submit_desc = "Jump to ACP code Tree-sitter node",
+			close_desc = "Close ACP code Tree-sitter scope",
+			preview = function(row)
+				local item = line_nodes[row]
+				local line1, line2 = treesitter.range_lines(item)
+				if not line1 then
+					return nil
+				end
+				return {
+					lines = vim.api.nvim_buf_get_lines(bufnr, line1 - 1, line2, false),
+					filetype = vim.bo[bufnr].filetype,
+					title = (" %s lines %d-%d "):format(item.type or "node", line1, line2),
+					cursor_line = 1,
+				}
+			end,
+			on_submit = function(row, view)
+				local item = line_nodes[row]
+				local line1 = treesitter.range_lines(item)
+				if not line1 then
+					return
+				end
+				view.close()
+				local target_win = valid_win(scratch_win) and scratch_win or vim.fn.bufwinid(bufnr)
+				if target_win ~= -1 and valid_win(target_win) then
+					vim.fn.win_gotoid(target_win)
+					pcall(
+						vim.api.nvim_win_set_cursor,
+						target_win,
+						{ line1, item.range and item.range.start_col or 0 }
+					)
+				end
+			end,
+		})
+		return true
+	end
+
 	vim.keymap.set("n", "q", function()
 		pcall(vim.cmd, "tabclose")
 	end, { buffer = bufnr, desc = "Close ACP code block" })
+	vim.keymap.set("n", "gO", focus_output_source, { buffer = bufnr, desc = "Return to ACP output code block" })
+	vim.keymap.set("n", "<leader>at", open_code_treesitter_scope, {
+		buffer = bufnr,
+		desc = "Open ACP code block Tree-sitter scope",
+	})
 	vim.keymap.set("n", "<leader>aY", function()
 		local text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 		if text ~= "" then
@@ -1253,6 +1349,7 @@ local function open_output_code_block_buffer(state, block)
 	end, { buffer = bufnr, desc = "Yank ACP code block" })
 
 	vim.cmd("tabnew")
+	scratch_win = vim.api.nvim_get_current_win()
 	vim.api.nvim_win_set_buf(0, bufnr)
 	vim.wo[0].cursorline = true
 	vim.wo[0].number = true

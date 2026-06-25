@@ -2755,15 +2755,88 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(vim.bo[direct_code_buf].filetype, "lua")
 		eq(table.concat(vim.api.nvim_buf_get_lines(direct_code_buf, 0, -1, false), "\n"), "print('from acp')")
 		ok(vim.wo[0].winbar:find("ACP lua code", 1, true))
+		ok(vim.wo[0].winbar:find("<leader>at scope", 1, true))
+		ok(vim.wo[0].winbar:find("gO output", 1, true))
 		ok(vim.wo[0].winbar:find("<leader>aY yank", 1, true))
 		ok(
 			vim.b[direct_code_buf].acp_code_block_syntax == "treesitter"
 				or vim.b[direct_code_buf].acp_code_block_syntax == "filetype"
 		)
+		eq(vim.b[direct_code_buf].acp_output_source, output_buf)
+		eq(vim.b[direct_code_buf].acp_output_source_line, code_line - 1)
+		eq(vim.b[direct_code_buf].acp_output_source_end_line, code_line + 1)
 		eq(vim.wo[0].number, true)
 		eq(vim.wo[0].wrap, false)
 		ok(vim.fn.maparg("<leader>aY", "n", false, true).buffer == 1)
+		ok(vim.fn.maparg("<leader>at", "n", false, true).buffer == 1)
+		ok(vim.fn.maparg("gO", "n", false, true).buffer == 1)
 		ok(vim.fn.maparg("q", "n", false, true).buffer == 1)
+
+		local scratch_tab = vim.api.nvim_get_current_tabpage()
+		local return_map = vim.fn.maparg("gO", "n", false, true)
+		ok(type(return_map.callback) == "function", "code scratch should expose output return callback")
+		return_map.callback()
+		eq(vim.api.nvim_get_current_win(), output_win)
+		eq(
+			vim.api.nvim_buf_get_lines(
+				output_buf,
+				vim.api.nvim_win_get_cursor(output_win)[1] - 1,
+				vim.api.nvim_win_get_cursor(output_win)[1],
+				false
+			)[1],
+			"```lua"
+		)
+		vim.api.nvim_set_current_tabpage(scratch_tab)
+		local scratch_win = vim.fn.bufwinid(direct_code_buf)
+		ok(scratch_win ~= -1, "code scratch window should remain open after returning to output")
+		vim.api.nvim_set_current_win(scratch_win)
+
+		local root = {}
+		function root:type()
+			return "chunk"
+		end
+		function root:range()
+			return 0, 0, 0, 17
+		end
+		local child = {}
+		function child:type()
+			return "function_call"
+		end
+		function child:range()
+			return 0, 0, 0, 17
+		end
+		function child:parent()
+			return root
+		end
+
+		local original_treesitter = vim.treesitter
+		local original_get_node = original_treesitter and original_treesitter.get_node
+		vim.treesitter = vim.treesitter or {}
+		vim.treesitter.get_node = function()
+			return child
+		end
+		local scope_passed, scope_err = pcall(function()
+			local scope_map = vim.fn.maparg("<leader>at", "n", false, true)
+			ok(type(scope_map.callback) == "function", "code scratch should expose Tree-sitter scope callback")
+			scope_map.callback()
+			local scope_buf = vim.api.nvim_get_current_buf()
+			eq(vim.bo[scope_buf].filetype, "acp-code-treesitter")
+			local scope_text = table.concat(vim.api.nvim_buf_get_lines(scope_buf, 0, -1, false), "\n")
+			ok(scope_text:find("ACP Code Tree%-sitter Scope"))
+			ok(scope_text:find("function_call lines 1%-1"))
+			keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+			vim.api.nvim_feedkeys(keys, "xt", false)
+			eq(vim.api.nvim_get_current_buf(), direct_code_buf)
+			eq(vim.api.nvim_win_get_cursor(0)[1], 1)
+		end)
+		if original_treesitter then
+			vim.treesitter.get_node = original_get_node
+		else
+			vim.treesitter = nil
+		end
+		if not scope_passed then
+			error(scope_err, 2)
+		end
 		pcall(vim.cmd, "tabclose!")
 		vim.api.nvim_set_current_win(output_win)
 		vim.cmd("AcpCodeBlocks")

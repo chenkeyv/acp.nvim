@@ -34,7 +34,7 @@ This plugin provides an editor-native ACP chat surface:
 - hover-style `K` inspector for output references, code blocks, problems, and sections with winbar status and close keymaps
 - cursor-aware code-block yank action that copies fenced output without Markdown fences
 - searchable output code-block picker with language-aware previews and scratch buffers
-- code-block scratch buffers with winbar actions, Tree-sitter/filetype status, and yank/close keymaps
+- code-block scratch buffers with winbar actions, Tree-sitter/filetype status, Tree-sitter scope navigation, output return, and yank/close keymaps
 - animated virtual code-block lenses with language-to-filetype mapping, line count, injection status, and action hints
 - searchable output location picker for jumping from transcript file references into source
 - quickfix export for transcript file references
@@ -334,6 +334,13 @@ In the output buffer:
 - `<leader>aD` sends source-buffer diagnostics to quickfix
 - `<leader>ak` opens the ACP action palette
 - `<leader>az` toggles the fold under the cursor
+
+In code-block scratch buffers:
+
+- `<leader>at` opens a Tree-sitter scope picker for the code under the cursor
+- `gO` returns to the originating output code block
+- `<leader>aY` yanks the entire code block
+- `q` closes the scratch tab
 
 In floating ACP pickers:
 

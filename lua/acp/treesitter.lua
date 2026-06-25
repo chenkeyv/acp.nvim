@@ -84,8 +84,9 @@ function M.nodes(bufnr, cursor)
 	return out, nil
 end
 
-function M.picker_lines(nodes)
-	local lines = { "ACP Tree-sitter Nodes", "" }
+function M.picker_lines(nodes, opts)
+	opts = opts or {}
+	local lines = { opts.title or "ACP Tree-sitter Nodes", "" }
 	local line_nodes = {}
 	for index, item in ipairs(nodes or {}) do
 		local line1, line2 = M.range_lines(item)
@@ -96,7 +97,7 @@ function M.picker_lines(nodes)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add context, or q/<Esc> to close.")
+	table.insert(lines, opts.footer or "Press <Enter> to add context, or q/<Esc> to close.")
 	return lines, line_nodes
 end
 
