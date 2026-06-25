@@ -156,20 +156,23 @@ function M.restore_lines(list)
 		local cwd = clean(session.cwd) or "[unknown cwd]"
 
 		if session_id then
-			table.insert(parts, ("id %s"):format(short(session_id, 28)))
+			table.insert(parts, ("%s id %s"):format(icons.session, short(session_id, 28)))
 		end
 		if updated then
-			table.insert(parts, ("updated %s"):format(short(updated, 34)))
+			table.insert(parts, ("%s updated %s"):format(icons.history, short(updated, 34)))
 		end
 		if model then
-			table.insert(parts, ("model %s"):format(short(model, 28)))
+			table.insert(parts, ("%s model %s"):format(icons.model, short(model, 28)))
 		end
 
-		table.insert(lines, ("%d. %s %s"):format(index, short(restore_title(session), 72), icons.restore))
+		table.insert(lines, ("%d. %s %s"):format(index, icons.restore, short(restore_title(session), 72)))
 		line_sessions[#lines] = session
-		table.insert(lines, ("   %s"):format(#parts > 0 and table.concat(parts, "  ") or "no metadata"))
+		table.insert(
+			lines,
+			("   %s %s"):format(icons.inspect, #parts > 0 and table.concat(parts, "  ") or "no metadata")
+		)
 		line_sessions[#lines] = session
-		table.insert(lines, ("   cwd %s"):format(short(cwd, 72)))
+		table.insert(lines, ("   %s cwd %s"):format(icons.location, short(cwd, 72)))
 		line_sessions[#lines] = session
 	end
 
@@ -186,19 +189,19 @@ function M.restore_preview(session)
 	local lines = {
 		("%s ACP Adapter Session"):format(icons.restore),
 		"",
-		("Title: %s"):format(restore_title(session)),
+		("%s Title: %s"):format(icons.note, restore_title(session)),
 	}
 	local fields = {
-		{ "Session ID", session.sessionId },
-		{ "Updated", session.updatedAt },
-		{ "Created", session.createdAt },
-		{ "Cwd", session.cwd },
-		{ "Model", session.model },
+		{ icons.session, "Session ID", session.sessionId },
+		{ icons.history, "Updated", session.updatedAt },
+		{ icons.history, "Created", session.createdAt },
+		{ icons.location, "Cwd", session.cwd },
+		{ icons.model, "Model", session.model },
 	}
 	for _, field in ipairs(fields) do
-		local value = clean(field[2])
+		local value = clean(field[3])
 		if value then
-			table.insert(lines, ("%s: %s"):format(field[1], value))
+			table.insert(lines, ("%s %s: %s"):format(field[1], field[2], value))
 		end
 	end
 
