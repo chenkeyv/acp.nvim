@@ -47,6 +47,44 @@ local function diagnostic_summary(bufnr, start_line, end_line)
 	return table.concat(badges, " ")
 end
 
+local function lsp_client_count(source, state)
+	if state and state.source_lsp_client_count ~= nil then
+		return tonumber(state.source_lsp_client_count) or 0
+	end
+	if not (source and valid_buf(source.bufnr) and vim.lsp) then
+		return 0
+	end
+
+	local ok, clients
+	if type(vim.lsp.get_clients) == "function" then
+		ok, clients = pcall(vim.lsp.get_clients, { bufnr = source.bufnr })
+	elseif type(vim.lsp.get_active_clients) == "function" then
+		ok, clients = pcall(vim.lsp.get_active_clients, { bufnr = source.bufnr })
+	end
+	return ok and type(clients) == "table" and #clients or 0
+end
+
+local function treesitter_status(source, state)
+	if state and state.source_treesitter_status then
+		return tostring(state.source_treesitter_status)
+	end
+	if not (source and valid_buf(source.bufnr) and vim.treesitter) then
+		return "missing"
+	end
+	if not (type(vim.treesitter.get_node) == "function" and type(vim.treesitter.get_node_text) == "function") then
+		return "missing"
+	end
+
+	local filetype = vim.bo[source.bufnr].filetype
+	if filetype ~= "" and vim.treesitter.language and type(vim.treesitter.language.get_lang) == "function" then
+		local ok, lang = pcall(vim.treesitter.language.get_lang, filetype)
+		if ok and lang and lang ~= "" then
+			return lang
+		end
+	end
+	return filetype ~= "" and filetype or "ready"
+end
+
 local function highlight_group(kind)
 	if tonumber(kind) == 3 then
 		return "AcpSourceHighlightWrite"
@@ -280,6 +318,8 @@ function M.marks(state)
 	local label = (" %s ACP #%s %s "):format(icons.source, tostring(state.id or "?"), status)
 	local diagnostics = diagnostic_summary(source.bufnr, start_line, end_line)
 	local lens_diagnostics = diagnostics and ("diagnostics " .. diagnostics .. "  ") or ""
+	local lens_lsp = ("%s lsp %d  "):format(icons.lsp, lsp_client_count(source, state))
+	local lens_treesitter = ("%s ts %s  "):format(icons.treesitter, treesitter_status(source, state))
 	local highlight_count = #(state.source_highlights or {})
 	local lens_highlights = highlight_count > 0 and ("highlights " .. highlight_count .. "  ") or ""
 	local color_count = #(state.source_colors or {})
@@ -291,7 +331,7 @@ function M.marks(state)
 	local lens = (" %s ACP #%s source context  %s:AcpSourceActions focus/add/refresh/LSP/Tree-sitter "):format(
 		icons.source,
 		tostring(state.id or "?"),
-		lens_diagnostics .. lens_highlights .. lens_colors .. lens_links .. lens_folds
+		lens_lsp .. lens_treesitter .. lens_diagnostics .. lens_highlights .. lens_colors .. lens_links .. lens_folds
 	)
 	local marks = {}
 	for line = start_line, end_line do

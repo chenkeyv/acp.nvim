@@ -667,6 +667,8 @@ end)
 test("source view renders context range marks", function()
 	local marks = source_view.marks({
 		id = 9,
+		source_lsp_client_count = 2,
+		source_treesitter_status = "lua",
 		source = {
 			bufnr = 1,
 			cursor = { 4, 0 },
@@ -684,7 +686,12 @@ test("source view renders context range marks", function()
 	ok(marks[1].opts.virt_text[1][1]:find("ACP #9 ready", 1, true))
 	ok(marks[1].opts.virt_text[1][1]:find(icons.source, 1, true))
 	eq(marks[1].opts.sign_text, icons.source)
-	ok(marks[1].opts.virt_lines[1][1][1]:find(":AcpSourceActions", 1, true))
+	local lens = marks[1].opts.virt_lines[1][1][1]
+	ok(lens:find(icons.lsp, 1, true))
+	ok(lens:find("lsp 2", 1, true))
+	ok(lens:find(icons.treesitter, 1, true))
+	ok(lens:find("ts lua", 1, true))
+	ok(lens:find(":AcpSourceActions", 1, true))
 	eq(marks[2].opts.virt_text, nil)
 end)
 

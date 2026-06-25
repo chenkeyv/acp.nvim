@@ -370,7 +370,7 @@ In floating ACP pickers:
 
 In source buffers linked to an ACP session:
 
-- marked context ranges show an ACP lens with session status, diagnostic badges, and `:AcpSourceActions`
+- marked context ranges show an ACP lens with session status, LSP client count, Tree-sitter status, diagnostic badges, and `:AcpSourceActions`
 - `:AcpSourceActions` focuses the linked chat or opens source refresh, LSP, Tree-sitter, and output workflows
 - `:AcpRefreshSource` moves the linked chat's source context to the current cursor or Visual range
 
