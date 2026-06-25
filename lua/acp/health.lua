@@ -134,7 +134,7 @@ end
 function M.render(items, reporter)
 	reporter = reporter or default_reporter()
 	if reporter.start then
-		reporter.start("acp.nvim")
+		reporter.start(icons.title("acp.nvim"))
 	end
 
 	for _, item in ipairs(items or {}) do

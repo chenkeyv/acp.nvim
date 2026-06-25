@@ -846,7 +846,7 @@ test("health renderer uses Neovim health reporters", function()
 	})
 
 	eq(reports, {
-		"start:acp.nvim",
+		("start:%s"):format(icons.title("acp.nvim")),
 		"ok:adapter ready",
 		"warn:metadata partial",
 	})
