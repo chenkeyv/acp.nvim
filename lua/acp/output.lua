@@ -566,6 +566,38 @@ local function section_label(line)
 	return "SECTION", line
 end
 
+local function section_icon(kind)
+	kind = tostring(kind or ""):upper()
+	if kind == "USER" then
+		return icons.user
+	end
+	if kind == "AGENT" then
+		return icons.agent
+	end
+	if kind == "SESSION" then
+		return icons.session
+	end
+	if kind == "STATUS" then
+		return icons.status
+	end
+	if kind == "TOOL" then
+		return icons.tool
+	end
+	if kind == "TERM" then
+		return icons.terminal
+	end
+	if kind == "FILE" then
+		return icons.file
+	end
+	if kind == "STDERR" then
+		return icons.error
+	end
+	if kind == "TEXT" or kind == "NOTE" then
+		return icons.note
+	end
+	return icons.section
+end
+
 local function preview_after(lines, index)
 	for next_index = index + 1, #lines do
 		local line = clean(lines[next_index])
@@ -748,7 +780,7 @@ function M.section_timeline(lines)
 			line = section.line,
 			kind = section.kind,
 			progress = progress,
-			label = (" %d/%d %s "):format(index, count, progress),
+			label = (" %s %d/%d %s "):format(section_icon(section.kind), index, count, progress),
 		}
 	end
 
@@ -777,20 +809,20 @@ function M.statuscolumn_marker(lines, lnum, opts)
 		return icons.reference
 	end
 
-	local section_index = 0
 	local inside_section = false
+	local current_kind
 
 	for index = 1, lnum do
 		if M.is_section(lines[index]) then
-			section_index = section_index + 1
 			inside_section = true
+			current_kind = section_label(lines[index])
 			if index == lnum then
-				return section_index < 100 and ("%02d"):format(section_index) or "++"
+				return section_icon(current_kind)
 			end
 		end
 	end
 
-	return inside_section and " |" or "  "
+	return inside_section and section_icon(current_kind) or "  "
 end
 
 function M.outline_lines(sections, opts)
@@ -805,7 +837,10 @@ function M.outline_lines(sections, opts)
 			title = title:sub(1, 85) .. "..."
 		end
 		local progress = position_percent(section.line, total) or "   ?"
-		table.insert(lines, ("%4d  %s  %-7s  %s"):format(section.line, progress, section.kind, title))
+		table.insert(
+			lines,
+			("%4d  %s  %s %-7s  %s"):format(section.line, progress, section_icon(section.kind), section.kind, title)
+		)
 		line_sections[#lines] = section
 		if section.preview then
 			table.insert(lines, ("      %s"):format(section.preview))
@@ -1982,7 +2017,16 @@ function M.transcript_entry_lines(entries, opts)
 			text = text:sub(1, 101) .. "..."
 		end
 		local progress = position_percent(entry.line, total) or "   ?"
-		table.insert(lines, ("%4d  %s  %-7s  %s"):format(entry.line or 1, progress, entry.kind or "TEXT", text))
+		table.insert(
+			lines,
+			("%4d  %s  %s %-7s  %s"):format(
+				entry.line or 1,
+				progress,
+				section_icon(entry.kind),
+				entry.kind or "TEXT",
+				text
+			)
+		)
 		line_entries[#lines] = entry
 	end
 
@@ -2019,7 +2063,14 @@ function M.fold_text(lines, foldstart, foldend)
 	local count = math.max(1, (tonumber(foldend) or foldstart) - foldstart + 1)
 	local preview = preview_after(lines, foldstart)
 	local suffix = preview and ("  " .. preview) or ""
-	local text = ("[%s] %s  (%d line%s)%s"):format(kind, title, count, count == 1 and "" or "s", suffix)
+	local text = ("%s %s %s  (%d line%s)%s"):format(
+		section_icon(kind),
+		kind,
+		title,
+		count,
+		count == 1 and "" or "s",
+		suffix
+	)
 
 	if #text > 120 then
 		return text:sub(1, 117) .. "..."
