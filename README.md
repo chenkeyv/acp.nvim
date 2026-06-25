@@ -57,7 +57,7 @@ This plugin provides an editor-native ACP chat surface:
 - non-blocking adapter startup and session creation
 - floating slash-command picker for adapter-advertised commands
 - native slash-command and `@workflow` completion in the prompt buffer
-- optional `blink.cmp` source for slash-command and `@workflow` prompt completion
+- optional `blink.cmp` source for slash-command and `@workflow` prompt completion with scoped labels and documentation
 - prompt-buffer ghost text and draft statistics while composing
 - prompt-focused action picker with source, LSP, Tree-sitter, output, and session workflows
 - smart context drafting that combines source, Tree-sitter, diagnostics, and available LSP signals
@@ -164,9 +164,10 @@ require("blink.cmp").setup({
 })
 ```
 
-The ACP source is enabled only in ACP prompt buffers. `<C-Space>` prefers this
-source when it is configured and falls back to the native `completefunc`
-completion otherwise.
+The ACP source is enabled only in ACP prompt buffers. Completion items include
+workflow or adapter-command scope labels plus plaintext documentation. `<C-Space>`
+prefers this source when it is configured and falls back to the native
+`completefunc` completion otherwise.
 
 ## Commands
 

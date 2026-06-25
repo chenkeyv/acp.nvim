@@ -64,11 +64,40 @@ local function edit_range(row, start_col, cursor_col)
 	}
 end
 
+local function completion_scope(item)
+	local word = item and item.word or ""
+	if word:sub(1, 1) == "@" then
+		return "ACP workflow"
+	end
+	if word:sub(1, 1) == "/" then
+		return "adapter command"
+	end
+	return "ACP completion"
+end
+
+local function completion_documentation(item, scope)
+	local lines = {
+		item.abbr or item.word or "ACP completion",
+		"",
+		scope,
+	}
+	if item.menu and item.menu ~= "" then
+		table.insert(lines, ("context: %s"):format(item.menu))
+	end
+	if item.info and item.info ~= "" then
+		table.insert(lines, "")
+		table.insert(lines, item.info)
+	end
+	return table.concat(lines, "\n")
+end
+
 local function map_item(item, index, range, state_id)
 	local label = item.abbr or item.word
+	local scope = completion_scope(item)
 	local mapped = {
 		label = label,
 		kind = kind_for_complete_item(item),
+		detail = scope,
 		filterText = item.word,
 		sortText = ("%04d"):format(index),
 		textEdit = {
@@ -78,21 +107,19 @@ local function map_item(item, index, range, state_id)
 		insertTextFormat = vim.lsp.protocol.InsertTextFormat.PlainText,
 		data = {
 			acp_complete_item = item,
+			acp_completion_scope = scope,
 			acp_state_id = state_id,
 		},
 	}
 
-	if item.menu and item.menu ~= "" then
-		mapped.labelDetails = {
-			description = item.menu,
-		}
-	end
-	if item.info and item.info ~= "" then
-		mapped.documentation = {
-			kind = "plaintext",
-			value = item.info,
-		}
-	end
+	mapped.labelDetails = {
+		detail = ("  %s"):format(scope),
+		description = item.menu,
+	}
+	mapped.documentation = {
+		kind = "plaintext",
+		value = completion_documentation(item, scope),
+	}
 	return mapped
 end
 
