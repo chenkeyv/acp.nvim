@@ -1,26 +1,27 @@
 local icons = require("acp.icons")
+local chrome = require("acp.picker_chrome")
 
 local M = {}
 
 function M.picker_lines(commands)
-	local lines = { "ACP Commands", "" }
+	local lines = { chrome.title(icons.command, "ACP Commands"), "" }
 	local line_commands = {}
 	for index, command in ipairs(commands or {}) do
 		local name = command.name or ("command-" .. index)
-		table.insert(lines, ("%d. /%s"):format(index, name))
+		table.insert(lines, chrome.row(index, icons.command, ("/%s"):format(name)))
 		line_commands[#lines] = command
 		if command.description and command.description ~= "" then
-			table.insert(lines, ("   %s"):format(command.description))
+			table.insert(lines, chrome.detail(icons.note, command.description))
 			line_commands[#lines] = command
 		end
 		if command.input and command.input.hint and command.input.hint ~= "" then
-			table.insert(lines, ("   input: %s"):format(command.input.hint))
+			table.insert(lines, chrome.detail(icons.key, ("input: %s"):format(command.input.hint)))
 			line_commands[#lines] = command
 		end
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to draft, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to draft, or q/<Esc> to close."))
 	return lines, line_commands
 end
 

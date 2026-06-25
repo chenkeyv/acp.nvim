@@ -1,4 +1,6 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local function display_name(item, fallback)
 	local name = item and item.name
@@ -40,43 +42,48 @@ end
 
 function M.picker_lines(config_options)
 	local options = M.select_options(config_options)
-	local lines = { "ACP Config", "" }
+	local lines = { chrome.title(icons.config, "ACP Config"), "" }
 	local line_options = {}
 	for index, option in ipairs(options) do
 		local category = option.category and option.category ~= "" and (" [" .. option.category .. "]") or ""
-		table.insert(lines, ("%d. %s: %s%s"):format(
-			index,
-			M.option_label(option),
-			M.value_label(option, option.currentValue),
-			category
-		))
+		table.insert(
+			lines,
+			chrome.row(
+				index,
+				icons.config,
+				("%s: %s%s"):format(M.option_label(option), M.value_label(option, option.currentValue), category)
+			)
+		)
 		line_options[#lines] = option
 		if option.description and option.description ~= "" then
-			table.insert(lines, ("   %s"):format(option.description))
+			table.insert(lines, chrome.detail(icons.note, option.description))
 			line_options[#lines] = option
 		end
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to edit, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to edit, or q/<Esc> to close."))
 	return lines, line_options
 end
 
 function M.value_lines(option)
-	local lines = { ("ACP Config: %s"):format(M.option_label(option)), "" }
+	local lines = { chrome.title(icons.config, ("ACP Config: %s"):format(M.option_label(option))), "" }
 	local line_values = {}
 	for index, choice in ipairs((option and option.options) or {}) do
 		local marker = choice.value == option.currentValue and " *" or ""
-		table.insert(lines, ("%d. %s%s"):format(index, display_name(choice, tostring(choice.value)), marker))
+		table.insert(
+			lines,
+			("%d. %s%s %s"):format(index, display_name(choice, tostring(choice.value)), marker, icons.config)
+		)
 		line_values[#lines] = choice
 		if choice.description and choice.description ~= "" then
-			table.insert(lines, ("   %s"):format(choice.description))
+			table.insert(lines, chrome.detail(icons.note, choice.description))
 			line_values[#lines] = choice
 		end
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to apply, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to apply, or q/<Esc> to close."))
 	return lines, line_values
 end
 

@@ -5203,18 +5203,20 @@ local function open_source_actions(state)
 end
 
 local function session_picker_lines(list)
-	local lines = { "ACP Sessions", "" }
+	local chrome = require("acp.picker_chrome")
+	local icons = require("acp.icons")
+	local lines = { chrome.title(icons.session, "ACP Sessions"), "" }
 	local line_ids = {}
 	for index, session in ipairs(list) do
 		local model = session.model and session.model ~= "" and (" " .. session.model) or ""
-		table.insert(lines, ("%d. #%d %s%s"):format(index, session.id, session.adapter, model))
+		table.insert(lines, chrome.row(index, icons.session, ("#%d %s%s"):format(session.id, session.adapter, model)))
 		line_ids[#lines] = session.id
-		table.insert(lines, ("   %s"):format(session_status(session)))
+		table.insert(lines, chrome.detail(session.busy and icons.busy or icons.status, session_status(session)))
 		line_ids[#lines] = session.id
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to focus, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to focus, or q/<Esc> to close."))
 	return lines, line_ids
 end
 
@@ -5223,37 +5225,39 @@ local function session_picker_preview(state)
 		return nil
 	end
 
-	local lines = { "ACP Session Preview", "" }
-	table.insert(lines, ("Session: #%d %s"):format(state.id or 0, state.adapter or "?"))
-	table.insert(lines, ("Status: %s"):format(session_status(state)))
+	local chrome = require("acp.picker_chrome")
+	local icons = require("acp.icons")
+	local lines = { chrome.title(icons.session, "ACP Session Preview"), "" }
+	table.insert(lines, ("Session: #%d %s %s"):format(state.id or 0, state.adapter or "?", icons.session))
+	table.insert(lines, ("Status: %s %s"):format(session_status(state), state.busy and icons.busy or icons.status))
 	if state.model and state.model ~= "" then
-		table.insert(lines, ("Model: %s"):format(state.model))
+		table.insert(lines, ("Model: %s %s"):format(state.model, icons.model))
 	end
 	if state.context_window then
-		table.insert(lines, ("Context window: %s"):format(format_count(state.context_window)))
+		table.insert(lines, ("Context window: %s %s"):format(format_count(state.context_window), icons.context))
 	end
 	local change_count = changes.count(state)
 	if change_count > 0 then
-		table.insert(lines, ("Changed files: %d"):format(change_count))
+		table.insert(lines, ("Changed files: %d %s"):format(change_count, icons.changes))
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Source")
+	table.insert(lines, chrome.title(icons.source, "Source"))
 	if state.source and valid_buf(state.source.bufnr) then
 		local name = vim.api.nvim_buf_get_name(state.source.bufnr)
 		local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or "[No Name]"
-		table.insert(lines, ("File: %s"):format(path))
+		table.insert(lines, ("File: %s %s"):format(path, icons.file))
 		if state.source.range then
-			table.insert(lines, ("Selection: lines %d-%d"):format(state.source.range.line1, state.source.range.line2))
+			table.insert(lines, ("Selection: lines %d-%d %s"):format(state.source.range.line1, state.source.range.line2, icons.scope))
 		elseif state.source.cursor then
-			table.insert(lines, ("Cursor: %d:%d"):format(state.source.cursor[1] or 1, (state.source.cursor[2] or 0) + 1))
+			table.insert(lines, ("Cursor: %d:%d %s"):format(state.source.cursor[1] or 1, (state.source.cursor[2] or 0) + 1, icons.location))
 		end
 	else
-		table.insert(lines, "No source buffer")
+		table.insert(lines, ("%s No source buffer"):format(icons.warning))
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Transcript")
+	table.insert(lines, chrome.title(icons.history, "Transcript"))
 	if valid_buf(state.output_buf) then
 		local start_line = math.min(state.output_dashboard_lines or 0, vim.api.nvim_buf_line_count(state.output_buf))
 		local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, start_line, -1, false)
@@ -5270,10 +5274,10 @@ local function session_picker_preview(state)
 		if #tail > 0 then
 			vim.list_extend(lines, tail)
 		else
-			table.insert(lines, "No transcript output yet")
+			table.insert(lines, ("%s No transcript output yet"):format(icons.note))
 		end
 	else
-		table.insert(lines, "No output buffer")
+		table.insert(lines, ("%s No output buffer"):format(icons.warning))
 	end
 
 	return {

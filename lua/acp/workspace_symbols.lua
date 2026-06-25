@@ -1,4 +1,6 @@
 local context = require("acp.context")
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 local references = require("acp.references")
 local symbols = require("acp.symbols")
 
@@ -70,7 +72,12 @@ function M.normalize(results)
 	local items = {}
 	for _, symbol in ipairs(results or {}) do
 		local location = symbol_location(symbol)
-		if type(symbol) == "table" and type(symbol.name) == "string" and symbol.name ~= "" and references.range(location) then
+		if
+			type(symbol) == "table"
+			and type(symbol.name) == "string"
+			and symbol.name ~= ""
+			and references.range(location)
+		then
 			table.insert(items, {
 				name = symbol.name,
 				kind = symbol.kind,
@@ -84,24 +91,25 @@ end
 
 function M.picker_lines(items, opts)
 	opts = opts or {}
-	local lines = { opts.title or "ACP Workspace Symbols", "" }
+	local lines = { chrome.title(icons.symbol, opts.title or "ACP Workspace Symbols"), "" }
 	local line_symbols = {}
 	for index, symbol in ipairs(items or {}) do
 		local range = M.range(symbol)
 		local location = range and ("%s:%d"):format(M.display_path(symbol), range.line1) or M.display_path(symbol)
 		local container = symbol.containerName and symbol.containerName ~= "" and ("  " .. symbol.containerName) or ""
-		table.insert(lines, ("%d. %s  %s  %s%s"):format(
-			index,
-			symbol.name,
-			symbols.kind_name(symbol.kind),
-			location,
-			container
-		))
+		table.insert(
+			lines,
+			chrome.row(
+				index,
+				icons.symbol,
+				("%s  %s  %s%s"):format(symbol.name, symbols.kind_name(symbol.kind), location, container)
+			)
+		)
 		line_symbols[#lines] = symbol
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add context, Q for quickfix, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to add context, Q for quickfix, or q/<Esc> to close."))
 	return lines, line_symbols
 end
 

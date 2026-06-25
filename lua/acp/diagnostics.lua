@@ -1,4 +1,6 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local severity_names = {
 	[vim.diagnostic.severity.ERROR] = "ERROR",
@@ -202,41 +204,45 @@ function M.render(bufnr, opts)
 		local severity = M.severity_name(item.severity)
 		local source = item.source and item.source ~= "" and (" [" .. item.source .. "]") or ""
 		local code = item.code and item.code ~= "" and (" (" .. tostring(item.code) .. ")") or ""
-		table.insert(lines, ("- %d:%d %s%s%s: %s"):format(
-			(item.lnum or 0) + 1,
-			(item.col or 0) + 1,
-			severity,
-			source,
-			code,
-			clean(item.message)
-		))
+		table.insert(
+			lines,
+			("- %d:%d %s%s%s: %s"):format(
+				(item.lnum or 0) + 1,
+				(item.col or 0) + 1,
+				severity,
+				source,
+				code,
+				clean(item.message)
+			)
+		)
 	end
 
 	return table.concat(lines, "\n")
 end
 
 function M.picker_lines(items)
-	local lines = { "ACP Diagnostics", "" }
+	local lines = { chrome.title(icons.diagnostics, "ACP Diagnostics"), "" }
 	local line_items = {}
 	for index, item in ipairs(items or {}) do
 		local source = item.source and item.source ~= "" and (" [" .. item.source .. "]") or ""
 		local code = item.code and item.code ~= "" and (" (" .. tostring(item.code) .. ")") or ""
 		local location = item.path and ("%s:%d:%d"):format(item.path, (item.lnum or 0) + 1, (item.col or 0) + 1)
 			or ("%d:%d"):format((item.lnum or 0) + 1, (item.col or 0) + 1)
-		table.insert(lines, ("%d. %s %s%s%s"):format(
-			index,
-			location,
-			M.severity_name(item.severity),
-			source,
-			code
-		))
+		table.insert(
+			lines,
+			chrome.row(
+				index,
+				icons.diagnostics,
+				("%s %s%s%s"):format(location, M.severity_name(item.severity), source, code)
+			)
+		)
 		line_items[#lines] = item
-		table.insert(lines, ("   %s"):format(clean(item.message)))
+		table.insert(lines, chrome.detail(icons.note, clean(item.message)))
 		line_items[#lines] = item
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to draft a fix, Q for quickfix, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to draft a fix, Q for quickfix, or q/<Esc> to close."))
 	return lines, line_items
 end
 

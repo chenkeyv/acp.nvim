@@ -1,3 +1,5 @@
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 local picker = require("acp.picker")
 
 local M = {}
@@ -255,21 +257,27 @@ function M.open_entry(entry)
 end
 
 local function browser_lines(entries, opts)
-	local lines = { "ACP History", "" }
+	local lines = { chrome.title(icons.history, "ACP History"), "" }
 	local line_entries = {}
 	for index, entry in ipairs(entries) do
-		table.insert(lines, ("%d. %s"):format(index, entry.title))
+		table.insert(lines, chrome.row(index, icons.history, entry.title))
 		line_entries[#lines] = entry
-		table.insert(lines, ("   %s  %s  %s"):format(entry.updated, entry.adapter, entry.model))
+		table.insert(
+			lines,
+			chrome.detail(icons.model, ("%s  %s  %s"):format(entry.updated, entry.adapter, entry.model))
+		)
 		line_entries[#lines] = entry
-		table.insert(lines, ("   %s"):format(entry.summary or metrics_label(entry.metrics)))
+		table.insert(lines, chrome.detail(icons.map, entry.summary or metrics_label(entry.metrics)))
 		line_entries[#lines] = entry
 	end
 	table.insert(lines, "")
 	if opts.open_chat then
-		table.insert(lines, "Press <Enter> to draft a chat, o to open read-only, / to filter, or q/<Esc> to close.")
+		table.insert(
+			lines,
+			chrome.footer("Press <Enter> to draft a chat, o to open read-only, / to filter, or q/<Esc> to close.")
+		)
 	else
-		table.insert(lines, "Press <Enter> to open, / to filter, or q/<Esc> to close.")
+		table.insert(lines, chrome.footer("Press <Enter> to open, / to filter, or q/<Esc> to close."))
 	end
 	return lines, line_entries
 end

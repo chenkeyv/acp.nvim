@@ -1,4 +1,6 @@
 local context = require("acp.context")
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local M = {}
 
@@ -158,20 +160,23 @@ end
 
 function M.picker_lines(items, opts)
 	opts = opts or {}
-	local lines = { "ACP Selection Ranges", "" }
+	local lines = { chrome.title(icons.scope, "ACP Selection Ranges"), "" }
 	local line_items = {}
 	for index, item in ipairs(items or {}) do
 		local range = item.range or {}
 		local count = line_count(range)
 		local suffix = count == 1 and "line" or "lines"
 		local preview = preview_line(opts.bufnr, range)
-		local line = ("%d. %-19s lines %d-%d (%d %s)"):format(
+		local line = chrome.row(
 			index,
-			item.label or range_label(index, range),
-			range.line1 or 1,
-			range.line2 or range.line1 or 1,
-			count,
-			suffix
+			icons.scope,
+			("%-19s lines %d-%d (%d %s)"):format(
+				item.label or range_label(index, range),
+				range.line1 or 1,
+				range.line2 or range.line1 or 1,
+				count,
+				suffix
+			)
 		)
 		if preview then
 			line = ("%s  %s"):format(line, preview)
@@ -179,13 +184,13 @@ function M.picker_lines(items, opts)
 		table.insert(lines, line)
 		line_items[#lines] = item
 		if item.client then
-			table.insert(lines, ("   LSP: %s"):format(item.client))
+			table.insert(lines, chrome.detail(icons.lsp, ("LSP: %s"):format(item.client)))
 			line_items[#lines] = item
 		end
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add the selected semantic range, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to add the selected semantic range, or q/<Esc> to close."))
 	return lines, line_items
 end
 
@@ -238,9 +243,15 @@ function M.request(source, callback)
 		},
 	}
 
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, "textDocument/selectionRange", params, function(results)
-		callback(M.flatten(results), nil)
-	end)
+	local ok, request_ids = pcall(
+		vim.lsp.buf_request_all,
+		source.bufnr,
+		"textDocument/selectionRange",
+		params,
+		function(results)
+			callback(M.flatten(results), nil)
+		end
+	)
 
 	if not ok then
 		callback(nil, request_ids)

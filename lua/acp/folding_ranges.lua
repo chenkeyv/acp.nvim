@@ -1,4 +1,6 @@
 local context = require("acp.context")
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local M = {}
 
@@ -82,29 +84,38 @@ function M.normalize(results)
 end
 
 function M.picker_lines(items)
-	local lines = { "ACP Folding Ranges", "" }
+	local lines = { chrome.title(icons.fold, "ACP Folding Ranges"), "" }
 	local line_items = {}
 	for index, item in ipairs(items or {}) do
 		local range_value = M.range(item) or {}
 		local line_count = math.max(1, (range_value.line2 or 1) - (range_value.line1 or 1) + 1)
-		table.insert(lines, ("%d. %d-%d  %-12s  %d line%s"):format(
-			index,
-			range_value.line1 or 1,
-			range_value.line2 or 1,
-			M.kind(item),
-			line_count,
-			line_count == 1 and "" or "s"
-		))
+		table.insert(
+			lines,
+			chrome.row(
+				index,
+				icons.fold,
+				("%d-%d  %-12s  %d line%s"):format(
+					range_value.line1 or 1,
+					range_value.line2 or 1,
+					M.kind(item),
+					line_count,
+					line_count == 1 and "" or "s"
+				)
+			)
+		)
 		line_items[#lines] = item
 		local collapsed = clean(item.collapsedText)
 		if collapsed then
-			table.insert(lines, ("      %s"):format(collapsed:sub(1, 96)))
+			table.insert(lines, chrome.detail(icons.note, collapsed:sub(1, 96)))
 			line_items[#lines] = item
 		end
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add folding-range context, Q for quickfix, or q/<Esc> to close.")
+	table.insert(
+		lines,
+		chrome.footer("Press <Enter> to add folding-range context, Q for quickfix, or q/<Esc> to close.")
+	)
 	return lines, line_items
 end
 
@@ -170,15 +181,21 @@ function M.request(source, callback)
 		},
 	}
 
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, "textDocument/foldingRange", params, function(results)
-		local raw = {}
-		for _, response in pairs(results or {}) do
-			if type(response) == "table" and type(response.result) == "table" then
-				vim.list_extend(raw, response.result)
+	local ok, request_ids = pcall(
+		vim.lsp.buf_request_all,
+		source.bufnr,
+		"textDocument/foldingRange",
+		params,
+		function(results)
+			local raw = {}
+			for _, response in pairs(results or {}) do
+				if type(response) == "table" and type(response.result) == "table" then
+					vim.list_extend(raw, response.result)
+				end
 			end
+			callback(M.normalize(raw), nil)
 		end
-		callback(M.normalize(raw), nil)
-	end)
+	)
 
 	if not ok then
 		callback(nil, request_ids)

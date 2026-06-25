@@ -1,4 +1,6 @@
 local context = require("acp.context")
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local M = {}
 
@@ -102,16 +104,19 @@ function M.normalize(results)
 end
 
 function M.picker_lines(items)
-	local lines = { "ACP Document Colors", "" }
+	local lines = { chrome.title(icons.color, "ACP Document Colors"), "" }
 	local line_items = {}
 	for index, item in ipairs(items or {}) do
 		local range = M.range(item) or {}
-		table.insert(lines, ("%d. %d:%d  %s"):format(index, range.line1 or 1, range.col1 or 1, M.label(item)))
+		table.insert(
+			lines,
+			chrome.row(index, icons.color, ("%d:%d  %s"):format(range.line1 or 1, range.col1 or 1, M.label(item)))
+		)
 		line_items[#lines] = item
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add color context, Q for quickfix, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to add color context, Q for quickfix, or q/<Esc> to close."))
 	return lines, line_items
 end
 
@@ -172,15 +177,21 @@ function M.request(source, callback)
 		},
 	}
 
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, "textDocument/documentColor", params, function(results)
-		local raw = {}
-		for _, response in pairs(results or {}) do
-			if type(response) == "table" and type(response.result) == "table" then
-				vim.list_extend(raw, response.result)
+	local ok, request_ids = pcall(
+		vim.lsp.buf_request_all,
+		source.bufnr,
+		"textDocument/documentColor",
+		params,
+		function(results)
+			local raw = {}
+			for _, response in pairs(results or {}) do
+				if type(response) == "table" and type(response.result) == "table" then
+					vim.list_extend(raw, response.result)
+				end
 			end
+			callback(M.normalize(raw), nil)
 		end
-		callback(M.normalize(raw), nil)
-	end)
+	)
 
 	if not ok then
 		callback(nil, request_ids)

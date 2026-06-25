@@ -812,7 +812,7 @@ function M.outline_lines(sections, opts)
 		end
 	end
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to jump, or q/<Esc> to close.")
+	table.insert(lines, ("Press <Enter> to jump, or q/<Esc> to close. %s"):format(icons.key))
 	return lines, line_sections
 end
 

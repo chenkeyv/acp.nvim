@@ -1,4 +1,18 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
+
+local function decorated_title(title, icon)
+	local stripped = tostring(title or "ACP"):gsub("^%s+", ""):gsub("%s+$", "")
+	if stripped == "" then
+		stripped = "ACP"
+	end
+	local title_icon = icon or icons.acp
+	if stripped:find(title_icon, 1, true) then
+		return title
+	end
+	return (" %s %s "):format(title_icon, stripped)
+end
 
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -74,7 +88,7 @@ function M.window_config(lines, opts)
 		height = height,
 		style = "minimal",
 		border = "rounded",
-		title = opts.title or " ACP ",
+		title = decorated_title(opts.title or " ACP ", opts.title_icon or icons.acp),
 		title_pos = opts.title_pos or "left",
 		zindex = opts.zindex or 65,
 	}
@@ -123,7 +137,7 @@ function M.open(opts)
 		local rows = {}
 
 		if query ~= "" then
-			table.insert(visible, ("Filter: %s"):format(query))
+			table.insert(visible, ("Filter: %s %s"):format(query, icons.search))
 			rows[#visible] = nil
 			table.insert(visible, "")
 			rows[#visible] = nil
@@ -138,12 +152,12 @@ function M.open(opts)
 
 		if query ~= "" then
 			if #visible == 2 then
-				table.insert(visible, "No matching picker entries.")
+				table.insert(visible, ("%s No matching picker entries."):format(icons.search))
 				rows[#visible] = nil
 			end
 			table.insert(visible, "")
 			rows[#visible] = nil
-			table.insert(visible, "Press <Enter> to select, <C-l> to clear, or q/<Esc> to close.")
+			table.insert(visible, chrome.footer("Press <Enter> to select, <C-l> to clear, or q/<Esc> to close."))
 			rows[#visible] = nil
 		end
 
@@ -220,7 +234,7 @@ function M.open(opts)
 			height = math.min(height, picker_height),
 			style = "minimal",
 			border = "rounded",
-			title = preview.title or " ACP preview ",
+			title = decorated_title(preview.title or " ACP preview ", preview.title_icon or icons.note),
 			title_pos = "left",
 			zindex = (config_opts.zindex or 65) + 1,
 		}

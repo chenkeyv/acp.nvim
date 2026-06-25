@@ -1,4 +1,6 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local function is_code_action(action)
 	return type(action) == "table" and type(action.title) == "string" and action.title ~= ""
@@ -37,7 +39,7 @@ function M.diagnostic_count(action)
 end
 
 function M.picker_lines(actions)
-	local lines = { "ACP Code Actions", "" }
+	local lines = { chrome.title(icons.action, "ACP Code Actions"), "" }
 	local line_actions = {}
 	for index, action in ipairs(actions or {}) do
 		local markers = {}
@@ -52,22 +54,25 @@ function M.picker_lines(actions)
 		end
 		local marker_text = #markers > 0 and (" [" .. table.concat(markers, ", ") .. "]") or ""
 
-		table.insert(lines, ("%d. %s  %s%s"):format(index, action.title, M.kind_label(action), marker_text))
+		table.insert(
+			lines,
+			chrome.row(index, icons.action, ("%s  %s%s"):format(action.title, M.kind_label(action), marker_text))
+		)
 		line_actions[#lines] = action
 
 		local diagnostic_count = M.diagnostic_count(action)
 		if diagnostic_count > 0 then
-			table.insert(lines, ("   %d diagnostic(s)"):format(diagnostic_count))
+			table.insert(lines, chrome.detail(icons.diagnostics, ("%d diagnostic(s)"):format(diagnostic_count)))
 			line_actions[#lines] = action
 		end
 		if action.disabled and action.disabled.reason and action.disabled.reason ~= "" then
-			table.insert(lines, ("   disabled: %s"):format(action.disabled.reason))
+			table.insert(lines, chrome.detail(icons.warning, ("disabled: %s"):format(action.disabled.reason)))
 			line_actions[#lines] = action
 		end
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to draft, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to draft, or q/<Esc> to close."))
 	return lines, line_actions
 end
 
@@ -105,7 +110,9 @@ local function lsp_range(source)
 			line = line2 - 1,
 			character = line_end_col(bufnr, line2),
 		},
-	}, line1, line2
+	},
+		line1,
+		line2
 end
 
 local function lsp_diagnostics(bufnr, line1, line2)
@@ -151,15 +158,21 @@ function M.request(source, callback)
 		},
 	}
 
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, "textDocument/codeAction", params, function(results)
-		local raw_actions = {}
-		for _, response in pairs(results or {}) do
-			if type(response) == "table" and type(response.result) == "table" then
-				vim.list_extend(raw_actions, response.result)
+	local ok, request_ids = pcall(
+		vim.lsp.buf_request_all,
+		source.bufnr,
+		"textDocument/codeAction",
+		params,
+		function(results)
+			local raw_actions = {}
+			for _, response in pairs(results or {}) do
+				if type(response) == "table" and type(response.result) == "table" then
+					vim.list_extend(raw_actions, response.result)
+				end
 			end
+			callback(M.flatten(raw_actions), nil)
 		end
-		callback(M.flatten(raw_actions), nil)
-	end)
+	)
 
 	if not ok then
 		callback(nil, request_ids)

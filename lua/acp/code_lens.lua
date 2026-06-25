@@ -1,4 +1,6 @@
 local context = require("acp.context")
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local M = {}
 
@@ -73,19 +75,22 @@ function M.normalize(results)
 end
 
 function M.picker_lines(items)
-	local lines = { "ACP Code Lens", "" }
+	local lines = { chrome.title(icons.code, "ACP Code Lens"), "" }
 	local line_items = {}
 	for index, item in ipairs(items or {}) do
 		local range = M.range(item) or {}
 		local title = M.title(item)
 		local command_name = M.command_name(item)
-		local suffix = command_name and ("  " .. command_name) or ""
-		table.insert(lines, ("%d. %d:%d  %s%s"):format(index, range.line1 or 1, range.col1 or 1, title, suffix))
+		local suffix = command_name and ("  " .. command_name .. " " .. icons.command) or ""
+		table.insert(
+			lines,
+			chrome.row(index, icons.code, ("%d:%d  %s%s"):format(range.line1 or 1, range.col1 or 1, title, suffix))
+		)
 		line_items[#lines] = item
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add code-lens context, Q for quickfix, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to add code-lens context, Q for quickfix, or q/<Esc> to close."))
 	return lines, line_items
 end
 
@@ -154,15 +159,21 @@ function M.request(source, callback)
 		},
 	}
 
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, "textDocument/codeLens", params, function(results)
-		local raw = {}
-		for _, response in pairs(results or {}) do
-			if type(response) == "table" and type(response.result) == "table" then
-				vim.list_extend(raw, response.result)
+	local ok, request_ids = pcall(
+		vim.lsp.buf_request_all,
+		source.bufnr,
+		"textDocument/codeLens",
+		params,
+		function(results)
+			local raw = {}
+			for _, response in pairs(results or {}) do
+				if type(response) == "table" and type(response.result) == "table" then
+					vim.list_extend(raw, response.result)
+				end
 			end
+			callback(M.normalize(raw), nil)
 		end
-		callback(M.normalize(raw), nil)
-	end)
+	)
 
 	if not ok then
 		callback(nil, request_ids)

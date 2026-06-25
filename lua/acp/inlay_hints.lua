@@ -1,4 +1,6 @@
 local context = require("acp.context")
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local M = {}
 
@@ -169,7 +171,7 @@ end
 function M.picker_lines(items, opts)
 	opts = opts or {}
 	items = items or {}
-	local lines = { "ACP Inlay Hints", "" }
+	local lines = { chrome.title(icons.hint, "ACP Inlay Hints"), "" }
 	local line_items = {}
 	if #items > 1 then
 		local range = opts.range
@@ -177,7 +179,7 @@ function M.picker_lines(items, opts)
 		if range then
 			label = ("%s lines %d-%d"):format(label, range.line1 or 1, range.line2 or range.line1 or 1)
 		end
-		table.insert(lines, "1. " .. label)
+		table.insert(lines, chrome.row(1, icons.hint, label))
 		line_items[#lines] = {
 			all = true,
 			hints = items,
@@ -187,7 +189,11 @@ function M.picker_lines(items, opts)
 
 	for index, item in ipairs(items) do
 		local preview = line_text(opts.bufnr, item.line or 1)
-		local line = ("%d. %-5s %d:%d  %s"):format(index + (#items > 1 and 1 or 0), item.kind or "HINT", item.line or 1, item.col or 1, item.label or "?")
+		local line = chrome.row(
+			index + (#items > 1 and 1 or 0),
+			icons.hint,
+			("%-5s %d:%d  %s"):format(item.kind or "HINT", item.line or 1, item.col or 1, item.label or "?")
+		)
 		if preview then
 			line = ("%s  %s"):format(line, preview)
 		end
@@ -196,7 +202,7 @@ function M.picker_lines(items, opts)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add inlay-hint context, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to add inlay-hint context, or q/<Esc> to close."))
 	return lines, line_items
 end
 
@@ -274,9 +280,15 @@ function M.request(source, callback)
 		},
 	}
 
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, "textDocument/inlayHint", params, function(results)
-		callback(M.flatten(results), nil, range)
-	end)
+	local ok, request_ids = pcall(
+		vim.lsp.buf_request_all,
+		source.bufnr,
+		"textDocument/inlayHint",
+		params,
+		function(results)
+			callback(M.flatten(results), nil, range)
+		end
+	)
 
 	if not ok then
 		callback(nil, request_ids)

@@ -1,4 +1,6 @@
 local context = require("acp.context")
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 local references = require("acp.references")
 local symbols = require("acp.symbols")
 
@@ -89,26 +91,24 @@ end
 
 function M.picker_lines(items, opts)
 	opts = opts or {}
-	local lines = { opts.title or spec(opts.direction).title, "" }
+	local lines = { chrome.title(icons.call, opts.title or spec(opts.direction).title), "" }
 	local line_calls = {}
 	for index, call in ipairs(items or {}) do
 		local range = M.range(call)
 		local location = range and ("%s:%d"):format(M.display_path(call), range.line1) or M.display_path(call)
-		table.insert(lines, ("%d. %s  %s  %s"):format(
-			index,
-			call.name,
-			symbols.kind_name(call.kind),
-			location
-		))
+		table.insert(
+			lines,
+			chrome.row(index, icons.call, ("%s  %s  %s"):format(call.name, symbols.kind_name(call.kind), location))
+		)
 		line_calls[#lines] = call
 		if call.detail and call.detail ~= "" then
-			table.insert(lines, ("   %s"):format(call.detail))
+			table.insert(lines, chrome.detail(icons.note, call.detail))
 			line_calls[#lines] = call
 		end
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add context, Q for quickfix, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to add context, Q for quickfix, or q/<Esc> to close."))
 	return lines, line_calls
 end
 
@@ -188,49 +188,61 @@ function M.request(source, direction, callback)
 		return false
 	end
 
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, "textDocument/prepareCallHierarchy", position_params(source), function(results)
-		local prepared = {}
-		for _, response in pairs(results or {}) do
-			if type(response) == "table" and type(response.result) == "table" then
-				vim.list_extend(prepared, response.result)
-			end
-		end
-		if #prepared == 0 then
-			callback({}, nil)
-			return
-		end
-
-		local pending = #prepared
-		local raw_calls = {}
-		local first_err
-		local done = false
-		local function finish()
-			if pending == 0 and not done then
-				done = true
-				callback(M.normalize(raw_calls, direction), first_err)
-			end
-		end
-		for _, item in ipairs(prepared) do
-			local request_ok, call_request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, method, { item = item }, function(call_results)
-				for _, response in pairs(call_results or {}) do
-					if type(response) == "table" and type(response.result) == "table" then
-						vim.list_extend(raw_calls, response.result)
-					end
+	local ok, request_ids = pcall(
+		vim.lsp.buf_request_all,
+		source.bufnr,
+		"textDocument/prepareCallHierarchy",
+		position_params(source),
+		function(results)
+			local prepared = {}
+			for _, response in pairs(results or {}) do
+				if type(response) == "table" and type(response.result) == "table" then
+					vim.list_extend(prepared, response.result)
 				end
-				pending = pending - 1
-				finish()
-			end)
-			if not request_ok then
-				first_err = first_err or call_request_ids
-				pending = pending - 1
-				finish()
-			elseif type(call_request_ids) == "table" and next(call_request_ids) == nil then
-				first_err = first_err or "No attached LSP client supports call hierarchy"
-				pending = pending - 1
-				finish()
+			end
+			if #prepared == 0 then
+				callback({}, nil)
+				return
+			end
+
+			local pending = #prepared
+			local raw_calls = {}
+			local first_err
+			local done = false
+			local function finish()
+				if pending == 0 and not done then
+					done = true
+					callback(M.normalize(raw_calls, direction), first_err)
+				end
+			end
+			for _, item in ipairs(prepared) do
+				local request_ok, call_request_ids = pcall(
+					vim.lsp.buf_request_all,
+					source.bufnr,
+					method,
+					{ item = item },
+					function(call_results)
+						for _, response in pairs(call_results or {}) do
+							if type(response) == "table" and type(response.result) == "table" then
+								vim.list_extend(raw_calls, response.result)
+							end
+						end
+						pending = pending - 1
+						finish()
+					end
+				)
+				if not request_ok then
+					first_err = first_err or call_request_ids
+					pending = pending - 1
+					finish()
+				elseif type(call_request_ids) == "table" and next(call_request_ids) == nil then
+					first_err = first_err or "No attached LSP client supports call hierarchy"
+					pending = pending - 1
+					finish()
+				end
 			end
 		end
-	end)
+	)
 
 	if not ok then
 		callback(nil, request_ids)

@@ -1,4 +1,6 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 function M.range_lines(item)
 	local range = item and item.range
@@ -86,18 +88,18 @@ end
 
 function M.picker_lines(nodes, opts)
 	opts = opts or {}
-	local lines = { opts.title or "ACP Tree-sitter Nodes", "" }
+	local lines = { chrome.title(icons.treesitter, opts.title or "ACP Tree-sitter Nodes"), "" }
 	local line_nodes = {}
 	for index, item in ipairs(nodes or {}) do
 		local line1, line2 = M.range_lines(item)
 		local location = line1 and (" lines %d-%d"):format(line1, line2) or ""
 		local indent = string.rep("  ", item.depth or 0)
-		table.insert(lines, ("%d. %s%s%s"):format(index, indent, item.type or "node", location))
+		table.insert(lines, chrome.row(index, icons.scope, ("%s%s%s"):format(indent, item.type or "node", location)))
 		line_nodes[#lines] = item
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, opts.footer or "Press <Enter> to add context, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer(opts.footer or "Press <Enter> to add context, or q/<Esc> to close."))
 	return lines, line_nodes
 end
 

@@ -1,4 +1,6 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local kind_names = {
 	[1] = "File",
@@ -103,28 +105,29 @@ function M.flatten(results)
 end
 
 function M.picker_lines(symbols)
-	local lines = { "ACP Symbols", "" }
+	local lines = { chrome.title(icons.symbol, "ACP Symbols"), "" }
 	local line_symbols = {}
 	for index, symbol in ipairs(symbols or {}) do
 		local line1, line2 = M.range_lines(symbol)
 		local location = line1 and (" lines %d-%d"):format(line1, line2) or ""
 		local indent = string.rep("  ", symbol.depth or 0)
-		table.insert(lines, ("%d. %s%s  %s%s"):format(
-			index,
-			indent,
-			symbol.name,
-			M.kind_name(symbol.kind),
-			location
-		))
+		table.insert(
+			lines,
+			chrome.row(
+				index,
+				icons.symbol,
+				("%s%s  %s%s"):format(indent, symbol.name, M.kind_name(symbol.kind), location)
+			)
+		)
 		line_symbols[#lines] = symbol
 		if symbol.detail and symbol.detail ~= "" then
-			table.insert(lines, ("   %s%s"):format(indent, symbol.detail))
+			table.insert(lines, chrome.detail(icons.note, ("%s%s"):format(indent, symbol.detail)))
 			line_symbols[#lines] = symbol
 		end
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add context, Q for quickfix, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to add context, Q for quickfix, or q/<Esc> to close."))
 	return lines, line_symbols
 end
 

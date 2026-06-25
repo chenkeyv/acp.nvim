@@ -1,4 +1,6 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local function reference_uri(reference)
 	if type(reference) ~= "table" then
@@ -86,17 +88,17 @@ end
 
 function M.picker_lines(references, opts)
 	opts = opts or {}
-	local lines = { opts.title or "ACP References", "" }
+	local lines = { chrome.title(icons.reference, opts.title or "ACP References"), "" }
 	local line_references = {}
 	for index, reference in ipairs(references or {}) do
 		local range = M.range(reference)
 		local location = range and ("%s:%d"):format(M.display_path(reference), range.line1) or M.display_path(reference)
-		table.insert(lines, ("%d. %s"):format(index, location))
+		table.insert(lines, chrome.row(index, icons.reference, location))
 		line_references[#lines] = reference
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to add context, Q for quickfix, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to add context, Q for quickfix, or q/<Esc> to close."))
 	return lines, line_references
 end
 
@@ -141,15 +143,21 @@ function M.request(source, callback)
 		},
 	}
 
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, "textDocument/references", params, function(results)
-		local raw_references = {}
-		for _, response in pairs(results or {}) do
-			if type(response) == "table" and type(response.result) == "table" then
-				vim.list_extend(raw_references, response.result)
+	local ok, request_ids = pcall(
+		vim.lsp.buf_request_all,
+		source.bufnr,
+		"textDocument/references",
+		params,
+		function(results)
+			local raw_references = {}
+			for _, response in pairs(results or {}) do
+				if type(response) == "table" and type(response.result) == "table" then
+					vim.list_extend(raw_references, response.result)
+				end
 			end
+			callback(M.flatten(raw_references), nil)
 		end
-		callback(M.flatten(raw_references), nil)
-	end)
+	)
 
 	if not ok then
 		callback(nil, request_ids)

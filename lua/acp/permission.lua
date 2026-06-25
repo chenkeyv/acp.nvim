@@ -1,4 +1,6 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local function clean(value)
 	return tostring(value or ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
@@ -8,11 +10,12 @@ local function option_label(option)
 	return clean(option.name or option.kind or option.optionId or "option")
 end
 
-local function append_field(lines, label, value)
+local function append_field(lines, label, value, icon)
 	if value == nil or value == "" or value == vim.NIL then
 		return
 	end
-	table.insert(lines, ("%s: %s"):format(label, clean(value)))
+	local suffix = icon and (" " .. icon) or ""
+	table.insert(lines, ("%s: %s%s"):format(label, clean(value), suffix))
 end
 
 function M.option_labels(options)
@@ -28,32 +31,32 @@ function M.lines(params)
 	local options = params.options or {}
 	local tool = params.toolCall or {}
 	local lines = {
-		"Permission request",
+		chrome.title(icons.warning, "Permission request"),
 		"",
 	}
 
-	append_field(lines, "Tool", tool.title or tool.name)
-	append_field(lines, "Kind", tool.kind)
-	append_field(lines, "Status", tool.status)
-	append_field(lines, "Description", tool.description)
-	append_field(lines, "Location", tool.location or tool.path)
-	append_field(lines, "Request", params.title or params.description or params.prompt)
+	append_field(lines, "Tool", tool.title or tool.name, icons.tool)
+	append_field(lines, "Kind", tool.kind, icons.type)
+	append_field(lines, "Status", tool.status, icons.status)
+	append_field(lines, "Description", tool.description, icons.note)
+	append_field(lines, "Location", tool.location or tool.path, icons.location)
+	append_field(lines, "Request", params.title or params.description or params.prompt, icons.prompt)
 
 	if #lines > 2 then
 		table.insert(lines, "")
 	end
 
-	table.insert(lines, "Options")
+	table.insert(lines, chrome.title(icons.action, "Options"))
 	for index, option in ipairs(options) do
 		local key = index <= 9 and tostring(index) or "-"
-		table.insert(lines, ("  %s. %s"):format(key, option_label(option)))
-		append_field(lines, "     Outcome", option.optionId)
-		append_field(lines, "     Kind", option.kind)
-		append_field(lines, "     Description", option.description)
+		table.insert(lines, ("  %s. %s %s"):format(key, option_label(option), icons.action))
+		append_field(lines, "     Outcome", option.optionId, icons.status)
+		append_field(lines, "     Kind", option.kind, icons.type)
+		append_field(lines, "     Description", option.description, icons.note)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press 1-9 to choose, <CR> for the first option, or q/<Esc> to cancel.")
+	table.insert(lines, chrome.footer("Press 1-9 to choose, <CR> for the first option, or q/<Esc> to cancel."))
 	return lines
 end
 
@@ -82,7 +85,7 @@ local function window_config(lines)
 		height = height,
 		style = "minimal",
 		border = "rounded",
-		title = " ACP permission ",
+		title = (" %s ACP permission "):format(icons.warning),
 		title_pos = "left",
 		zindex = 70,
 	}

@@ -1,4 +1,6 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local function cwd_for(state)
 	if state and state.connection and state.connection.cwd then
@@ -76,19 +78,19 @@ function M.items(state)
 end
 
 function M.picker_lines(state)
-	local lines = { "ACP Changed Files", "" }
+	local lines = { chrome.title(icons.changes, "ACP Changed Files"), "" }
 	local line_entries = {}
 
 	for index, entry in ipairs((state and state.written_files) or {}) do
 		local suffix = entry.count > 1 and ("  %d writes"):format(entry.count) or ""
-		table.insert(lines, ("%d. %s%s"):format(index, entry.display, suffix))
+		table.insert(lines, chrome.row(index, icons.file, ("%s%s"):format(entry.display, suffix)))
 		line_entries[#lines] = entry
-		table.insert(lines, ("   %s"):format(entry.path))
+		table.insert(lines, chrome.detail(icons.location, entry.path))
 		line_entries[#lines] = entry
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to open, Q for quickfix, / to filter, or q/<Esc> to close.")
+	table.insert(lines, chrome.footer("Press <Enter> to open, Q for quickfix, / to filter, or q/<Esc> to close."))
 	return lines, line_entries
 end
 

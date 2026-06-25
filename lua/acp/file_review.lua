@@ -1,4 +1,6 @@
 local M = {}
+local chrome = require("acp.picker_chrome")
+local icons = require("acp.icons")
 
 local function split_lines(text)
 	if text == "" then
@@ -52,11 +54,11 @@ function M.lines(request)
 	local requests = requests_for(request)
 	local count = #requests
 	local lines = {
-		"File write review",
-		("Files: %d"):format(count),
+		chrome.title(icons.file, "File write review"),
+		("Files: %d %s"):format(count, icons.file),
 		"",
-		count == 1 and "1. Apply write" or ("1. Apply %d writes"):format(count),
-		"2. Cancel",
+		count == 1 and ("1. Apply write %s"):format(icons.edit) or ("1. Apply %d writes %s"):format(count, icons.edit),
+		("2. Cancel %s"):format(icons.warning),
 		"",
 	}
 
@@ -65,12 +67,12 @@ function M.lines(request)
 		local before = item.before or ""
 		local after = item.after or ""
 		if count == 1 then
-			table.insert(lines, ("File: %s"):format(path))
+			table.insert(lines, ("File: %s %s"):format(path, icons.file))
 		else
-			table.insert(lines, ("File %d/%d: %s"):format(index, count, path))
+			table.insert(lines, ("File %d/%d: %s %s"):format(index, count, path, icons.file))
 		end
-		table.insert(lines, ("Current: %d line(s)"):format(line_count(before)))
-		table.insert(lines, ("Proposed: %d line(s)"):format(line_count(after)))
+		table.insert(lines, ("Current: %d line(s) %s"):format(line_count(before), icons.history))
+		table.insert(lines, ("Proposed: %d line(s) %s"):format(line_count(after), icons.edit))
 		table.insert(lines, ("--- %s (current)"):format(path))
 		table.insert(lines, ("+++ %s (proposed)"):format(path))
 		vim.list_extend(lines, unified_diff(before, after))
@@ -107,7 +109,7 @@ local function window_config(lines)
 		height = height,
 		style = "minimal",
 		border = "rounded",
-		title = " ACP file write ",
+		title = (" %s ACP file write "):format(icons.file),
 		title_pos = "left",
 		zindex = 70,
 	}
