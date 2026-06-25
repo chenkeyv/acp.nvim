@@ -7203,6 +7203,84 @@ test("terminal requests capture bounded output and wait for exit", function()
 	vim.fn.delete(root, "rf")
 end)
 
+test("terminal approval shows structured command details", function()
+	local root = vim.fn.tempname()
+	vim.fn.mkdir(root, "p")
+
+	local connection = Connection.new({
+		adapter = {
+			command = { "missing-acp-test-command" },
+			timeout_ms = 10,
+		},
+		cwd = root,
+	})
+	connection.session_id = "session-1"
+
+	local writes = {}
+	function connection:write(message)
+		table.insert(writes, message)
+		return true
+	end
+
+	local reviewed
+	local original_select = permission.select
+	permission.select = function(params, callback)
+		reviewed = params
+		callback({ optionId = "cancel" })
+	end
+
+	local passed, err = pcall(function()
+		connection:handle_request({
+			id = 56,
+			method = "terminal/create",
+			params = {
+				sessionId = "session-1",
+				command = "sh",
+				args = { "-c", "printf ok" },
+				cwd = root,
+				env = {
+					{ name = "TEST_ENV", value = "1" },
+				},
+				outputByteLimit = 8,
+			},
+		})
+	end)
+	permission.select = original_select
+	if not passed then
+		error(err)
+	end
+
+	ok(reviewed, "terminal approval should open a permission review")
+	eq(reviewed.toolCall.kind, "execute")
+	eq(reviewed.toolCall.status, "output 8 B")
+	eq(reviewed.toolCall.description, "sh -c printf ok")
+	eq(reviewed.toolCall.location, root)
+	eq(reviewed.details[1].label, "Command")
+	eq(reviewed.details[1].value, "sh -c printf ok")
+	eq(reviewed.details[1].icon, icons.terminal)
+	eq(reviewed.details[2].label, "Working directory")
+	eq(reviewed.details[2].value, root)
+	eq(reviewed.details[2].icon, icons.location)
+	eq(reviewed.details[3].label, "Output limit")
+	eq(reviewed.details[3].value, "8 B")
+	eq(reviewed.details[3].icon, icons.context)
+	eq(reviewed.details[4].label, "Environment")
+	eq(reviewed.details[4].value, "1 variable(s)")
+	eq(reviewed.details[4].icon, icons.config)
+
+	local text = table.concat(permission.lines(reviewed), "\n")
+	ok(text:find("Details", 1, true))
+	ok(text:find(icons.inspect, 1, true))
+	ok(text:find("Command: sh -c printf ok", 1, true))
+	ok(text:find("Working directory: " .. root, 1, true))
+	ok(text:find("Output limit: 8 B", 1, true))
+	ok(text:find("Environment: 1 variable(s)", 1, true))
+	eq(writes[1].error.message, "Terminal command cancelled")
+	eq(writes[1].error.code, jsonrpc.errors.internal_error)
+
+	vim.fn.delete(root, "rf")
+end)
+
 test("embedded terminals stream output to active handlers", function()
 	local root = vim.fn.tempname()
 	vim.fn.mkdir(root, "p")
@@ -7717,6 +7795,18 @@ test("permission UI formats tool details and options", function()
 			kind = "edit",
 			description = "Patch a source file",
 		},
+		details = {
+			{
+				label = "Command",
+				value = "sh -c printf ok",
+				icon = icons.terminal,
+			},
+			{
+				label = "Working directory",
+				value = "/tmp/project",
+				icon = icons.location,
+			},
+		},
 		options = {
 			{
 				optionId = "allow",
@@ -7736,6 +7826,12 @@ test("permission UI formats tool details and options", function()
 	ok(text:find(icons.action, 1, true))
 	ok(text:find("Tool: Edit file", 1, true))
 	ok(text:find("Kind: edit", 1, true))
+	ok(text:find("Details", 1, true))
+	ok(text:find(icons.inspect, 1, true))
+	ok(text:find("Command: sh -c printf ok", 1, true))
+	ok(text:find(icons.terminal, 1, true))
+	ok(text:find("Working directory: /tmp/project", 1, true))
+	ok(text:find(icons.location, 1, true))
 	ok(text:find("1. Allow", 1, true))
 	ok(text:find("Outcome: allow", 1, true))
 	ok(text:find("2. Deny", 1, true))

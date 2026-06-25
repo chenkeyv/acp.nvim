@@ -20,6 +20,28 @@ local function append_field(lines, label, value, icon)
 	table.insert(lines, ("%s: %s%s"):format(label, clean(value), suffix))
 end
 
+local function append_details(lines, details)
+	if type(details) ~= "table" then
+		return false
+	end
+
+	local added = false
+	for _, detail in ipairs(details) do
+		if type(detail) == "table" and detail.value ~= nil and detail.value ~= "" and detail.value ~= vim.NIL then
+			if not added then
+				table.insert(lines, chrome.title(icons.inspect, "Details"))
+				added = true
+			end
+			append_field(lines, detail.label or detail.name or "Detail", detail.value, detail.icon or icons.note)
+		end
+	end
+
+	if added then
+		table.insert(lines, "")
+	end
+	return added
+end
+
 function M.option_labels(options)
 	local labels = {}
 	for _, option in ipairs(options or {}) do
@@ -58,7 +80,11 @@ local function apply_highlights(bufnr, lines)
 	vim.api.nvim_buf_clear_namespace(bufnr, permission_ns, 0, -1)
 	for index, line in ipairs(lines or {}) do
 		local row = index - 1
-		if line:find("Permission request", 1, true) or line:find("Options", 1, true) then
+		if
+			line:find("Permission request", 1, true)
+			or line:find("Details", 1, true)
+			or line:find("Options", 1, true)
+		then
 			add_line_hl(bufnr, row, "AcpPermissionHeader")
 			add_hl(bufnr, row, 0, #line, "AcpPermissionHeader")
 		elseif line:match("^%s*%d+%.%s+") or line:match("^%s*%-%.%s+") then
@@ -106,6 +132,8 @@ function M.lines(params)
 	if #lines > 2 then
 		table.insert(lines, "")
 	end
+
+	append_details(lines, params.details)
 
 	table.insert(lines, chrome.title(icons.action, "Options"))
 	for index, option in ipairs(options) do

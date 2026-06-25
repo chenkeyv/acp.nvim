@@ -155,6 +155,73 @@ local function command_display(command, args)
 	return table.concat(parts, " ")
 end
 
+local function compact_decimal(value)
+	return ("%.1f"):format(value):gsub("%.0$", "")
+end
+
+local function byte_count_label(value)
+	local number = tonumber(value)
+	if number == nil then
+		return nil
+	end
+	if number < 1024 then
+		return ("%d B"):format(number)
+	end
+	if number < 1024 * 1024 then
+		return ("%s KiB"):format(compact_decimal(number / 1024))
+	end
+	return ("%s MiB"):format(compact_decimal(number / (1024 * 1024)))
+end
+
+local function terminal_output_limit_label(value)
+	return byte_count_label(value) or "1 MiB (default)"
+end
+
+local function env_count(env)
+	if type(env) ~= "table" then
+		return 0
+	end
+
+	local count = 0
+	for _, item in ipairs(env) do
+		if type(item) == "table" and type(item.name) == "string" then
+			count = count + 1
+		end
+	end
+	return count
+end
+
+local function terminal_review_details(params, cwd, args)
+	local details = {
+		{
+			label = "Command",
+			value = command_display(params.command, args),
+			icon = icons.terminal,
+		},
+		{
+			label = "Working directory",
+			value = cwd,
+			icon = icons.location,
+		},
+		{
+			label = "Output limit",
+			value = terminal_output_limit_label(params.outputByteLimit),
+			icon = icons.context,
+		},
+	}
+
+	local count = env_count(params.env)
+	if count > 0 then
+		table.insert(details, {
+			label = "Environment",
+			value = ("%d variable(s)"):format(count),
+			icon = icons.config,
+		})
+	end
+
+	return details
+end
+
 local function agent_capabilities(connection)
 	return (connection.agent_info and connection.agent_info.agentCapabilities) or {}
 end
@@ -992,8 +1059,11 @@ function Connection:handle_terminal_create(id, params)
 		toolCall = {
 			title = ("%s Run terminal command: %s"):format(icons.terminal, params.command),
 			kind = "execute",
-			description = ("cwd: %s"):format(cwd),
+			status = ("output %s"):format(terminal_output_limit_label(params.outputByteLimit)),
+			description = command_display(params.command, args),
+			location = cwd,
 		},
+		details = terminal_review_details(params, cwd, args),
 		options = {
 			{
 				optionId = "run",
