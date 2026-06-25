@@ -209,7 +209,7 @@ end
 local function metadata_label(state)
 	local model = clean(state and state.model) or "?"
 	local context_window = state and state.context_window and format_count(state.context_window) or "?"
-	return ("Model: %s | Context: %s"):format(model, context_window)
+	return ("Model: %s | Context: %s  %s %s"):format(model, context_window, icons.model, icons.context)
 end
 
 local function title_parts(state, opts)
@@ -267,26 +267,43 @@ end
 
 local function summary_label(stats)
 	stats = stats or {}
-	return ("Transcript: %d section%s | %d code | %d loc%s | %d change%s"):format(
+	return ("Transcript: %d section%s | %d code | %d loc%s | %d change%s  %s"):format(
 		stats.sections or 0,
 		stats.sections == 1 and "" or "s",
 		stats.code_blocks or 0,
 		stats.locations or 0,
 		stats.locations == 1 and "" or "s",
 		stats.changes or 0,
-		stats.changes == 1 and "" or "s"
+		stats.changes == 1 and "" or "s",
+		icons.map
 	)
 end
 
 function M.dashboard_lines(state, opts)
 	opts = opts or {}
+	local key_hints = (
+		"Keys: %s ? actions | %s K inspect | %s ]o/[o items | %s <leader>ax search | %s gf refs | %s <leader>ay yank | %s [[/]] sections | %s <leader>av outline"
+	):format(
+		icons.key,
+		icons.inspect,
+		icons.jump,
+		icons.search,
+		icons.reference,
+		icons.yank,
+		icons.section,
+		icons.map
+	)
 	return {
-		("ACP: %s"):format(clean(state and state.adapter) or "?"),
-		("Session: #%s | Mode: %s"):format(tostring(state and state.id or "?"), clean(state and state.mode) or "?"),
+		("ACP: %s  %s"):format(clean(state and state.adapter) or "?", icons.acp),
+		("Session: #%s | Mode: %s  %s"):format(
+			tostring(state and state.id or "?"),
+			clean(state and state.mode) or "?",
+			icons.session
+		),
 		metadata_label(state),
-		("Source: %s"):format(source_label(state and state.source)),
+		("Source: %s  %s"):format(source_label(state and state.source), icons.source),
 		summary_label(opts.stats),
-		"Keys: ? actions | K inspect | ]o/[o items | <leader>ax search | gf refs | <leader>ay yank | [[/]] sections | <leader>av outline",
+		key_hints,
 		"",
 	}
 end
