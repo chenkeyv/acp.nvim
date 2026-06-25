@@ -57,8 +57,7 @@ This plugin provides an editor-native ACP chat surface:
 - native folds for collapsing transcript sections
 - non-blocking adapter startup and session creation
 - floating slash-command picker for adapter-advertised commands
-- native slash-command and `@workflow` completion in the prompt buffer
-- optional `blink.cmp` source for slash-command and `@workflow` prompt completion with scoped labels and documentation
+- `blink.cmp` source for slash-command and `@workflow` prompt completion with scoped labels and documentation
 - prompt-buffer session ribbon with linked-source diagnostics, ghost text, and draft statistics while composing
 - prompt-focused action picker with source, LSP, Tree-sitter, output, and session workflows
 - smart context drafting that combines source, Tree-sitter, diagnostics, and available LSP signals
@@ -150,7 +149,7 @@ vim.g.acp_nvim_config = {
 }
 ```
 
-Optional `blink.cmp` prompt completion:
+`blink.cmp` prompt completion:
 
 ```lua
 require("blink.cmp").setup({
@@ -168,8 +167,8 @@ require("blink.cmp").setup({
 
 The ACP source is enabled only in ACP prompt buffers. Completion items include
 workflow or adapter-command scope labels, insert/action details, and plaintext
-documentation. `<C-Space>` prefers this source when it is configured and falls
-back to the native `completefunc` completion otherwise.
+documentation. `<C-Space>` opens the `blink.cmp` ACP source; acp.nvim does not
+install a native `completefunc` fallback.
 
 ## Commands
 
@@ -284,7 +283,7 @@ In the prompt buffer:
 - `<C-Enter>` sends the prompt
 - `<C-s>` also sends the prompt as a terminal-compatible fallback
 - `<M-p>` / `<M-n>` recall previous/next prompts for the current session
-- `<C-Space>` opens blink/native ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@workspace-diagnostics`/`@code-lens`/`@colors`/`@links`/`@folds`/`@rename`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@supertypes`/`@subtypes`/`@output` workflows
+- `<C-Space>` opens blink ACP prompt completion for slash commands and `@context`/`@smart-context`/`@diagnostics`/`@workspace-diagnostics`/`@code-lens`/`@colors`/`@links`/`@folds`/`@rename`/`@signature`/`@inlay-hints`/`@selection`/`@callers`/`@callees`/`@supertypes`/`@subtypes`/`@output` workflows
 - `<leader>ac` inserts source-buffer context into the prompt
 - `<leader>ax` searches output transcript lines
 - `<leader>am` opens a persistent output map with progress rails, item counts, previews, and quickfix export

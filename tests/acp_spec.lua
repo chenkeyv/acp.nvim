@@ -2481,7 +2481,7 @@ test("slash command picker lines and draft text are rendered", function()
 	ok(no_input_text:find("No input", 1, true))
 end)
 
-test("slash command completion items are rendered for completefunc", function()
+test("prompt completion backend items are rendered for blink", function()
 	local commands = {
 		{
 			name = "plan",
@@ -2660,9 +2660,10 @@ test("prompt history recalls sent prompts and restores draft", function()
 		input_buf = vim.api.nvim_get_current_buf()
 		local state_id = tonumber(vim.api.nvim_buf_get_name(input_buf):match("ACP://[^/]+/(%d+)/input$"))
 		ok(state_id, "input buffer name should include the ACP session id")
-		eq(vim.bo[input_buf].completefunc, "v:lua.acp_nvim_completefunc")
+		eq(vim.bo[input_buf].completefunc, "")
 		eq(vim.b[input_buf].acp_blink_source, true)
 		eq(vim.b[input_buf].acp_state_id, state_id)
+		eq(_G.acp_nvim_completefunc, nil)
 		local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 		local marks = vim.api.nvim_buf_get_extmarks(input_buf, prompt_ns, 0, -1, { details = true })
 		local ghost = false
@@ -2694,12 +2695,6 @@ test("prompt history recalls sent prompts and restores draft", function()
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "@con" })
 		vim.api.nvim_win_set_cursor(0, { 1, 4 })
-		eq(require("acp.ui").completefunc(1, ""), 0)
-		local completion_items = require("acp.ui").completefunc(0, "@con")
-		eq(completion_items[1].word, "@context")
-		eq(completion_items[1].menu, ("%s source"):format(icons.source))
-		eq(completion_items[1].user_data, "acp.nvim:context")
-
 		eq(acp_blink.provider().name, icons.title("ACP"))
 		local blink_source = acp_blink.new()
 		ok(blink_source:enabled(), "ACP blink source should be enabled in the prompt buffer")

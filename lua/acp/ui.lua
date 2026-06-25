@@ -3549,8 +3549,6 @@ local function create_buffers(state)
 	set_buf_options(state.input_buf, {
 		bufhidden = "wipe",
 		buftype = "nofile",
-		completefunc = "v:lua.acp_nvim_completefunc",
-		completeopt = "menuone,noselect",
 		filetype = "markdown",
 		swapfile = false,
 	})
@@ -3856,8 +3854,7 @@ local function register_keymaps(state)
 				return
 			end
 		end
-		local keys = vim.api.nvim_replace_termcodes("<C-x><C-u>", true, false, true)
-		vim.api.nvim_feedkeys(keys, "n", false)
+		notify("blink.cmp is required for ACP prompt completion", vim.log.levels.WARN)
 	end, { buffer = state.input_buf, desc = "Complete ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<C-CR>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<C-s>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
@@ -8544,14 +8541,6 @@ function M.handle_prompt_completion_action(state_id, completed_item)
 	end
 end
 
-function M.completefunc(findstart, base)
-	if tonumber(findstart) == 1 then
-		return M.prompt_completion_start(vim.fn.getline("."), vim.fn.col(".") - 1)
-	end
-
-	return M.prompt_completion_items(vim.api.nvim_get_current_buf(), base)
-end
-
 function M.prompt_completion_start(line, cursor_col)
 	return require("acp.prompt_completion").start(line, cursor_col)
 end
@@ -8653,10 +8642,6 @@ function M.tabline()
 
 	table.insert(parts, "%#TabLineFill#%T")
 	return table.concat(parts)
-end
-
-function _G.acp_nvim_completefunc(findstart, base)
-	return require("acp.ui").completefunc(findstart, base)
 end
 
 function _G.acp_nvim_output_foldexpr()
