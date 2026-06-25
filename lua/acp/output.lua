@@ -362,31 +362,49 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpInjectedCode", { link = "Visual", default = true })
 end
 
+local function section_separator(icon, label, detail, hint)
+	local title = label
+	if detail and detail ~= "" then
+		title = ("%s %s"):format(label, detail)
+	end
+	local parts = { icons.pulse_mid, icon, title }
+	if hint and hint ~= "" then
+		table.insert(parts, ("%s %s"):format(icons.key, hint))
+	end
+	return (" %s "):format(table.concat(parts, "  "))
+end
+
 function M.activity_separator(line)
 	line = line or ""
 	if line:match("^Tool update:") then
-		return ("---- %s TOOL UPDATE: %s | K inspect | ]o/[o items ----"):format(
+		return section_separator(
 			icons.tool,
-			short_label((line:gsub("^Tool update:%s*", "")))
+			"TOOL UPDATE:",
+			short_label((line:gsub("^Tool update:%s*", ""))),
+			"K inspect  " .. icons.jump .. " ]o/[o items"
 		)
 	end
 	if line:match("^Tool:") then
-		return ("---- %s TOOL: %s | K inspect | ]o/[o items ----"):format(
+		return section_separator(
 			icons.tool,
-			short_label((line:gsub("^Tool:%s*", "")))
+			"TOOL:",
+			short_label((line:gsub("^Tool:%s*", ""))),
+			"K inspect  " .. icons.jump .. " ]o/[o items"
 		)
 	end
 	if line:match("^Terminal:") then
-		return ("---- %s TERMINAL: %s | K inspect | ]o/[o items ----"):format(
+		return section_separator(
 			icons.terminal,
-			short_label((line:gsub("^Terminal:%s*", "")))
+			"TERMINAL:",
+			short_label((line:gsub("^Terminal:%s*", ""))),
+			"K inspect  " .. icons.jump .. " ]o/[o items"
 		)
 	end
 	if line:match("^Terminal output truncated") then
-		return ("---- %s TERMINAL WARNING: output truncated | <leader>ae problems ----"):format(icons.warning)
+		return section_separator(icons.warning, "TERMINAL WARNING:", "output truncated", "<leader>ae problems")
 	end
 	if line:match("^stderr:") then
-		return ("---- %s STDERR: problem output | K inspect | <leader>ae problems ----"):format(icons.error)
+		return section_separator(icons.error, "STDERR:", "problem output", "K inspect  <leader>ae problems")
 	end
 end
 
@@ -448,7 +466,7 @@ function M.line_style(line)
 			badge = (" %s USER "):format(icons.user),
 			badge_hl = "AcpBadgeUser",
 			sign_text = icons.user,
-			separator = "---- USER: Prompt ----",
+			separator = section_separator(icons.user, "USER:", "Prompt"),
 		}
 	end
 	if line == "Agent" then
@@ -457,7 +475,7 @@ function M.line_style(line)
 			badge = (" %s AGENT "):format(icons.agent),
 			badge_hl = "AcpBadgeAgent",
 			sign_text = icons.agent,
-			separator = "---- AGENT: Response ----",
+			separator = section_separator(icons.agent, "AGENT:", "Response"),
 		}
 	end
 	if line:match("^ACP:") then
@@ -475,7 +493,7 @@ function M.line_style(line)
 			badge = (" %s ERROR "):format(icons.error),
 			badge_hl = "AcpBadgeError",
 			sign_text = icons.error,
-			separator = "---- STATUS: Error ----",
+			separator = section_separator(icons.error, "STATUS:", "Error"),
 		}
 	end
 	if line:match("^Status:%s+stopped") or line:match("^Status:%s+restored") then
@@ -484,7 +502,7 @@ function M.line_style(line)
 			badge = (" %s DONE "):format(icons.idle),
 			badge_hl = "AcpBadgeStatus",
 			sign_text = icons.idle,
-			separator = "---- STATUS: Done ----",
+			separator = section_separator(icons.idle, "STATUS:", "Done"),
 		}
 	end
 	if line:match("^Status:") then
@@ -493,7 +511,7 @@ function M.line_style(line)
 			badge = (" %s LIVE "):format(icons.status),
 			badge_hl = "AcpBadgeStatus",
 			sign_text = icons.status,
-			separator = "---- STATUS: Live ----",
+			separator = section_separator(icons.status, "STATUS:", "Live"),
 		}
 	end
 	if line:match("^Tool") then
@@ -529,7 +547,7 @@ function M.line_style(line)
 			badge = (" %s FILE "):format(icons.file),
 			badge_hl = "AcpBadgeUser",
 			sign_text = icons.file,
-			separator = "---- FILE WRITE ----",
+			separator = section_separator(icons.file, "FILE", "WRITE"),
 		}
 	end
 	if line:match("^Thought:") then
@@ -538,7 +556,7 @@ function M.line_style(line)
 			badge = (" %s NOTE "):format(icons.note),
 			badge_hl = "AcpBadge",
 			sign_text = icons.note,
-			separator = "---- NOTE ----",
+			separator = section_separator(icons.note, "NOTE"),
 		}
 	end
 	if line:match("^stderr:") then

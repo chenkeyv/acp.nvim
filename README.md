@@ -49,7 +49,7 @@ This plugin provides an editor-native ACP chat surface:
 - right-aligned output timeline badges with section index and transcript progress
 - per-section right-aligned summary badges for line, word, and code-block counts
 - native output diagnostics and location-list navigation for transcript errors and stderr
-- virtual section separators for scanning long output without changing transcript text
+- iconized virtual section ribbons for scanning long output without changing transcript text
 - ghost-text output hints with live transcript counts, motion badges, and animated busy status
 - cursor-sensitive ghost-text action chips for references, code blocks, errors, and sections
 - optional Tree-sitter Markdown/code-fence language injection with injected-language ranges, body highlights, and animated injection badges
