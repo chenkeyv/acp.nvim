@@ -1,3 +1,4 @@
+local icons = require("acp.icons")
 local metadata = require("acp.metadata")
 
 local M = {}
@@ -167,7 +168,7 @@ function M.notify(config, adapter_name, notify)
 	}
 
 	for _, item in ipairs(M.items(config, { adapter_name = adapter_name })) do
-		notify(item.message, levels[item.level] or vim.log.levels.INFO, { title = "ACP" })
+		notify(item.message, levels[item.level] or vim.log.levels.INFO, { title = icons.title("ACP") })
 	end
 end
 

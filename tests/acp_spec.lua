@@ -372,6 +372,7 @@ test("floating picker starts Tree-sitter for language previews", function()
 end)
 
 test("picker chrome renders shared Nerd Font icons", function()
+	eq(icons.title("ACP"), ("%s ACP"):format(icons.acp))
 	eq(picker_chrome.title(icons.diagnostics, "ACP Diagnostics"), ("%s ACP Diagnostics"):format(icons.diagnostics))
 	eq(picker_chrome.row(2, icons.reference, "file.lua:3"), ("2. %s file.lua:3"):format(icons.reference))
 	eq(picker_chrome.footer("Press <Enter> to select."), ("Press <Enter> to select. %s"):format(icons.key))
@@ -849,6 +850,28 @@ test("health renderer uses Neovim health reporters", function()
 		"ok:adapter ready",
 		"warn:metadata partial",
 	})
+end)
+
+test("health notifications use shared Nerd Font titles", function()
+	local reports = {}
+	acp_health.notify({
+		default_adapter = "test",
+		adapters = {
+			test = {
+				command = { "missing-acp-test-command" },
+			},
+		},
+	}, "test", function(message, level, opts)
+		table.insert(reports, {
+			message = message,
+			level = level,
+			title = opts and opts.title,
+		})
+	end)
+
+	ok(#reports > 0)
+	eq(reports[1].title, icons.title("ACP"))
+	ok(reports[1].title:find(icons.acp, 1, true))
 end)
 
 test("output dashboard and section helpers are rendered", function()

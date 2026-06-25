@@ -70,7 +70,7 @@ local source_ns = vim.api.nvim_create_namespace("acp.nvim.source")
 local output_map_lines = {}
 
 local function notify(message, level)
-	vim.notify(message, level or vim.log.levels.INFO, { title = "ACP" })
+	vim.notify(message, level or vim.log.levels.INFO, { title = icons.title("ACP") })
 end
 
 local function valid_buf(bufnr)

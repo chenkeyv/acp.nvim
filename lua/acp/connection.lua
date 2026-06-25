@@ -1,5 +1,6 @@
 local jsonrpc = require("acp.jsonrpc")
 local file_review = require("acp.file_review")
+local icons = require("acp.icons")
 local permission = require("acp.permission")
 local terminal = require("acp.terminal")
 
@@ -26,7 +27,7 @@ local methods = {
 }
 
 local function notify(message, level)
-	vim.notify(message, level or vim.log.levels.INFO, { title = "ACP" })
+	vim.notify(message, level or vim.log.levels.INFO, { title = icons.title("ACP") })
 end
 
 local function executable_exists(command)

@@ -1,9 +1,11 @@
+local icons = require("acp.icons")
+
 local M = {}
 
 local codex_metadata_cache = {}
 
 local function notify(message, level)
-	vim.notify(message, level or vim.log.levels.INFO, { title = "ACP" })
+	vim.notify(message, level or vim.log.levels.INFO, { title = icons.title("ACP") })
 end
 
 local function first_field(source, fields)

@@ -48,4 +48,8 @@ local M = {
 	warning = "",
 }
 
+function M.title(text, icon)
+	return ("%s %s"):format(icon or M.acp, text or "ACP")
+end
+
 return M

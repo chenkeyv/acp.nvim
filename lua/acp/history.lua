@@ -237,7 +237,11 @@ function M.open_entry(entry)
 
 	local ok, lines = pcall(vim.fn.readfile, entry.path)
 	if not ok then
-		vim.notify(("Failed to read ACP history: %s"):format(entry.path), vim.log.levels.ERROR, { title = "ACP" })
+		vim.notify(
+			("Failed to read ACP history: %s"):format(entry.path),
+			vim.log.levels.ERROR,
+			{ title = icons.title("ACP") }
+		)
 		return false
 	end
 
@@ -306,7 +310,7 @@ function M.open_browser(opts)
 	opts = opts or {}
 	local entries = M.entries()
 	if #entries == 0 then
-		vim.notify("No ACP history found", vim.log.levels.INFO, { title = "ACP" })
+		vim.notify("No ACP history found", vim.log.levels.INFO, { title = icons.title("ACP") })
 		return false
 	end
 
