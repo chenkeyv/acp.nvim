@@ -277,6 +277,90 @@ test("floating picker renders preview windows for mapped source rows", function(
 	ok(not vim.api.nvim_win_is_valid(view.preview_winid), "preview window should close with picker")
 end)
 
+test("floating picker starts Tree-sitter for language previews", function()
+	local original_treesitter = vim.treesitter
+	local original_start = original_treesitter and original_treesitter.start
+	local original_stop = original_treesitter and original_treesitter.stop
+	vim.treesitter = vim.treesitter or {}
+	local started = {}
+	local stopped = {}
+	vim.treesitter.start = function(bufnr, filetype)
+		table.insert(started, { bufnr = bufnr, filetype = filetype })
+	end
+	vim.treesitter.stop = function(bufnr)
+		table.insert(stopped, bufnr)
+	end
+
+	local function started_preview(bufnr, filetype)
+		for _, item in ipairs(started) do
+			if item.bufnr == bufnr and item.filetype == filetype then
+				return true
+			end
+		end
+		return false
+	end
+
+	local function stopped_preview(bufnr)
+		for _, item in ipairs(stopped) do
+			if item == bufnr then
+				return true
+			end
+		end
+		return false
+	end
+
+	local view
+	local passed, err = pcall(function()
+		view = picker.open({
+			name = "ACP://test-preview-syntax",
+			filetype = "acp-test-picker",
+			lines = {
+				"ACP Test Preview Syntax",
+				"",
+				"lua item",
+				"text item",
+			},
+			title = " ACP test preview syntax ",
+			preview = function(row)
+				if row == 3 then
+					return {
+						lines = { "local value = 1" },
+						filetype = "lua",
+						title = " Lua Preview ",
+					}
+				end
+				return {
+					lines = { "plain text" },
+					filetype = "text",
+					title = " Text Preview ",
+				}
+			end,
+		})
+
+		vim.api.nvim_win_set_cursor(view.winid, { 3, 0 })
+		view.update_preview()
+		ok(started_preview(view.preview_bufnr, "lua"))
+		eq(vim.b[view.preview_bufnr].acp_picker_preview_syntax, "treesitter")
+		vim.api.nvim_win_set_cursor(view.winid, { 4, 0 })
+		view.update_preview()
+		ok(stopped_preview(view.preview_bufnr))
+		eq(vim.b[view.preview_bufnr].acp_picker_preview_syntax, "filetype")
+	end)
+
+	if view then
+		view.close()
+	end
+	if original_treesitter then
+		vim.treesitter.start = original_start
+		vim.treesitter.stop = original_stop
+	else
+		vim.treesitter = nil
+	end
+	if not passed then
+		error(err, 2)
+	end
+end)
+
 test("picker chrome renders shared Nerd Font icons", function()
 	eq(picker_chrome.title(icons.diagnostics, "ACP Diagnostics"), ("%s ACP Diagnostics"):format(icons.diagnostics))
 	eq(picker_chrome.row(2, icons.reference, "file.lua:3"), ("2. %s file.lua:3"):format(icons.reference))

@@ -160,6 +160,24 @@ local function normalize_preview(value)
 	}
 end
 
+local function preview_syntax(bufnr, filetype)
+	filetype = filetype or "text"
+	if vim.b[bufnr].acp_picker_preview_filetype ~= filetype and vim.treesitter and vim.treesitter.stop then
+		pcall(vim.treesitter.stop, bufnr)
+	end
+	vim.b[bufnr].acp_picker_preview_filetype = filetype
+
+	if not (vim.treesitter and vim.treesitter.start) or filetype == "text" or filetype == "acp" then
+		vim.b[bufnr].acp_picker_preview_syntax = "filetype"
+		return "filetype"
+	end
+
+	local ok = pcall(vim.treesitter.start, bufnr, filetype)
+	local syntax = ok and "treesitter" or "filetype"
+	vim.b[bufnr].acp_picker_preview_syntax = syntax
+	return syntax
+end
+
 function M.window_config(lines, opts)
 	opts = opts or {}
 
@@ -368,6 +386,7 @@ function M.open(opts)
 		vim.api.nvim_buf_set_lines(preview_bufnr, 0, -1, false, preview.lines)
 		vim.bo[preview_bufnr].filetype = preview.filetype or "text"
 		vim.bo[preview_bufnr].modifiable = false
+		preview_syntax(preview_bufnr, preview.filetype or "text")
 
 		local preview_config = preview_window_config(preview)
 		if valid_win(preview_winid) then
