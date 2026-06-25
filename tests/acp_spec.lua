@@ -6634,6 +6634,72 @@ test("history replay prompt is bounded and includes metadata", function()
 	vim.fn.delete(path)
 end)
 
+test("history entry opens with winbar and highlights", function()
+	local state = {
+		id = 424246,
+		adapter = "test-adapter",
+		title = "History Entry Test",
+		model = "test-model",
+	}
+	local path = history.save(state, {
+		"ACP: test-adapter",
+		"",
+		"You",
+		"",
+		"hello",
+		"Agent",
+		"```lua",
+		"print('history')",
+		"```",
+		"See lua/acp/history.lua:1",
+	})
+
+	local entry
+	for _, item in ipairs(history.entries()) do
+		if item.path == path then
+			entry = item
+			break
+		end
+	end
+	ok(entry, "history entry should be listed before opening")
+	ok(history.open_entry(entry), "history entry should open")
+
+	local bufnr = vim.api.nvim_get_current_buf()
+	eq(vim.bo[bufnr].filetype, "acp")
+	ok(vim.api.nvim_buf_get_name(bufnr):find("ACP History://", 1, true))
+	ok(vim.wo[0].winbar:find(icons.history, 1, true))
+	ok(vim.wo[0].winbar:find("History Entry Test", 1, true))
+	ok(vim.wo[0].winbar:find(icons.model, 1, true))
+	ok(vim.wo[0].winbar:find("8 lines", 1, true))
+	ok(vim.wo[0].winbar:find("1 code", 1, true))
+	ok(vim.wo[0].winbar:find("1 loc", 1, true))
+	ok(vim.wo[0].winbar:find("q close", 1, true))
+
+	local ns = vim.api.nvim_get_namespaces()["acp.nvim.history"]
+	local marks = vim.api.nvim_buf_get_extmarks(bufnr, ns, 0, -1, { details = true })
+	local header_hl = false
+	local meta_hl = false
+	local section_hl = false
+	local code_hl = false
+	local location_hl = false
+	for _, mark in ipairs(marks) do
+		local details = mark[4] or {}
+		header_hl = header_hl or details.line_hl_group == "AcpHistoryHeader"
+		meta_hl = meta_hl or details.line_hl_group == "AcpHistoryMeta"
+		section_hl = section_hl or details.line_hl_group == "AcpHistorySection"
+		code_hl = code_hl or details.line_hl_group == "AcpHistoryCode"
+		location_hl = location_hl or details.hl_group == "AcpHistoryLocation"
+	end
+	ok(header_hl, "history transcript header should be highlighted")
+	ok(meta_hl, "history metadata should be highlighted")
+	ok(section_hl, "history sections should be highlighted")
+	ok(code_hl, "history code blocks should be highlighted")
+	ok(location_hl, "history file references should be highlighted")
+
+	pcall(vim.cmd, "tabclose!")
+	vim.fn.delete(path)
+end)
+
 test("history browser opens when entries exist", function()
 	local state = {
 		id = 424243,

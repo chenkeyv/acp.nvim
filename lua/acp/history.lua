@@ -4,6 +4,8 @@ local picker = require("acp.picker")
 
 local M = {}
 
+local history_ns = vim.api.nvim_create_namespace("acp.nvim.history")
+
 local function history_dir()
 	return vim.fs.joinpath(vim.fn.stdpath("state"), "acp.nvim", "history")
 end
@@ -37,6 +39,33 @@ local function metadata_value(value)
 		return nil
 	end
 	return tostring(value):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+function M.define_highlights()
+	vim.api.nvim_set_hl(0, "AcpHistoryHeader", { fg = "#7aa2f7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpHistoryMeta", { link = "Comment", default = true })
+	vim.api.nvim_set_hl(0, "AcpHistorySection", { fg = "#9ece6a", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpHistoryCode", { fg = "#e0af68", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpHistoryLocation", { link = "Underlined", default = true })
+	vim.api.nvim_set_hl(0, "AcpHistoryKey", { fg = "#e0af68", bold = true, default = true })
+end
+
+local function add_line_hl(bufnr, row, group)
+	pcall(vim.api.nvim_buf_set_extmark, bufnr, history_ns, row, 0, {
+		line_hl_group = group,
+		priority = 70,
+	})
+end
+
+local function add_hl(bufnr, row, start_col, end_col, group)
+	if end_col <= start_col then
+		return
+	end
+	pcall(vim.api.nvim_buf_set_extmark, bufnr, history_ns, row, start_col, {
+		end_col = end_col,
+		hl_group = group,
+		priority = 90,
+	})
 end
 
 function M.save(state, lines)
@@ -83,6 +112,27 @@ local function transcript_lines(lines)
 		table.insert(transcript, lines[index])
 	end
 	return transcript
+end
+
+local function is_transcript_section(line)
+	return line == "You"
+		or line == "Agent"
+		or line:match("^ACP:")
+		or line:match("^Status:")
+		or line:match("^Tool")
+		or line:match("^Terminal:")
+		or line:match("^Terminal output truncated")
+		or line:match("^Wrote ")
+		or line:match("^Thought:")
+		or line:match("^stderr:")
+end
+
+local function is_metadata_line(line)
+	return line:match("^Title:")
+		or line:match("^Adapter:")
+		or line:match("^Model:")
+		or line:match("^Created:")
+		or line:match("^Updated:")
 end
 
 local function transcript_metrics(lines)
@@ -166,6 +216,76 @@ local function bounded_lines(lines, opts)
 	return out
 end
 
+local function highlight_locations(bufnr, row, line)
+	local start_col = 1
+	while true do
+		local first, last = line:find("[^%s%[%]%(%){}<>,;]+:%d+:?%d*", start_col)
+		if not first then
+			break
+		end
+		add_hl(bufnr, row, first - 1, last, "AcpHistoryLocation")
+		start_col = last + 1
+	end
+end
+
+local function apply_entry_highlights(bufnr, lines)
+	vim.api.nvim_buf_clear_namespace(bufnr, history_ns, 0, -1)
+	local in_code = false
+	for index, line in ipairs(lines or {}) do
+		local row = index - 1
+		if line == "# ACP Transcript" then
+			add_line_hl(bufnr, row, "AcpHistoryHeader")
+			add_hl(bufnr, row, 0, #line, "AcpHistoryHeader")
+		elseif is_metadata_line(line) then
+			add_line_hl(bufnr, row, "AcpHistoryMeta")
+			local first, last = line:find("^%w+:")
+			if first then
+				add_hl(bufnr, row, first - 1, last, "AcpHistoryKey")
+			end
+		elseif line:match("^%s*```") then
+			add_line_hl(bufnr, row, "AcpHistoryCode")
+			in_code = not in_code
+		elseif in_code then
+			add_line_hl(bufnr, row, "AcpHistoryCode")
+		elseif is_transcript_section(line) then
+			add_line_hl(bufnr, row, "AcpHistorySection")
+		end
+		highlight_locations(bufnr, row, line)
+	end
+end
+
+local function short_title(value)
+	local title = metadata_value(value) or "ACP history"
+	if #title > 42 then
+		return title:sub(1, 39) .. "..."
+	end
+	return title
+end
+
+local function history_winbar(entry, lines, opts)
+	local metrics = (entry and entry.metrics) or transcript_metrics(lines)
+	local model = metadata_value(entry and entry.model) or header_value(lines, "Model") or "?"
+	local title = short_title((entry and entry.title) or header_value(lines, "Title") or (entry and entry.name))
+	local draft = opts and opts.open_chat and ("  %s i draft"):format(icons.prompt) or ""
+	return (" %s ACP history  %s %s  %s %s  %s %d lines  %s %d code  %s %d locs  %s q close%s ")
+		:format(
+			icons.history,
+			icons.note,
+			title,
+			icons.model,
+			model,
+			icons.map,
+			metrics.lines or 0,
+			icons.code,
+			metrics.code_blocks or 0,
+			icons.reference,
+			metrics.locations or 0,
+			icons.key,
+			draft
+		)
+		:gsub("%%", "%%%%")
+end
+
 local function entry_for(path)
 	local ok, lines = pcall(vim.fn.readfile, path)
 	if not ok then
@@ -230,7 +350,8 @@ function M.replay_prompt(entry, opts)
 	return table.concat(prompt, "\n")
 end
 
-function M.open_entry(entry)
+function M.open_entry(entry, opts)
+	opts = opts or {}
 	if not entry or not entry.path then
 		return false
 	end
@@ -245,6 +366,7 @@ function M.open_entry(entry)
 		return false
 	end
 
+	M.define_highlights()
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_name(bufnr, ("ACP History://%s"):format(entry.name or vim.fs.basename(entry.path)))
 	vim.bo[bufnr].buftype = "nofile"
@@ -254,9 +376,25 @@ function M.open_entry(entry)
 	vim.bo[bufnr].modifiable = true
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 	vim.bo[bufnr].modifiable = false
+	apply_entry_highlights(bufnr, lines)
 
 	vim.cmd("tabnew")
 	vim.api.nvim_win_set_buf(0, bufnr)
+	vim.wo[0].winbar = history_winbar(entry, lines, opts)
+	vim.wo[0].cursorline = true
+
+	for _, key in ipairs({ "q", "<Esc>" }) do
+		vim.keymap.set("n", key, function()
+			pcall(vim.cmd, "tabclose")
+		end, { buffer = bufnr, nowait = true, desc = "Close ACP history entry" })
+	end
+
+	if opts.open_chat then
+		vim.keymap.set("n", "i", function()
+			opts.open_chat(entry)
+		end, { buffer = bufnr, nowait = true, desc = "Draft ACP chat from history" })
+	end
+
 	return true
 end
 
@@ -348,7 +486,7 @@ function M.open_browser(opts)
 				return
 			end
 			view.close()
-			M.open_entry(entry)
+			M.open_entry(entry, { open_chat = opts.open_chat })
 		end, { buffer = view.bufnr, nowait = true, desc = "Open ACP history entry" })
 	end
 

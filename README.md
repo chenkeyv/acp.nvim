@@ -64,7 +64,7 @@ This plugin provides an editor-native ACP chat surface:
 - smart context drafting that combines source, Tree-sitter, diagnostics, and available LSP signals
 - floating session config picker for adapter-advertised model, mode, and reasoning options
 - per-session prompt history recall
-- searchable, previewable plain-text transcript history with section/code/location metrics under Neovim state
+- searchable, previewable plain-text transcript history with winbar metadata, highlights, and section/code/location metrics under Neovim state
 - saved transcript replay into a new chat draft
 - adapter-backed session listing and restoration with metadata previews
 - async LSP code-action picker for drafting focused fix/refactor prompts
@@ -259,7 +259,7 @@ prefers this source when it is configured and falls back to the native
 - `:AcpSymbols` opens an LSP document-symbol picker for the source buffer
 - `:AcpSymbolsQuickfix` sends LSP document symbols for the source buffer to quickfix
 - `:AcpTreeSitter` opens a Tree-sitter node picker for the source cursor
-- `:AcpHistory` opens saved transcript history with transcript metrics
+- `:AcpHistory` opens saved transcript history with transcript metrics and highlighted read-only entries
 - `:AcpRestore [adapter]` lists adapter-backed sessions with metadata previews and restores the selected session
 - `:AcpHistoryDraft [adapter]` opens saved transcript history and drafts a new chat from the selected transcript
 - `:AcpAddContext` inserts source-buffer context into the current prompt
