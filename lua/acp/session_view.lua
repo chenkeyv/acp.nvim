@@ -205,7 +205,7 @@ function M.restore_preview(session)
 	return {
 		lines = lines,
 		filetype = "acp-sessions",
-		title = (" ACP restore %s "):format(short(restore_title(session), 32)),
+		title = (" %s ACP restore %s "):format(icons.restore, short(restore_title(session), 32)),
 	}
 end
 

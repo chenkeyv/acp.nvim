@@ -990,19 +990,19 @@ function Connection:handle_terminal_create(id, params)
 
 	permission.select({
 		toolCall = {
-			title = ("Run terminal command: %s"):format(params.command),
+			title = ("%s Run terminal command: %s"):format(icons.terminal, params.command),
 			kind = "execute",
 			description = ("cwd: %s"):format(cwd),
 		},
 		options = {
 			{
 				optionId = "run",
-				name = "Run command",
+				name = ("%s Run command"):format(icons.terminal),
 				description = command_display(params.command, args),
 			},
 			{
 				optionId = "cancel",
-				name = "Cancel",
+				name = ("%s Cancel"):format(icons.warning),
 			},
 		},
 	}, function(option)

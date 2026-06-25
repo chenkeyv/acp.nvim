@@ -16,6 +16,9 @@ local function scope_icon(scope)
 	end
 
 	local lower = scope:lower()
+	if lower:find("prompt", 1, true) then
+		return icons.prompt
+	end
 	if lower:find("tree", 1, true) then
 		return icons.treesitter
 	end
@@ -43,6 +46,51 @@ local function action_icon(action)
 	if lower:find("quickfix", 1, true) then
 		return icons.quickfix
 	end
+	if lower:find("send", 1, true) then
+		return icons.send
+	end
+	if lower:find("stop", 1, true) then
+		return icons.stop
+	end
+	if lower:find("inspect", 1, true) then
+		return icons.inspect
+	end
+	if lower:find("yank", 1, true) or lower:find("copy", 1, true) then
+		return icons.yank
+	end
+	if lower:find("draft", 1, true) or lower:find("rename", 1, true) then
+		return icons.edit
+	end
+	if lower:find("previous", 1, true) or lower:find("next", 1, true) then
+		return icons.jump
+	end
+	if lower:find("command", 1, true) or lower:find("slash", 1, true) then
+		return icons.command
+	end
+	if lower:find("config", 1, true) then
+		return icons.config
+	end
+	if lower:find("change", 1, true) then
+		return icons.changes
+	end
+	if lower:find("tree", 1, true) then
+		return icons.treesitter
+	end
+	if lower:find("symbol", 1, true) then
+		return icons.symbol
+	end
+	if lower:find("call", 1, true) or lower:find("callee", 1, true) then
+		return icons.call
+	end
+	if lower:find("type", 1, true) or lower:find("supertype", 1, true) or lower:find("subtype", 1, true) then
+		return icons.type
+	end
+	if lower:find("inlay", 1, true) or lower:find("signature", 1, true) or lower:find("hover", 1, true) then
+		return icons.hint
+	end
+	if lower:find("selection", 1, true) or lower:find("highlight", 1, true) then
+		return icons.scope
+	end
 	if lower:find("diagnostic", 1, true) or lower:find("problem", 1, true) then
 		return icons.diagnostics
 	end
@@ -55,7 +103,10 @@ local function action_icon(action)
 	if lower:find("code", 1, true) then
 		return icons.code
 	end
-	if lower:find("reference", 1, true) or lower:find("location", 1, true) or lower:find("link", 1, true) then
+	if lower:find("link", 1, true) then
+		return icons.link
+	end
+	if lower:find("reference", 1, true) or lower:find("location", 1, true) then
 		return icons.reference
 	end
 	if lower:find("color", 1, true) then
@@ -72,6 +123,9 @@ local function action_icon(action)
 	end
 	if lower:find("context", 1, true) then
 		return icons.context
+	end
+	if lower:find("open", 1, true) or lower:find("jump", 1, true) or lower:find("focus", 1, true) then
+		return icons.jump
 	end
 	return scope_icon(action and action.scope)
 end

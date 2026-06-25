@@ -412,7 +412,7 @@ local function output_map_config(state, line_count)
 		height = height,
 		style = "minimal",
 		border = "rounded",
-		title = " ACP output map ",
+		title = (" %s ACP output map "):format(icons.map),
 		title_pos = "left",
 		zindex = 60,
 	}
@@ -592,7 +592,7 @@ local function open_output_map(state)
 		end
 
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP output map #%s"):format(tostring(state.id or "?")),
+			title = icons.quickfix_title(("ACP output map #%s"):format(tostring(state.id or "?"))),
 			items = output.output_map_quickfix_items(entries, state.output_buf),
 		})
 		vim.cmd("copen")
@@ -1045,6 +1045,7 @@ local function open_output_outline(state)
 		filetype = "acp-output",
 		lines = lines,
 		title = " ACP output outline ",
+		title_icon = icons.section,
 		submit_desc = "Jump to ACP output section",
 		close_desc = "Close ACP output outline",
 		on_submit = function(row, view)
@@ -1088,7 +1089,7 @@ local function output_line_preview(lines, entry)
 	return {
 		lines = preview,
 		filetype = "acp",
-		title = (" ACP output line %d "):format(line),
+		title = (" %s ACP output line %d "):format(icons.map, line),
 		cursor_line = line - start_line + 1,
 	}
 end
@@ -1112,6 +1113,7 @@ local function open_output_search(state)
 		filetype = "acp-output-search",
 		lines = lines,
 		title = " ACP output search ",
+		title_icon = icons.search,
 		submit_desc = "Jump to ACP output line",
 		close_desc = "Close ACP output search",
 		preview = function(row)
@@ -1446,6 +1448,7 @@ local function open_output_code_block_buffer(state, block)
 			filetype = "acp-code-treesitter",
 			lines = lines,
 			title = " ACP code Tree-sitter scope ",
+			title_icon = icons.treesitter,
 			submit_desc = "Jump to ACP code Tree-sitter node",
 			close_desc = "Close ACP code Tree-sitter scope",
 			preview = function(row)
@@ -1534,6 +1537,7 @@ local function open_output_code_blocks(state)
 		filetype = "acp-code-blocks",
 		lines = lines,
 		title = " ACP code blocks ",
+		title_icon = icons.code,
 		submit_desc = "Open ACP code block",
 		close_desc = "Close ACP code blocks",
 		preview = function(row)
@@ -1560,7 +1564,7 @@ local function open_output_code_blocks(state)
 	vim.keymap.set("n", "Q", function()
 		view.close()
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP output code blocks #%s"):format(tostring(state.id or "?")),
+			title = icons.quickfix_title(("ACP output code blocks #%s"):format(tostring(state.id or "?"))),
 			items = output.code_block_quickfix_items(blocks, state.output_buf),
 		})
 		vim.cmd("copen")
@@ -1591,7 +1595,7 @@ local function open_output_location_quickfix(state, references)
 	end
 
 	vim.fn.setqflist({}, " ", {
-		title = ("ACP output locations #%s"):format(tostring(state.id or "?")),
+		title = icons.quickfix_title(("ACP output locations #%s"):format(tostring(state.id or "?"))),
 		items = output.file_reference_quickfix_items(references),
 	})
 	vim.cmd("copen")
@@ -1611,6 +1615,7 @@ local function open_output_locations(state)
 		filetype = "acp-output-locations",
 		lines = lines,
 		title = " ACP output locations ",
+		title_icon = icons.reference,
 		submit_desc = "Jump to ACP output location",
 		close_desc = "Close ACP output locations",
 		preview = function(row)
@@ -1657,7 +1662,7 @@ local function open_output_problems(state)
 	vim.diagnostic.setloclist({
 		namespace = output_diagnostic_ns,
 		open = true,
-		title = ("ACP output problems #%s"):format(tostring(state.id or "?")),
+		title = icons.title(("ACP output problems #%s"):format(tostring(state.id or "?")), icons.error),
 	})
 	return true
 end
@@ -1675,6 +1680,7 @@ local function open_changed_files(state)
 		filetype = "acp-changes",
 		lines = lines,
 		title = " ACP changed files ",
+		title_icon = icons.changes,
 		submit_desc = "Open ACP changed file",
 		close_desc = "Close ACP changed files",
 		preview = function(row)
@@ -2284,7 +2290,7 @@ local function output_section_preview(context_info)
 	return {
 		lines = section_lines,
 		filetype = "acp",
-		title = (" ACP %s: %s "):format(range.kind or "section", range.title or "Output"),
+		title = (" %s ACP %s: %s "):format(icons.section, range.kind or "section", range.title or "Output"),
 		cursor_line = math.max(1, context_info.cursor[1] - range.line1 + 1),
 	}
 end
@@ -2303,7 +2309,7 @@ local function output_problem_preview(context_info)
 			diagnostic.message or "ACP output problem",
 		},
 		filetype = "acp",
-		title = " ACP output problem ",
+		title = (" %s ACP output problem "):format(icons.error),
 		cursor_line = 1,
 	}
 end
@@ -2373,7 +2379,7 @@ local function open_output_item_quickfix(state, items)
 	end
 
 	vim.fn.setqflist({}, " ", {
-		title = ("ACP output items #%s"):format(tostring(state.id or "?")),
+		title = icons.quickfix_title(("ACP output items #%s"):format(tostring(state.id or "?"))),
 		items = output.output_item_quickfix_items(items, state.output_buf),
 	})
 	vim.cmd("copen")
@@ -2400,6 +2406,7 @@ local function open_output_items(state)
 		filetype = "acp-output-items",
 		lines = lines,
 		title = " ACP output items ",
+		title_icon = icons.map,
 		submit_desc = "Jump to ACP output item",
 		close_desc = "Close ACP output items",
 		preview = function(row)
@@ -2571,7 +2578,7 @@ local function output_action_items(state, context_info)
 		add("Code blocks quickfix", "Send fenced code blocks to quickfix", ":AcpCodeBlocksQuickfix", function()
 			local blocks = output.code_blocks(context_info.lines)
 			vim.fn.setqflist({}, " ", {
-				title = ("ACP output code blocks #%s"):format(tostring(state.id or "?")),
+				title = icons.quickfix_title(("ACP output code blocks #%s"):format(tostring(state.id or "?"))),
 				items = output.code_block_quickfix_items(blocks, state.output_buf),
 			})
 			vim.cmd("copen")
@@ -2626,6 +2633,7 @@ local function open_output_actions(state)
 		filetype = "acp-output-actions",
 		lines = lines,
 		title = " ACP output actions ",
+		title_icon = icons.action,
 		submit_desc = "Run ACP output action",
 		close_desc = "Close ACP output actions",
 		preview = function()
@@ -2913,7 +2921,7 @@ local function prompt_actions_preview(state)
 	return {
 		lines = lines,
 		filetype = "acp",
-		title = " ACP prompt preview ",
+		title = (" %s ACP prompt preview "):format(icons.prompt),
 	}
 end
 
@@ -2930,6 +2938,7 @@ local function open_prompt_actions(state)
 		filetype = "acp-prompt-actions",
 		lines = lines,
 		title = " ACP prompt actions ",
+		title_icon = icons.prompt,
 		submit_desc = "Run ACP prompt action",
 		close_desc = "Close ACP prompt actions",
 		preview = function()
@@ -4854,6 +4863,7 @@ local function open_action_palette(state, origin_win)
 		filetype = "acp-actions",
 		lines = lines,
 		title = " ACP actions ",
+		title_icon = icons.action,
 		submit_desc = "Run ACP action",
 		close_desc = "Close ACP actions",
 		on_submit = function(row, view)
@@ -5188,6 +5198,7 @@ local function open_source_actions(state)
 		filetype = "acp-source-actions",
 		lines = lines,
 		title = " ACP source actions ",
+		title_icon = icons.source,
 		submit_desc = "Run ACP source action",
 		close_desc = "Close ACP source actions",
 		preview = function()
@@ -5294,7 +5305,7 @@ local function session_picker_preview(state)
 	return {
 		lines = lines,
 		filetype = "acp",
-		title = (" ACP session #%s "):format(tostring(state.id or "?")),
+		title = (" %s ACP session #%s "):format(icons.session, tostring(state.id or "?")),
 	}
 end
 
@@ -5311,6 +5322,7 @@ local function open_session_picker()
 		filetype = "acp-sessions",
 		lines = lines,
 		title = " ACP sessions ",
+		title_icon = icons.session,
 		submit_desc = "Focus ACP session",
 		close_desc = "Close ACP sessions",
 		preview = function(row)
@@ -5333,6 +5345,7 @@ local function open_restore_picker(adapter_name, connection, list)
 		filetype = "acp-sessions",
 		lines = lines,
 		title = " ACP restore ",
+		title_icon = icons.restore,
 		submit_desc = "Restore ACP adapter session",
 		close_desc = "Close ACP restore sessions",
 		preview = function(row)
@@ -5371,6 +5384,7 @@ local function open_command_picker(state)
 		filetype = "acp-sessions",
 		lines = lines,
 		title = " ACP commands ",
+		title_icon = icons.command,
 		submit_desc = "Draft ACP slash command",
 		close_desc = "Close ACP commands",
 		on_submit = function(row, view)
@@ -5405,7 +5419,7 @@ local function open_diagnostics_quickfix(state, items)
 	end
 
 	vim.fn.setqflist({}, " ", {
-		title = ("ACP diagnostics #%s"):format(tostring(state.id or "?")),
+		title = icons.quickfix_title(("ACP diagnostics #%s"):format(tostring(state.id or "?"))),
 		items = diagnostics.quickfix_items(state.source.bufnr, items),
 	})
 	vim.cmd("copen")
@@ -5428,6 +5442,7 @@ local function open_diagnostic_picker(state)
 		filetype = "acp-diagnostics",
 		lines = lines,
 		title = " ACP diagnostics ",
+		title_icon = icons.diagnostics,
 		submit_desc = "Draft ACP diagnostic fix",
 		close_desc = "Close ACP diagnostics",
 		preview = function(row)
@@ -5477,7 +5492,7 @@ function M._open_workspace_diagnostics_quickfix(state, items)
 	end
 
 	vim.fn.setqflist({}, " ", {
-		title = ("ACP workspace diagnostics #%s"):format(tostring(state and state.id or "?")),
+		title = icons.quickfix_title(("ACP workspace diagnostics #%s"):format(tostring(state and state.id or "?"))),
 		items = diagnostics.quickfix_items(items),
 	})
 	vim.cmd("copen")
@@ -5498,6 +5513,7 @@ function M._open_workspace_diagnostic_picker(state)
 		filetype = "acp-workspace-diagnostics",
 		lines = lines,
 		title = " ACP workspace diagnostics ",
+		title_icon = icons.diagnostics,
 		submit_desc = "Draft ACP workspace diagnostic fix",
 		close_desc = "Close ACP workspace diagnostics",
 		preview = function(row)
@@ -5550,6 +5566,7 @@ local function open_config_value_picker(state, option)
 		filetype = "acp-sessions",
 		lines = lines,
 		title = " ACP config value ",
+		title_icon = icons.config,
 		submit_desc = "Set ACP config option",
 		close_desc = "Close ACP config values",
 		on_submit = function(row, view)
@@ -5614,6 +5631,7 @@ local function open_config_picker(state)
 		filetype = "acp-sessions",
 		lines = lines,
 		title = " ACP config ",
+		title_icon = icons.config,
 		submit_desc = "Open ACP config values",
 		close_desc = "Close ACP config",
 		on_submit = function(row, view)
@@ -5641,6 +5659,7 @@ local function open_code_action_picker(state, action_list)
 		filetype = "acp-code-actions",
 		lines = lines,
 		title = " ACP code actions ",
+		title_icon = icons.action,
 		submit_desc = "Draft ACP code action",
 		close_desc = "Close ACP code actions",
 		preview = function(row)
@@ -5767,7 +5786,7 @@ local function open_symbols_quickfix(state, symbol_list)
 		end
 
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP symbols #%s"):format(tostring(state.id or "?")),
+			title = icons.quickfix_title(("ACP symbols #%s"):format(tostring(state.id or "?"))),
 			items = items,
 		})
 		vim.cmd("copen")
@@ -5809,6 +5828,7 @@ local function open_symbol_picker(state, symbol_list)
 		filetype = "acp-symbols",
 		lines = lines,
 		title = " ACP symbols ",
+		title_icon = icons.symbol,
 		submit_desc = "Add ACP symbol context",
 		close_desc = "Close ACP symbols",
 		preview = function(row)
@@ -5867,6 +5887,7 @@ local function open_treesitter_picker(state, node_list)
 		filetype = "acp-treesitter",
 		lines = lines,
 		title = " ACP Tree-sitter ",
+		title_icon = icons.treesitter,
 		submit_desc = "Add ACP Tree-sitter context",
 		close_desc = "Close ACP Tree-sitter nodes",
 		preview = function(row)
@@ -5927,7 +5948,7 @@ local function open_references_quickfix(state, reference_list)
 		end
 
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP references #%s"):format(tostring(state.id or "?")),
+			title = icons.quickfix_title(("ACP references #%s"):format(tostring(state.id or "?"))),
 			items = items,
 		})
 		vim.cmd("copen")
@@ -5969,6 +5990,7 @@ local function open_reference_picker(state, reference_list)
 		filetype = "acp-references",
 		lines = lines,
 		title = " ACP references ",
+		title_icon = icons.reference,
 		submit_desc = "Add ACP reference context",
 		close_desc = "Close ACP references",
 		preview = function(row)
@@ -6031,7 +6053,7 @@ local function open_lsp_location_quickfix(state, spec, location_list)
 		end
 
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP %s #%s"):format(spec.plural, tostring(state.id or "?")),
+			title = icons.quickfix_title(("ACP %s #%s"):format(spec.plural, tostring(state.id or "?"))),
 			items = items,
 		})
 		vim.cmd("copen")
@@ -6076,6 +6098,7 @@ local function open_lsp_location_picker(state, spec, location_list)
 		filetype = spec.filetype,
 		lines = lines,
 		title = (" ACP %s "):format(spec.plural),
+		title_icon = icons.reference,
 		submit_desc = ("Add ACP %s context"):format(spec.noun:lower()),
 		close_desc = ("Close ACP %s"):format(spec.plural),
 		preview = function(row)
@@ -6455,7 +6478,7 @@ function M.open_code_blocks_quickfix()
 	end
 
 	vim.fn.setqflist({}, " ", {
-		title = ("ACP output code blocks #%s"):format(tostring(state.id or "?")),
+		title = icons.quickfix_title(("ACP output code blocks #%s"):format(tostring(state.id or "?"))),
 		items = output.code_block_quickfix_items(blocks, state.output_buf),
 	})
 	vim.cmd("copen")
@@ -6594,6 +6617,7 @@ function M._open_code_lens_picker(state, lens_list)
 		filetype = "acp-code-lens",
 		lines = lines,
 		title = " ACP code lens ",
+		title_icon = icons.code,
 		submit_desc = "Add ACP code-lens context",
 		close_desc = "Close ACP code lens",
 		preview = function(row)
@@ -6650,7 +6674,7 @@ function M._open_code_lens_quickfix(state, lens_list)
 		end
 
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP code lens #%s"):format(tostring(state.id or "?")),
+			title = icons.quickfix_title(("ACP code lens #%s"):format(tostring(state.id or "?"))),
 			items = code_lens.quickfix_items(state.source.bufnr, items),
 		})
 		vim.cmd("copen")
@@ -6732,6 +6756,7 @@ function M._open_document_color_picker(state, color_list)
 		filetype = "acp-document-colors",
 		lines = lines,
 		title = " ACP document colors ",
+		title_icon = icons.color,
 		submit_desc = "Add ACP document-color context",
 		close_desc = "Close ACP document colors",
 		preview = function(row)
@@ -6790,7 +6815,7 @@ function M._open_document_colors_quickfix(state, color_list)
 		state.source_colors = items
 		refresh_source_marks(state)
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP document colors #%s"):format(tostring(state.id or "?")),
+			title = icons.quickfix_title(("ACP document colors #%s"):format(tostring(state.id or "?"))),
 			items = document_colors.quickfix_items(state.source.bufnr, items),
 		})
 		vim.cmd("copen")
@@ -6885,6 +6910,7 @@ function M._open_document_link_picker(state, link_list)
 		filetype = "acp-document-links",
 		lines = lines,
 		title = " ACP document links ",
+		title_icon = icons.link,
 		submit_desc = "Add ACP document-link context",
 		close_desc = "Close ACP document links",
 		preview = function(row)
@@ -6943,7 +6969,7 @@ function M._open_document_links_quickfix(state, link_list)
 		state.source_document_links = items
 		refresh_source_marks(state)
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP document links #%s"):format(tostring(state.id or "?")),
+			title = icons.quickfix_title(("ACP document links #%s"):format(tostring(state.id or "?"))),
 			items = document_links.quickfix_items(state.source.bufnr, items),
 		})
 		vim.cmd("copen")
@@ -7038,6 +7064,7 @@ function M._open_folding_range_picker(state, fold_list)
 		filetype = "acp-folding-ranges",
 		lines = lines,
 		title = " ACP folding ranges ",
+		title_icon = icons.fold,
 		submit_desc = "Add ACP folding-range context",
 		close_desc = "Close ACP folding ranges",
 		preview = function(row)
@@ -7096,7 +7123,7 @@ function M._open_folding_ranges_quickfix(state, fold_list)
 		state.source_folding_ranges = items
 		refresh_source_marks(state)
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP folding ranges #%s"):format(tostring(state.id or "?")),
+			title = icons.quickfix_title(("ACP folding ranges #%s"):format(tostring(state.id or "?"))),
 			items = folding_ranges.quickfix_items(state.source.bufnr, items),
 		})
 		vim.cmd("copen")
@@ -7348,6 +7375,7 @@ function M.open_inlay_hints()
 			filetype = "acp-inlay-hints",
 			lines = lines,
 			title = " ACP inlay hints ",
+			title_icon = icons.hint,
 			submit_desc = "Add ACP inlay-hint context",
 			close_desc = "Close ACP inlay hints",
 			preview = function(row)
@@ -7419,6 +7447,7 @@ function M.open_selection_ranges()
 			filetype = "acp-selection-ranges",
 			lines = lines,
 			title = " ACP selection ranges ",
+			title_icon = icons.scope,
 			submit_desc = "Add ACP selection-range context",
 			close_desc = "Close ACP selection ranges",
 			preview = function(row)
@@ -7508,6 +7537,7 @@ function M.open_call_hierarchy(direction)
 			filetype = spec.filetype,
 			lines = lines,
 			title = spec.title,
+			title_icon = icons.call,
 			submit_desc = spec.submit,
 			close_desc = spec.close,
 			preview = function(row)
@@ -7579,7 +7609,7 @@ function M.open_call_hierarchy_quickfix(direction, call_list, state_override)
 		end
 
 		vim.fn.setqflist({}, " ", {
-			title = ("%s #%s"):format(title, tostring(state.id or "?")),
+			title = icons.quickfix_title(("%s #%s"):format(title, tostring(state.id or "?"))),
 			items = qf_items,
 		})
 		vim.cmd("copen")
@@ -7678,6 +7708,7 @@ function M.open_type_hierarchy(direction)
 			filetype = spec.filetype,
 			lines = lines,
 			title = spec.title,
+			title_icon = icons.type,
 			submit_desc = spec.submit,
 			close_desc = spec.close,
 			preview = function(row)
@@ -7749,7 +7780,7 @@ function M.open_type_hierarchy_quickfix(direction, type_list, state_override)
 		end
 
 		vim.fn.setqflist({}, " ", {
-			title = ("%s #%s"):format(title, tostring(state.id or "?")),
+			title = icons.quickfix_title(("%s #%s"):format(title, tostring(state.id or "?"))),
 			items = qf_items,
 		})
 		vim.cmd("copen")
@@ -8072,6 +8103,7 @@ function M.open_workspace_symbols(query)
 			filetype = "acp-workspace-symbols",
 			lines = lines,
 			title = " ACP workspace symbols ",
+			title_icon = icons.symbol,
 			submit_desc = "Add ACP workspace symbol context",
 			close_desc = "Close ACP workspace symbols",
 			preview = function(row)
@@ -8144,7 +8176,9 @@ function M.open_workspace_symbols_quickfix(query, symbol_list, state_override)
 		end
 
 		vim.fn.setqflist({}, " ", {
-			title = ("ACP workspace symbols #%s: %s"):format(tostring(state.id or "?"), resolved_query),
+			title = icons.quickfix_title(
+				("ACP workspace symbols #%s: %s"):format(tostring(state.id or "?"), resolved_query)
+			),
 			items = qf_items,
 		})
 		vim.cmd("copen")

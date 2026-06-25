@@ -321,6 +321,7 @@ function M.open_browser(opts)
 		filetype = "acp-history",
 		lines = lines,
 		title = " ACP history ",
+		title_icon = icons.history,
 		submit_desc = opts.open_chat and "Draft ACP chat from history" or "Open ACP history entry",
 		close_desc = "Close ACP history",
 		preview = function(row)

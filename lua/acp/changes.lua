@@ -115,7 +115,7 @@ function M.preview(entry)
 	return {
 		lines = lines,
 		filetype = filetype_for(entry.path),
-		title = (" ACP change %s "):format(entry.display or entry.path),
+		title = (" %s ACP change %s "):format(icons.changes, entry.display or entry.path),
 	}
 end
 
@@ -126,7 +126,7 @@ function M.open_quickfix(state)
 	end
 
 	vim.fn.setqflist({}, " ", {
-		title = ("ACP changes #%s"):format(state.id or "?"),
+		title = icons.quickfix_title(("ACP changes #%s"):format(state.id or "?")),
 		items = items,
 	})
 	vim.cmd("copen")

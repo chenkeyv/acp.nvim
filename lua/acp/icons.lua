@@ -20,6 +20,8 @@ local M = {
 	hint = "󰌶",
 	hierarchy = "󰙅",
 	idle = "",
+	inspect = "󰍉",
+	jump = "󰁔",
 	key = "󰌌",
 	link = "",
 	location = "",
@@ -36,9 +38,11 @@ local M = {
 	scope = "󰆐",
 	search = "",
 	section = "",
+	send = "󰒊",
 	session = "󰒲",
 	source = "󰈙",
 	status = "󰐊",
+	stop = "",
 	symbol = "󰆧",
 	terminal = "",
 	tool = "",
@@ -46,10 +50,15 @@ local M = {
 	type = "󰊄",
 	user = "",
 	warning = "",
+	yank = "",
 }
 
 function M.title(text, icon)
 	return ("%s %s"):format(icon or M.acp, text or "ACP")
+end
+
+function M.quickfix_title(text)
+	return M.title(text, M.quickfix)
 end
 
 return M
