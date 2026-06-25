@@ -89,7 +89,16 @@ function M.panel(sessions, current_id, change_count)
 	local styles = {
 		[1] = {
 			line_hl_group = "AcpSessionHeader",
-			virt_text = { { (" %s <leader>ak actions "):format(icons.action), "AcpSessionMeta" } },
+			virt_text = {
+				{
+					(" %s <Enter> focus  %s x close  %s <leader>ak actions "):format(
+						icons.enter,
+						icons.close,
+						icons.action
+					),
+					"AcpSessionMeta",
+				},
+			},
 		},
 	}
 
