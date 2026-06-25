@@ -786,6 +786,20 @@ test("output dashboard and section helpers are rendered", function()
 	ok(acp_output.ghost_text({ busy = false }, { "ACP: test", "" }):find("Ready", 1, true))
 	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("? menu", 1, true))
 	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("<leader>ay yank", 1, true))
+	local ribbon = acp_output.cursor_ribbon({
+		"ACP: test",
+		"You",
+		"hello",
+		"Agent",
+		"```lua",
+		"print(1)",
+		"```",
+	}, 6, 0, { width = 10 })
+	ok(ribbon:find("CTX", 1, true))
+	ok(ribbon:find("86%%", 1, false))
+	ok(ribbon:find("AGENT", 1, true))
+	ok(ribbon:find("L4%-7", 1, false))
+	ok(ribbon:find("ITEM CODE", 1, true))
 	local blocks = acp_output.code_blocks({ "Agent", "```lua", "print(1)", "```", "```", "plain" })
 	eq(#blocks, 2)
 	eq(blocks[1].start_line, 2)
@@ -2570,7 +2584,9 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local hint_ns = vim.api.nvim_create_namespace("acp.nvim.output.hints")
 		local hint_marks = vim.api.nvim_buf_get_extmarks(output_buf, hint_ns, 0, -1, { details = true })
 		local section_hint = false
+		local section_ribbon = false
 		for _, mark in ipairs(hint_marks) do
+			section_ribbon = section_ribbon or (has_virt_line(mark, "CTX") and has_virt_line(mark, "USER"))
 			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
 				if chunk[1] and chunk[1]:find("<leader>ai draft", 1, true) then
 					section_hint = true
@@ -2579,6 +2595,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(section_hint, "output cursor should show section action hints")
+		ok(section_ribbon, "output cursor should show a context ribbon")
 
 		vim.cmd("AcpOutputDraft")
 		local draft = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")

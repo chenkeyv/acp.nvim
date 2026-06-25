@@ -350,21 +350,33 @@ local function refresh_output_cursor_hint(state)
 
 	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local hint = output.cursor_hint_chunks(lines, cursor[1], cursor[2], {
+	local opts = {
 		cwd = state.cwd,
 		language_injection = state.output_language_injection,
+	}
+	local hint = output.cursor_hint_chunks(lines, cursor[1], cursor[2], opts)
+	local ribbon = output.cursor_ribbon_chunks(lines, cursor[1], cursor[2], {
+		cwd = state.cwd,
+		width = 22,
 	})
-	if not hint then
+	if not hint and not ribbon then
 		return
 	end
 
 	local line = lines[cursor[1]] or ""
-	pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_hint_ns, cursor[1] - 1, #line, {
-		virt_text = hint,
-		virt_text_pos = "eol",
+	local mark_opts = {
 		hl_mode = "combine",
 		priority = 96,
-	})
+	}
+	if hint then
+		mark_opts.virt_text = hint
+		mark_opts.virt_text_pos = "eol"
+	end
+	if ribbon then
+		mark_opts.virt_lines = { ribbon }
+		mark_opts.virt_lines_above = true
+	end
+	pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_hint_ns, cursor[1] - 1, #line, mark_opts)
 end
 
 local function set_output_map_lines(bufnr, lines)

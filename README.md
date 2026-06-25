@@ -19,6 +19,7 @@ This plugin provides an editor-native ACP chat surface:
 - output-visible run status for active prompts, tools, and completion
 - live output winbar/title with status, model, context, item position, and changed-file counts
 - cursor-aware output breadcrumb showing the active transcript section
+- cursor-following output context ribbon with progress, skyline, section span, and item orientation
 - cursor-aware current-section highlighting in the output buffer
 - cursor-aware current-item highlighting for references, code blocks, and problems
 - unified output item picker for references, code blocks, and problems with previews
@@ -310,6 +311,7 @@ In the prompt buffer:
 
 In the output buffer:
 
+- the current line shows a virtual context ribbon with transcript progress, section span, and current/nearby output item
 - the current line shows ghost-text action chips for references, code blocks, errors, and sections
 - fenced code blocks show injected-language badges, body highlights, and animated motion markers
 - `]]` jumps to the next transcript section

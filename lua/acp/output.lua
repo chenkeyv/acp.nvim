@@ -1643,6 +1643,73 @@ function M.skyline_text(lines, opts)
 	return flatten_chunks(M.skyline_chunks(lines, opts))
 end
 
+local function output_item_hl(kind)
+	if kind == "problem" then
+		return "AcpBadgeError"
+	end
+	if kind == "code" then
+		return "AcpCodeBlockHeader"
+	end
+	if kind == "reference" then
+		return "AcpOutputReferenceBadge"
+	end
+	return "AcpSectionStats"
+end
+
+function M.cursor_ribbon_chunks(lines, lnum, col, opts)
+	opts = opts or {}
+	lines = lines or {}
+	if #lines == 0 then
+		return nil
+	end
+
+	local line_number = math.max(1, math.min(tonumber(lnum) or 1, #lines))
+	local section = M.current_section(lines, line_number)
+	local range = M.section_range(lines, line_number)
+	local item = M.current_output_item(lines, line_number, col, opts)
+	local nearby = item
+		or M.next_output_item(lines, line_number, 1, opts)
+		or M.next_output_item(lines, line_number, -1, opts)
+	local section_kind = section and section.kind or "TEXT"
+	local title = short_label(section and section.title or clean(lines[line_number]) or "output", 30)
+	local span = range and ("L%d-%d"):format(range.line1, range.line2) or ("L%d"):format(line_number)
+	local progress = position_percent(line_number, #lines) or "  ?"
+	local item_kind = nearby and nearby.kind or nil
+	local item_label = nearby and short_label(nearby.label or nearby.kind, 26) or nil
+
+	local chunks = {
+		{ " CTX ", "AcpOutputSkyline" },
+		{ progress .. " ", "AcpOutputTimeline" },
+		{
+			M.skyline(lines, { width = opts.width or 22, current_line = line_number, cwd = opts.cwd }),
+			"AcpOutputRail",
+		},
+		{ " | ", "AcpOutputSkylineDim" },
+		{ (" %s "):format(section_kind), "AcpSectionStats" },
+		{ title, "AcpOutputHint" },
+		{ (" %s"):format(span), "AcpOutputSkylineDim" },
+	}
+
+	if item_kind then
+		local prefix = item and " | ITEM " or " | NEAR "
+		table.insert(chunks, { prefix, output_item_hl(item_kind) })
+		table.insert(chunks, { (item_kind or "item"):upper(), output_item_hl(item_kind) })
+		table.insert(chunks, { item_label and (" " .. item_label) or "", "AcpOutputHint" })
+	else
+		table.insert(chunks, { " | [[/]] sections | ]o/[o items", "AcpOutputHint" })
+	end
+
+	return chunks
+end
+
+function M.cursor_ribbon(lines, lnum, col, opts)
+	local chunks = M.cursor_ribbon_chunks(lines, lnum, col, opts)
+	if not chunks then
+		return nil
+	end
+	return flatten_chunks(chunks)
+end
+
 function M.cursor_hint_chunks(lines, lnum, col, opts)
 	opts = opts or {}
 	lines = lines or {}
