@@ -3229,6 +3229,8 @@ local function create_buffers(state)
 		filetype = "markdown",
 		swapfile = false,
 	})
+	vim.b[state.input_buf].acp_blink_source = true
+	vim.b[state.input_buf].acp_state_id = state.id
 
 	local dashboard = output.dashboard_lines(state)
 	state.output_dashboard_lines = #dashboard
@@ -3514,7 +3516,17 @@ local function register_keymaps(state)
 	vim.keymap.set({ "n", "i" }, "<M-p>", previous_prompt, { buffer = state.input_buf, desc = "Previous ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<M-n>", next_prompt, { buffer = state.input_buf, desc = "Next ACP prompt" })
 	vim.keymap.set("i", "<CR>", "<CR>", { buffer = state.input_buf, desc = "Insert newline" })
-	vim.keymap.set("i", "<C-Space>", "<C-x><C-u>", { buffer = state.input_buf, desc = "Complete ACP prompt" })
+	vim.keymap.set("i", "<C-Space>", function()
+		local ok, cmp = pcall(require, "blink.cmp")
+		if ok and type(cmp.show) == "function" then
+			local showed, result = pcall(cmp.show, { providers = { "acp" } })
+			if showed and result then
+				return
+			end
+		end
+		local keys = vim.api.nvim_replace_termcodes("<C-x><C-u>", true, false, true)
+		vim.api.nvim_feedkeys(keys, "n", false)
+	end, { buffer = state.input_buf, desc = "Complete ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<C-CR>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
 	vim.keymap.set({ "n", "i" }, "<C-s>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
 end
@@ -7980,15 +7992,28 @@ end
 
 function M.completefunc(findstart, base)
 	if tonumber(findstart) == 1 then
-		return require("acp.prompt_completion").start(vim.fn.getline("."), vim.fn.col(".") - 1)
+		return M.prompt_completion_start(vim.fn.getline("."), vim.fn.col(".") - 1)
 	end
 
-	local state = states[vim.api.nvim_get_current_buf()]
+	return M.prompt_completion_items(vim.api.nvim_get_current_buf(), base)
+end
+
+function M.prompt_completion_start(line, cursor_col)
+	return require("acp.prompt_completion").start(line, cursor_col)
+end
+
+function M.prompt_completion_items(bufnr, base)
+	local state = states[bufnr]
 	if not state then
 		return {}
 	end
 
 	return require("acp.prompt_completion").items(state.available_commands, base)
+end
+
+function M.prompt_completion_state_id(bufnr)
+	local state = states[bufnr]
+	return state and state.id or nil
 end
 
 function M.prompt_previous()

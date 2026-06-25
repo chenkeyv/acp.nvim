@@ -7,6 +7,7 @@ local code_lens = require("acp.code_lens")
 local document_colors = require("acp.document_colors")
 local document_links = require("acp.document_links")
 local folding_ranges = require("acp.folding_ranges")
+local acp_blink = require("acp.blink")
 local acp_commands = require("acp.commands")
 local acp_config = require("acp.config")
 local acp_context = require("acp.context")
@@ -2164,7 +2165,11 @@ test("prompt history recalls sent prompts and restores draft", function()
 	local passed, err = pcall(function()
 		vim.cmd("AcpChatWindow test")
 		input_buf = vim.api.nvim_get_current_buf()
+		local state_id = tonumber(vim.api.nvim_buf_get_name(input_buf):match("ACP://[^/]+/(%d+)/input$"))
+		ok(state_id, "input buffer name should include the ACP session id")
 		eq(vim.bo[input_buf].completefunc, "v:lua.acp_nvim_completefunc")
+		eq(vim.b[input_buf].acp_blink_source, true)
+		eq(vim.b[input_buf].acp_state_id, state_id)
 		local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 		local marks = vim.api.nvim_buf_get_extmarks(input_buf, prompt_ns, 0, -1, { details = true })
 		local ghost = false
@@ -2184,12 +2189,30 @@ test("prompt history recalls sent prompts and restores draft", function()
 		eq(completion_items[1].word, "@context")
 		eq(completion_items[1].user_data, "acp.nvim:context")
 
-		local state_id = tonumber(vim.api.nvim_buf_get_name(input_buf):match("ACP://[^/]+/(%d+)/input$"))
-		ok(state_id, "input buffer name should include the ACP session id")
-		require("acp.ui").handle_prompt_completion_action(state_id, {
-			word = "@context",
-			user_data = "acp.nvim:context",
-		})
+		local blink_source = acp_blink.new()
+		ok(blink_source:enabled(), "ACP blink source should be enabled in the prompt buffer")
+		local blink_result
+		blink_source:get_completions({
+			bufnr = input_buf,
+			line = "@con",
+			cursor = { 1, 4 },
+			trigger = { kind = "manual" },
+		}, function(result)
+			blink_result = result
+		end)
+		ok(blink_result and blink_result.items and blink_result.items[1], "blink source should return prompt completions")
+		eq(blink_result.items[1].label, "@context")
+		eq(blink_result.items[1].textEdit.newText, "@context")
+		eq(blink_result.items[1].textEdit.range.start.character, 0)
+		eq(blink_result.items[1].textEdit.range["end"].character, 4)
+		eq(blink_result.items[1].data.acp_complete_item.user_data, "acp.nvim:context")
+		local blink_done = false
+		blink_source:execute({
+			bufnr = input_buf,
+		}, blink_result.items[1], function()
+			blink_done = true
+		end)
+		ok(blink_done, "blink execute should complete")
 		local context_text = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
 		ok(not context_text:find("@context", 1, true), "completion action should remove the trigger word")
 		ok(context_text:find("Context", 1, true), "completion action should insert rendered context")
