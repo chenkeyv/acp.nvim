@@ -497,6 +497,7 @@ test("prompt view renders ghost text and draft stats", function()
 	local draft = prompt_view.info({ "hello ACP", "with context" }, {
 		adapter = "test",
 		blink = true,
+		blink_available = true,
 		context_window = 1000,
 		model = "test-model",
 		run_status = "streaming",
@@ -528,10 +529,25 @@ test("prompt view renders ghost text and draft stats", function()
 	ok(ribbon_text:find(icons.diagnostics, 1, true))
 	ok(not ribbon_text:find(("%s1"):format(icons.hint), 1, true))
 	ok(ribbon_text:find("[lua]", 1, true))
-	ok(ribbon_text:find("blink", 1, true))
+	ok(ribbon_text:find("blink ready", 1, true))
 	ok(draft.stats:find("2 lines", 1, true))
 	ok(draft.stats:find("22 chars", 1, true))
 	ok(draft.stats:find("4 words", 1, true))
+
+	local missing_blink = prompt_view.info({ "hello ACP" }, {
+		blink = true,
+		blink_available = false,
+	})
+	local missing_blink_text = {}
+	local missing_blink_highlight
+	for _, chunk in ipairs(missing_blink.ribbon or {}) do
+		table.insert(missing_blink_text, chunk[1])
+		if chunk[1]:find("blink missing", 1, true) then
+			missing_blink_highlight = chunk[2]
+		end
+	end
+	ok(table.concat(missing_blink_text):find("blink missing", 1, true))
+	eq(missing_blink_highlight, "AcpPromptWarning")
 	vim.diagnostic.reset(prompt_diag_ns, source_buf)
 	pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 end)
@@ -864,11 +880,12 @@ test("health report checks adapter commands and metadata", function()
 				},
 			},
 		},
-	}, { adapter_name = "test" })
+	}, { adapter_name = "test", blink_available = true })
 	local text = table.concat(vim.tbl_map(function(item)
 		return ("%s:%s"):format(item.level, item.message)
 	end, items), "\n")
 
+	ok(text:find("ok:blink.cmp available for ACP prompt completion", 1, true))
 	ok(text:find("error:test adapter command is missing: missing-acp-test-command", 1, true))
 	ok(text:find("info:Prompt metadata model: test-model", 1, true))
 	ok(text:find("info:Prompt metadata context window: 1000", 1, true))
@@ -882,11 +899,12 @@ test("health report checks adapter commands and metadata", function()
 				metadata = "codex",
 			},
 		},
-	}, { adapter_name = "codex" })
+	}, { adapter_name = "codex", blink_available = false })
 	local codex_text = table.concat(vim.tbl_map(function(item)
 		return ("%s:%s"):format(item.level, item.message)
 	end, codex_items), "\n")
 
+	ok(codex_text:find("warn:blink.cmp is missing; ACP prompt completion requires blink.cmp", 1, true))
 	ok(codex_text:find("error:codex adapter command is missing: missing-acp-test-command", 1, true))
 	ok(codex_text:find("warn:Codex CLI is missing: missing-codex-test-command", 1, true))
 end)

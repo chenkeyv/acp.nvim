@@ -1941,9 +1941,11 @@ refresh_prompt_hints = function(state)
 
 	vim.api.nvim_buf_clear_namespace(state.input_buf, prompt_ns, 0, -1)
 	local lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
+	local blink_ok, blink_cmp = pcall(require, "blink.cmp")
 	local info = prompt_view.info(lines, {
 		adapter = state.adapter,
 		blink = vim.b[state.input_buf].acp_blink_source == true,
+		blink_available = blink_ok and type(blink_cmp.show) == "function",
 		busy = state.busy,
 		context_window = state.context_window,
 		model = state.model,

@@ -168,7 +168,8 @@ require("blink.cmp").setup({
 The ACP source is enabled only in ACP prompt buffers. Completion items include
 workflow or adapter-command scope labels, insert/action details, and plaintext
 documentation. `<C-Space>` opens the `blink.cmp` ACP source; acp.nvim does not
-install a native `completefunc` fallback.
+install a native `completefunc` fallback. `:checkhealth acp` reports whether
+`blink.cmp` is available for ACP prompt completion.
 
 ## Commands
 

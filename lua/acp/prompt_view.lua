@@ -154,7 +154,9 @@ local function ribbon_chunks(opts)
 	end
 	table.insert(chunks, { short(source_label(opts.source), 64) or "source none", "AcpPromptSource" })
 	if opts.blink then
-		table.insert(chunks, { ("  %s blink"):format(icons.blink), "AcpPromptMeta" })
+		local label = opts.blink_available == false and "blink missing" or "blink ready"
+		local hl = opts.blink_available == false and "AcpPromptWarning" or "AcpPromptMeta"
+		table.insert(chunks, { ("  %s %s"):format(icons.blink, label), hl })
 	end
 	return chunks
 end
@@ -168,6 +170,7 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpPromptBusy", { fg = "#1a1b26", bg = "#e0af68", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpPromptDiagnostics", { link = "DiagnosticError", default = true })
 	vim.api.nvim_set_hl(0, "AcpPromptSource", { fg = "#7dcfff", default = true })
+	vim.api.nvim_set_hl(0, "AcpPromptWarning", { link = "DiagnosticWarn", default = true })
 end
 
 function M.info(lines, opts)

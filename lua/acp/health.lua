@@ -39,6 +39,15 @@ local function command_found(command)
 	return command and command[1] and vim.fn.executable(command[1]) == 1
 end
 
+local function blink_available(opts)
+	if opts and opts.blink_available ~= nil then
+		return opts.blink_available == true
+	end
+
+	local ok, cmp = pcall(require, "blink.cmp")
+	return ok and type(cmp.show) == "function"
+end
+
 local function adapter_items(items, name, adapter, config)
 	add(items, "info", ("Adapter: %s"):format(name))
 	if type(adapter) ~= "table" then
@@ -111,6 +120,12 @@ function M.items(config, opts)
 	if #names == 0 then
 		add(items, "error", "No ACP adapters are configured")
 		return items
+	end
+
+	if blink_available(opts) then
+		add(items, "ok", "blink.cmp available for ACP prompt completion")
+	else
+		add(items, "warn", "blink.cmp is missing; ACP prompt completion requires blink.cmp")
 	end
 
 	for _, name in ipairs(names) do
