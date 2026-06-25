@@ -66,7 +66,7 @@ local function apply_highlights(bufnr, lines)
 	vim.api.nvim_buf_clear_namespace(bufnr, picker_ns, 0, -1)
 	for index, line in ipairs(lines or {}) do
 		local row = index - 1
-		if line:match("^Filter:") then
+		if line:find(icons.search, 1, true) == 1 and line:find("filter", 1, true) then
 			add_line_hl(bufnr, row, "AcpPickerFilter")
 			local first, last = line:find(icons.search, 1, true)
 			if first then
@@ -274,23 +274,40 @@ function M.open(opts)
 		local visible = {}
 		local rows = {}
 
+		local matched = {}
+		local match_count = 0
+		local total_count = 0
+		for index, line in ipairs(source_lines) do
+			if line ~= "" then
+				total_count = total_count + 1
+			end
+			if matches_query(line, query) then
+				table.insert(matched, { line = line, row = index })
+				if line ~= "" then
+					match_count = match_count + 1
+				end
+			end
+		end
+
 		if query ~= "" then
-			table.insert(visible, ("Filter: %s %s"):format(query, icons.search))
+			local noun = match_count == 1 and "result" or "results"
+			table.insert(
+				visible,
+				("%s filter %s  %s %d/%d %s"):format(icons.search, query, icons.map, match_count, total_count, noun)
+			)
 			rows[#visible] = nil
 			table.insert(visible, "")
 			rows[#visible] = nil
 		end
 
-		for index, line in ipairs(source_lines) do
-			if matches_query(line, query) then
-				table.insert(visible, line)
-				rows[#visible] = index
-			end
+		for _, item in ipairs(matched) do
+			table.insert(visible, item.line)
+			rows[#visible] = item.row
 		end
 
 		if query ~= "" then
-			if #visible == 2 then
-				table.insert(visible, ("%s No matching picker entries."):format(icons.search))
+			if match_count == 0 then
+				table.insert(visible, ("%s No matching picker entries for %s."):format(icons.search, query))
 				rows[#visible] = nil
 			end
 			table.insert(visible, "")

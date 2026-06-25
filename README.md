@@ -357,7 +357,7 @@ In code-block scratch buffers:
 
 In floating ACP pickers:
 
-- `/` filters visible picker rows
+- `/` filters visible picker rows and shows the active match count
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
 - changed-file, diagnostics, workspace-diagnostics, LSP-code-lens, LSP-call-hierarchy, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-workspace-symbol, LSP-symbol, output-location, output-code-block, and output-item pickers use `Q` to export rows to quickfix
