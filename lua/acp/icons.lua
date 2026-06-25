@@ -21,6 +21,7 @@ local M = {
 	hierarchy = "󰙅",
 	help = "󰋖",
 	idle = "",
+	info = "",
 	inspect = "󰍉",
 	jump = "󰁔",
 	key = "󰌌",

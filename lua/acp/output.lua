@@ -911,10 +911,10 @@ function M.output_map_lines(entries, opts)
 		end
 		local line1 = tonumber(entry.line) or 1
 		local line2 = tonumber(entry.line2) or line1
-		local marker = current_line and current_line >= line1 and current_line <= line2 and ">" or " "
+		local marker = current_line and current_line >= line1 and current_line <= line2 and icons.location or " "
 		local progress = position_percent(line1, total) or "   ?"
 		local bar = progress_bar(line1, total, opts.bar_width or 10)
-		local token = map_kind_tokens[entry.kind] or "ITM"
+		local token = map_kind_tokens[entry.kind] or icons.map
 		table.insert(lines, ("%s %s  %4d  %s  %s  %-9s  %s"):format(
 			marker,
 			bar,
@@ -955,7 +955,7 @@ local function output_line_context(lines, entry)
 	local end_line = math.min(line_count, line + 5)
 	local preview = {}
 	for index = start_line, end_line do
-		local marker = index == line and ">" or " "
+		local marker = index == line and icons.location or " "
 		table.insert(preview, ("%s %4d  %s"):format(marker, index, lines[index] or ""))
 	end
 
@@ -1097,7 +1097,7 @@ function M.ghost_text_chunks(state, lines, frame)
 			{ ("%s %s "):format(M.animation_frame(frame), M.motion_frame(frame)), "AcpOutputLive" },
 			{ clean(state.run_status) or "working", "AcpOutputActivity" },
 			{ " | ", "AcpOutputSkylineDim" },
-			{ "FLOW ", "AcpOutputSkyline" },
+			{ ("%s FLOW "):format(icons.map), "AcpOutputSkyline" },
 			{ M.skyline(lines, { width = 18 }), "AcpOutputRail" },
 			{
 				(" | %d sections | %d code | %d refs"):format(
@@ -1112,13 +1112,13 @@ function M.ghost_text_chunks(state, lines, frame)
 
 	if #M.sections(lines) <= 1 then
 		return {
-			{ "Ready", "AcpOutputSkyline" },
+			{ ("%s Ready"):format(icons.idle), "AcpOutputSkyline" },
 			{ " - draft in prompt | ? actions | <leader>ax search", "AcpGhostText" },
 		}
 	end
 
 	return {
-		{ "Idle ", "AcpOutputIdle" },
+		{ ("%s Idle "):format(icons.idle), "AcpOutputIdle" },
 		{ M.skyline(lines, { width = 18 }), "AcpOutputRail" },
 		{
 			(" | %d sections | %d code | %d refs | [[/]] sections | <leader>av outline"):format(
@@ -1613,6 +1613,19 @@ function M.output_items(lines, opts)
 	return items
 end
 
+local function output_item_icon(kind)
+	if kind == "problem" then
+		return icons.error
+	end
+	if kind == "code" then
+		return icons.code
+	end
+	if kind == "reference" then
+		return icons.reference
+	end
+	return icons.section
+end
+
 function M.output_item_lines(items, opts)
 	opts = opts or {}
 	local lines = { ("%s ACP Output Items"):format(icons.map), "" }
@@ -1626,7 +1639,16 @@ function M.output_item_lines(items, opts)
 			label = label:sub(1, 93) .. "..."
 		end
 		local progress = position_percent(item.line, total) or "   ?"
-		table.insert(lines, ("%4d  %s  %-9s  %s"):format(item.line or 1, progress, (item.kind or "item"):upper(), label))
+		table.insert(
+			lines,
+			("%4d  %s  %s %-9s  %s"):format(
+				item.line or 1,
+				progress,
+				output_item_icon(item.kind),
+				(item.kind or "item"):upper(),
+				label
+			)
+		)
 		line_items[#lines] = item
 	end
 
@@ -1647,7 +1669,7 @@ function M.output_item_quickfix_items(items, bufnr)
 			bufnr = bufnr,
 			lnum = item.line or 1,
 			col = item.col or 1,
-			text = ("%s: %s"):format(kind, label),
+			text = ("%s %s: %s"):format(output_item_icon(item.kind), kind, label),
 		})
 	end
 	return qf_items
@@ -1676,13 +1698,22 @@ function M.next_output_item(lines, current, direction, opts)
 	return nil
 end
 
+local skyline_tokens = {
+	empty = ".",
+	section = icons.section,
+	reference = icons.reference,
+	code = icons.code,
+	problem = icons.error,
+	current = icons.location,
+}
+
 local skyline_priority = {
-	["."] = 0,
-	S = 1,
-	R = 2,
-	C = 3,
-	E = 4,
-	[">"] = 5,
+	[skyline_tokens.empty] = 0,
+	[skyline_tokens.section] = 1,
+	[skyline_tokens.reference] = 2,
+	[skyline_tokens.code] = 3,
+	[skyline_tokens.problem] = 4,
+	[skyline_tokens.current] = 5,
 }
 
 local function skyline_mark(cells, total, line, token)
@@ -1695,7 +1726,7 @@ local function skyline_mark(cells, total, line, token)
 		position = math.floor((((tonumber(line) or 1) - 1) / (total - 1)) * (width - 1) + 1.5)
 	end
 	position = math.max(1, math.min(width, position))
-	local current = cells[position] or "."
+	local current = cells[position] or skyline_tokens.empty
 	if (skyline_priority[token] or 0) >= (skyline_priority[current] or 0) then
 		cells[position] = token
 	end
@@ -1707,7 +1738,7 @@ function M.skyline(lines, opts)
 	local width = math.max(8, tonumber(opts.width) or 24)
 	local cells = {}
 	for index = 1, width do
-		cells[index] = "."
+		cells[index] = skyline_tokens.empty
 	end
 
 	local total = #lines
@@ -1716,14 +1747,17 @@ function M.skyline(lines, opts)
 	end
 
 	for _, section in ipairs(M.sections(lines)) do
-		skyline_mark(cells, total, section.line, "S")
+		skyline_mark(cells, total, section.line, skyline_tokens.section)
 	end
 	for _, item in ipairs(M.output_items(lines, opts)) do
-		local token = item.kind == "problem" and "E" or item.kind == "code" and "C" or item.kind == "reference" and "R" or "."
+		local token = item.kind == "problem" and skyline_tokens.problem
+			or item.kind == "code" and skyline_tokens.code
+			or item.kind == "reference" and skyline_tokens.reference
+			or skyline_tokens.empty
 		skyline_mark(cells, total, item.line, token)
 	end
 	if opts.current_line then
-		skyline_mark(cells, total, opts.current_line, ">")
+		skyline_mark(cells, total, opts.current_line, skyline_tokens.current)
 	end
 
 	return "[" .. table.concat(cells) .. "]"
@@ -1750,7 +1784,7 @@ function M.skyline_chunks(lines, opts)
 	end
 	local injection = opts.language_injection and "Tree-sitter" or "fence"
 	return {
-		{ " FLOW ", "AcpOutputSkyline" },
+		{ (" %s FLOW "):format(icons.map), "AcpOutputSkyline" },
 		{ M.skyline(lines, { width = opts.width or 24, current_line = opts.current_line, cwd = opts.cwd }), "AcpOutputRail" },
 		{ (" %s "):format(M.animation_frame(opts.frame)), "AcpOutputSpark" },
 		{
@@ -1782,19 +1816,6 @@ local function output_item_hl(kind)
 		return "AcpOutputReferenceBadge"
 	end
 	return "AcpSectionStats"
-end
-
-local function output_item_icon(kind)
-	if kind == "problem" then
-		return icons.error
-	end
-	if kind == "code" then
-		return icons.code
-	end
-	if kind == "reference" then
-		return icons.reference
-	end
-	return icons.section
 end
 
 function M.cursor_ribbon_chunks(lines, lnum, col, opts)

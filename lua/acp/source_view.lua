@@ -6,10 +6,10 @@ local icons = require("acp.icons")
 local M = {}
 
 local severity_order = {
-	{ key = "ERROR", label = "E" },
-	{ key = "WARN", label = "W" },
-	{ key = "INFO", label = "I" },
-	{ key = "HINT", label = "H" },
+	{ key = "ERROR", label = icons.error },
+	{ key = "WARN", label = icons.warning },
+	{ key = "INFO", label = icons.info },
+	{ key = "HINT", label = icons.hint },
 }
 
 local function valid_buf(bufnr)
@@ -189,10 +189,10 @@ local function link_marks(source, links)
 				col = 0,
 				opts = {
 					virt_text = {
-						{ (" %s LINK %s "):format(icons.reference, document_links.label(item)), "AcpSourceLinkBadge" },
+						{ (" %s LINK %s "):format(icons.link, document_links.label(item)), "AcpSourceLinkBadge" },
 					},
 					virt_text_pos = "right_align",
-					sign_text = icons.reference,
+					sign_text = icons.link,
 					sign_hl_group = "AcpSourceLinkBadge",
 					priority = 87,
 				},

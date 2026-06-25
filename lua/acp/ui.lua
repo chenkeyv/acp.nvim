@@ -451,8 +451,8 @@ local function refresh_output_map_highlights(state)
 			opts.line_hl_group = "AcpOutputMeta"
 		elseif entry then
 			opts.line_hl_group = output_map_highlight(entry)
-			if line:sub(1, 1) == ">" then
-				opts.virt_text = { { " CURRENT ", "AcpOutputTimeline" } }
+			if line:find(icons.location, 1, true) == 1 then
+				opts.virt_text = { { (" %s CURRENT "):format(icons.location), "AcpOutputTimeline" } }
 				opts.virt_text_pos = "right_align"
 			end
 		elseif line:match("^Press ") then
@@ -673,9 +673,9 @@ local function pulse_output_section(state, range)
 	state.output_pulse_token = (state.output_pulse_token or 0) + 1
 	local token = state.output_pulse_token
 	local frames = {
-		{ hl = "AcpOutputPulse", badge = " YANKED " },
-		{ hl = "AcpOutputPulseSoft", badge = " COPIED " },
-		{ hl = "AcpOutputPulse", badge = " READY " },
+		{ hl = "AcpOutputPulse", badge = (" %s YANKED "):format(icons.yank) },
+		{ hl = "AcpOutputPulseSoft", badge = (" %s COPIED "):format(icons.yank) },
+		{ hl = "AcpOutputPulse", badge = (" %s READY "):format(icons.idle) },
 	}
 
 	local function draw(frame)
@@ -1082,7 +1082,7 @@ local function output_line_preview(lines, entry)
 	local end_line = math.min(line_count, line + 5)
 	local preview = {}
 	for index = start_line, end_line do
-		local marker = index == line and ">" or " "
+		local marker = index == line and icons.location or " "
 		table.insert(preview, ("%s %4d  %s"):format(marker, index, lines[index] or ""))
 	end
 

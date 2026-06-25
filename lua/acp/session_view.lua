@@ -97,7 +97,7 @@ function M.panel(sessions, current_id, change_count)
 		local changes = change_count and change_count(session) or 0
 		local status = status_label(session)
 		local badge, badge_hl = status_style(status)
-		local marker = session.id == current_id and ">" or " "
+		local marker = session.id == current_id and icons.location or " "
 		local model = clean(session.model)
 		local title = ("%s #%d %s%s %s"):format(
 			marker,

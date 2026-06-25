@@ -3,10 +3,10 @@ local icons = require("acp.icons")
 local M = {}
 
 local severity_order = {
-	{ key = "ERROR", label = "E" },
-	{ key = "WARN", label = "W" },
-	{ key = "INFO", label = "I" },
-	{ key = "HINT", label = "H" },
+	{ key = "ERROR", label = icons.error },
+	{ key = "WARN", label = icons.warning },
+	{ key = "INFO", label = icons.info },
+	{ key = "HINT", label = icons.hint },
 }
 
 local function trim(text)
