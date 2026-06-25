@@ -135,4 +135,73 @@ function M.panel(sessions, current_id, change_count)
 	return lines, line_ids, styles
 end
 
+local function restore_title(session)
+	return clean(session and session.title) or clean(session and session.sessionId) or "[untitled]"
+end
+
+function M.restore_lines(list)
+	local lines = { "ACP Adapter Sessions", "" }
+	local line_sessions = {}
+
+	for index, session in ipairs(list or {}) do
+		local parts = {}
+		local session_id = clean(session.sessionId)
+		local updated = clean(session.updatedAt)
+		local model = clean(session.model)
+		local cwd = clean(session.cwd) or "[unknown cwd]"
+
+		if session_id then
+			table.insert(parts, ("id %s"):format(short(session_id, 28)))
+		end
+		if updated then
+			table.insert(parts, ("updated %s"):format(short(updated, 34)))
+		end
+		if model then
+			table.insert(parts, ("model %s"):format(short(model, 28)))
+		end
+
+		table.insert(lines, ("%d. %s"):format(index, short(restore_title(session), 72)))
+		line_sessions[#lines] = session
+		table.insert(lines, ("   %s"):format(#parts > 0 and table.concat(parts, "  ") or "no metadata"))
+		line_sessions[#lines] = session
+		table.insert(lines, ("   cwd %s"):format(short(cwd, 72)))
+		line_sessions[#lines] = session
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, "Press <Enter> to restore, or q/<Esc> to close.")
+	return lines, line_sessions
+end
+
+function M.restore_preview(session)
+	if not session then
+		return nil
+	end
+
+	local lines = {
+		"ACP Adapter Session",
+		"",
+		("Title: %s"):format(restore_title(session)),
+	}
+	local fields = {
+		{ "Session ID", session.sessionId },
+		{ "Updated", session.updatedAt },
+		{ "Created", session.createdAt },
+		{ "Cwd", session.cwd },
+		{ "Model", session.model },
+	}
+	for _, field in ipairs(fields) do
+		local value = clean(field[2])
+		if value then
+			table.insert(lines, ("%s: %s"):format(field[1], value))
+		end
+	end
+
+	return {
+		lines = lines,
+		filetype = "acp-sessions",
+		title = (" ACP restore %s "):format(short(restore_title(session), 32)),
+	}
+end
+
 return M

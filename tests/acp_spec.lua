@@ -339,6 +339,38 @@ test("session panel view renders transcript and source details", function()
 	eq(styles[5].line_hl_group, "AcpSessionMeta")
 end)
 
+test("restore session view renders metadata and preview", function()
+	local sessions = {
+		{
+			sessionId = "session-1234567890abcdef",
+			title = "Restore Work",
+			updatedAt = "2026-06-25T10:00:00Z",
+			createdAt = "2026-06-24T09:00:00Z",
+			cwd = "/tmp/acp.nvim/project",
+			model = "test-model",
+		},
+	}
+	local lines, line_sessions = session_view.restore_lines(sessions)
+	local text = table.concat(lines, "\n")
+
+	ok(text:find("ACP Adapter Sessions", 1, true))
+	ok(text:find("Restore Work", 1, true))
+	ok(text:find("id session-1234567890abcdef", 1, true))
+	ok(text:find("updated 2026-06-25T10:00:00Z", 1, true))
+	ok(text:find("model test-model", 1, true))
+	ok(text:find("cwd /tmp/acp.nvim/project", 1, true))
+	eq(line_sessions[3], sessions[1])
+	eq(line_sessions[4], sessions[1])
+	eq(line_sessions[5], sessions[1])
+
+	local preview = session_view.restore_preview(sessions[1])
+	local preview_text = table.concat(preview.lines, "\n")
+	eq(preview.filetype, "acp-sessions")
+	ok(preview.title:find("ACP restore Restore Work", 1, true))
+	ok(preview_text:find("Session ID: session-1234567890abcdef", 1, true))
+	ok(preview_text:find("Created: 2026-06-24T09:00:00Z", 1, true))
+end)
+
 test("source view renders context range marks", function()
 	local marks = source_view.marks({
 		id = 9,

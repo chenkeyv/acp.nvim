@@ -5227,26 +5227,8 @@ local function open_session_picker()
 	return true
 end
 
-local function restore_picker_lines(list)
-	local lines = { "ACP Adapter Sessions", "" }
-	local line_sessions = {}
-	for index, session in ipairs(list) do
-		local title = session.title or session.sessionId or "[untitled]"
-		local updated = session.updatedAt and session.updatedAt ~= "" and ("  " .. session.updatedAt) or ""
-		local cwd = session.cwd and session.cwd ~= "" and session.cwd or "[unknown cwd]"
-		table.insert(lines, ("%d. %s%s"):format(index, title, updated))
-		line_sessions[#lines] = session
-		table.insert(lines, ("   %s"):format(cwd))
-		line_sessions[#lines] = session
-	end
-
-	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to restore, or q/<Esc> to close.")
-	return lines, line_sessions
-end
-
 local function open_restore_picker(adapter_name, connection, list)
-	local lines, line_sessions = restore_picker_lines(list)
+	local lines, line_sessions = session_view.restore_lines(list)
 	picker.open({
 		name = ("ACP://%s/restore"):format(adapter_name),
 		filetype = "acp-sessions",
@@ -5254,6 +5236,9 @@ local function open_restore_picker(adapter_name, connection, list)
 		title = " ACP restore ",
 		submit_desc = "Restore ACP adapter session",
 		close_desc = "Close ACP restore sessions",
+		preview = function(row)
+			return session_view.restore_preview(line_sessions[row])
+		end,
 		on_submit = function(row, view)
 			local session = line_sessions[row]
 			if not session then
