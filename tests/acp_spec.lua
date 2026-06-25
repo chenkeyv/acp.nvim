@@ -316,6 +316,28 @@ test("session panel view renders status and badges", function()
 	eq(styles[6].line_hl_group, "AcpSessionError")
 end)
 
+test("session panel view renders transcript and source details", function()
+	local lines, line_ids, styles = session_view.panel({
+		{
+			id = 1,
+			adapter = "test",
+			run_status = "idle",
+			source_label = "src lua/acp/ui.lua:42",
+			transcript_stats = {
+				sections = 3,
+				code_blocks = 2,
+				locations = 1,
+			},
+		},
+	}, 1)
+	local text = table.concat(lines, "\n")
+
+	ok(text:find("3 sec  2 code  1 loc", 1, true))
+	ok(text:find("src lua/acp/ui.lua:42", 1, true))
+	eq(line_ids[5], 1)
+	eq(styles[5].line_hl_group, "AcpSessionMeta")
+end)
+
 test("source view renders context range marks", function()
 	local marks = source_view.marks({
 		id = 9,

@@ -7,6 +7,18 @@ local function clean(value)
 	return tostring(value):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+local function short(value, limit)
+	local label = clean(value)
+	if not label then
+		return nil
+	end
+	limit = limit or 36
+	if #label > limit then
+		return label:sub(1, limit - 3) .. "..."
+	end
+	return label
+end
+
 local function status_label(session)
 	return clean(session and session.run_status) or (session and session.busy and "running" or "idle")
 end
@@ -32,6 +44,43 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpSessionChanged", { fg = "#1a1b26", bg = "#9ece6a", bold = true, default = true })
 end
 
+local function stats_label(stats)
+	if type(stats) ~= "table" then
+		return nil
+	end
+
+	local parts = {}
+	if tonumber(stats.sections) and stats.sections > 0 then
+		table.insert(parts, ("%d sec"):format(stats.sections))
+	end
+	if tonumber(stats.code_blocks) and stats.code_blocks > 0 then
+		table.insert(parts, ("%d code"):format(stats.code_blocks))
+	end
+	if tonumber(stats.locations) and stats.locations > 0 then
+		table.insert(parts, ("%d loc"):format(stats.locations))
+	end
+	if #parts == 0 then
+		return nil
+	end
+	return table.concat(parts, "  ")
+end
+
+local function meta_label(session)
+	local parts = {}
+	local stats = stats_label(session and session.transcript_stats)
+	if stats then
+		table.insert(parts, stats)
+	end
+	local source = short(session and session.source_label, 42)
+	if source then
+		table.insert(parts, source)
+	end
+	if #parts == 0 then
+		return nil
+	end
+	return table.concat(parts, "  |  ")
+end
+
 function M.panel(sessions, current_id, change_count)
 	local lines = { "Sessions", "" }
 	local line_ids = {}
@@ -48,7 +97,12 @@ function M.panel(sessions, current_id, change_count)
 		local badge, badge_hl = status_style(status)
 		local marker = session.id == current_id and ">" or " "
 		local model = clean(session.model)
-		local title = ("%s #%d %s%s"):format(marker, session.id or 0, clean(session.adapter) or "?", model and (" " .. model) or "")
+		local title = ("%s #%d %s%s"):format(
+			marker,
+			session.id or 0,
+			clean(session.adapter) or "?",
+			model and (" " .. model) or ""
+		)
 
 		table.insert(lines, title)
 		line_ids[#lines] = session.id
@@ -67,6 +121,15 @@ function M.panel(sessions, current_id, change_count)
 			line_hl_group = badge_hl,
 			virt_text = changes > 0 and { { (" %d change(s) "):format(changes), "AcpSessionChanged" } } or nil,
 		}
+
+		local meta = meta_label(session)
+		if meta then
+			table.insert(lines, ("  %s"):format(meta))
+			line_ids[#lines] = session.id
+			styles[#lines] = {
+				line_hl_group = "AcpSessionMeta",
+			}
+		end
 	end
 
 	return lines, line_ids, styles

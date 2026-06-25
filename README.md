@@ -6,7 +6,7 @@ This plugin provides an editor-native ACP chat surface:
 
 - dedicated ACP tab by default
 - side panel for open ACP sessions
-- visual session sidebar with current-session highlighting and status badges
+- visual session sidebar with current-session highlighting, status badges, transcript counts, and source context
 - floating session picker with transcript, source, status, and change previews
 - native session close controls from commands, actions, and the session sidebar
 - command-style ACP action palette for discovering session and global workflows
@@ -263,6 +263,7 @@ completion otherwise.
 
 In the sessions panel:
 
+- session rows show status, changed-file count, transcript counts, and linked source context when available
 - `<Enter>` focuses the session under the cursor
 - `x` closes the session under the cursor
 - `<leader>ak` opens the ACP action palette

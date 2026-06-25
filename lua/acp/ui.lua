@@ -1693,7 +1693,34 @@ local function render_session_panel(state)
 		return
 	end
 
-	local lines, line_ids, styles = session_view.panel(sorted_sessions(), state.id, changes.count)
+	local items = {}
+	for _, session in ipairs(sorted_sessions()) do
+		local item = vim.tbl_extend("force", {}, session)
+		if valid_buf(session.output_buf) then
+			item.transcript_stats = output.transcript_stats(vim.api.nvim_buf_get_lines(session.output_buf, 0, -1, false), {
+				change_count = changes.count(session),
+				cwd = session.cwd,
+				start_line = (session.output_dashboard_lines or 0) + 1,
+			})
+		end
+		local source = session.source
+		if source and valid_buf(source.bufnr) then
+			local name = vim.api.nvim_buf_get_name(source.bufnr)
+			local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or ("buffer " .. source.bufnr)
+			if #path > 28 then
+				path = vim.fn.fnamemodify(path, ":t")
+			end
+			if source.range then
+				item.source_label = ("src %s:%d-%d"):format(path, source.range.line1, source.range.line2)
+			else
+				local cursor = source.cursor or { 1, 0 }
+				item.source_label = ("src %s:%d"):format(path, cursor[1] or 1)
+			end
+		end
+		table.insert(items, item)
+	end
+
+	local lines, line_ids, styles = session_view.panel(items, state.id, changes.count)
 	session_panel_lines[state.session_panel_buf] = line_ids
 	set_panel_lines(state.session_panel_buf, lines)
 	refresh_session_panel_highlights(state.session_panel_buf, styles)
