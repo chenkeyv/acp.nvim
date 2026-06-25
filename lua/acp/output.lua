@@ -375,57 +375,6 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpInjectedCode", { link = "Visual", default = true })
 end
 
-local function section_separator(icon, label, detail, hint)
-	local title = label
-	if detail and detail ~= "" then
-		title = ("%s %s"):format(label, detail)
-	end
-	local parts = { icons.pulse_mid, icon, title }
-	if hint and hint ~= "" then
-		table.insert(parts, ("%s %s"):format(icons.key, hint))
-	end
-	return (" %s "):format(table.concat(parts, "  "))
-end
-
-function M.activity_separator(line)
-	line = line or ""
-	if line:match("^Tool update:") then
-		return section_separator(
-			icons.tool,
-			"TOOL UPDATE:",
-			short_label((line:gsub("^Tool update:%s*", ""))),
-			ui_hints({ { icons.inspect, "K inspect" }, { icons.jump, "]o/[o items" } })
-		)
-	end
-	if line:match("^Tool:") then
-		return section_separator(
-			icons.tool,
-			"TOOL:",
-			short_label((line:gsub("^Tool:%s*", ""))),
-			ui_hints({ { icons.inspect, "K inspect" }, { icons.jump, "]o/[o items" } })
-		)
-	end
-	if line:match("^Terminal:") then
-		return section_separator(
-			icons.terminal,
-			"TERMINAL:",
-			short_label((line:gsub("^Terminal:%s*", ""))),
-			ui_hints({ { icons.inspect, "K inspect" }, { icons.jump, "]o/[o items" } })
-		)
-	end
-	if line:match("^Terminal output truncated") then
-		return section_separator(icons.warning, "TERMINAL WARNING:", "output truncated", ui_hint(icons.error, "<leader>ae problems"))
-	end
-	if line:match("^stderr:") then
-		return section_separator(
-			icons.error,
-			"STDERR:",
-			"problem output",
-			ui_hints({ { icons.inspect, "K inspect" }, { icons.error, "<leader>ae problems" } })
-		)
-	end
-end
-
 function M.activity_lens_chunks(line, frame)
 	line = line or ""
 	local label
@@ -481,23 +430,17 @@ function M.line_style(line)
 	if line == "You" then
 		return {
 			line_hl_group = "AcpUserHeader",
-			badge = (" %s USER "):format(icons.user),
-			badge_hl = "AcpBadgeUser",
 			sign_text = icons.user,
-			separator = section_separator(icons.user, "USER:", "Prompt"),
 		}
 	end
 	if line == "Agent" then
 		return {
 			line_hl_group = "AcpAgentHeader",
-			badge = (" %s AGENT "):format(icons.agent),
-			badge_hl = "AcpBadgeAgent",
 			sign_text = icons.agent,
-			separator = section_separator(icons.agent, "AGENT:", "Response"),
 		}
 	end
 	if line:match("^ACP:") then
-		return { line_hl_group = "AcpOutputHeader", badge = (" %s SESSION "):format(icons.session), badge_hl = "AcpBadge", sign_text = icons.session }
+		return { line_hl_group = "AcpOutputHeader", sign_text = icons.session }
 	end
 	if line:match("^Session:") or line:match("^Model:") or line:match("^Source:") or line:match("^Transcript:") then
 		return { line_hl_group = "AcpOutputMeta" }
@@ -508,82 +451,55 @@ function M.line_style(line)
 	if line:match("^Status:%s+error") then
 		return {
 			line_hl_group = "AcpStatusError",
-			badge = (" %s ERROR "):format(icons.error),
-			badge_hl = "AcpBadgeError",
 			sign_text = icons.error,
-			separator = section_separator(icons.error, "STATUS:", "Error"),
 		}
 	end
 	if line:match("^Status:%s+stopped") or line:match("^Status:%s+restored") then
 		return {
 			line_hl_group = "AcpStatusDone",
-			badge = (" %s DONE "):format(icons.idle),
-			badge_hl = "AcpBadgeStatus",
 			sign_text = icons.idle,
-			separator = section_separator(icons.idle, "STATUS:", "Done"),
 		}
 	end
 	if line:match("^Status:") then
 		return {
 			line_hl_group = "AcpStatus",
-			badge = (" %s LIVE "):format(icons.status),
-			badge_hl = "AcpBadgeStatus",
 			sign_text = icons.status,
-			separator = section_separator(icons.status, "STATUS:", "Live"),
 		}
 	end
 	if line:match("^Tool") then
 		return {
 			line_hl_group = "AcpTool",
-			badge = (" %s TOOL "):format(icons.tool),
-			badge_hl = "AcpBadgeTool",
 			sign_text = icons.tool,
-			separator = M.activity_separator(line),
 		}
 	end
 	if line:match("^Terminal:") then
 		return {
 			line_hl_group = "AcpTerminal",
-			badge = (" %s TERM "):format(icons.terminal),
-			badge_hl = "AcpBadgeTool",
 			sign_text = icons.terminal,
-			separator = M.activity_separator(line),
 		}
 	end
 	if line:match("^Terminal output truncated") then
 		return {
 			line_hl_group = "AcpWarning",
-			badge = (" %s WARN "):format(icons.warning),
-			badge_hl = "AcpBadgeWarn",
 			sign_text = icons.warning,
-			separator = M.activity_separator(line),
 		}
 	end
 	if line:match("^Wrote ") then
 		return {
 			line_hl_group = "AcpFile",
-			badge = (" %s FILE "):format(icons.file),
-			badge_hl = "AcpBadgeUser",
 			sign_text = icons.file,
-			separator = section_separator(icons.file, "FILE", "WRITE"),
 		}
 	end
 	if line:match("^Thought:") then
 		return {
 			line_hl_group = "AcpThought",
-			badge = (" %s NOTE "):format(icons.note),
-			badge_hl = "AcpBadge",
 			sign_text = icons.note,
-			separator = section_separator(icons.note, "NOTE"),
 		}
 	end
 	if line:match("^stderr:") then
 		return {
 			line_hl_group = "AcpError",
-			badge = (" %s STDERR "):format(icons.error),
-			badge_hl = "AcpBadgeError",
 			sign_text = icons.error,
-			separator = M.activity_separator(line),
 		}
 	end
 end
@@ -873,7 +789,7 @@ function M.statuscolumn_marker(lines, lnum, opts)
 	end
 
 	local block = M.code_block_at(lines, lnum)
-	if block then
+	if block and (lnum == block.start_line or lnum == block.end_line) then
 		return icons.code
 	end
 
@@ -881,20 +797,11 @@ function M.statuscolumn_marker(lines, lnum, opts)
 		return icons.reference
 	end
 
-	local inside_section = false
-	local current_kind
-
-	for index = 1, lnum do
-		if M.is_section(lines[index]) then
-			inside_section = true
-			current_kind = section_label(lines[index])
-			if index == lnum then
-				return section_icon(current_kind)
-			end
-		end
+	if M.is_section(lines[lnum]) then
+		return section_icon(section_label(lines[lnum]))
 	end
 
-	return inside_section and section_icon(current_kind) or "  "
+	return "  "
 end
 
 function M.outline_lines(sections, opts)

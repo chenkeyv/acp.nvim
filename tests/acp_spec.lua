@@ -554,21 +554,25 @@ test("prompt view renders ghost text and draft stats", function()
 end)
 
 test("session panel view renders status and badges", function()
-	local lines, line_ids, styles = session_view.panel({
+	local lines, line_ids, styles = session_view.panel(
 		{
-			id = 1,
-			adapter = "test",
-			model = "test-model",
-			run_status = "streaming",
+			{
+				id = 1,
+				adapter = "test",
+				model = "test-model",
+				run_status = "streaming",
+			},
+			{
+				id = 2,
+				adapter = "test",
+				run_status = "error: failed",
+			},
 		},
-		{
-			id = 2,
-			adapter = "test",
-			run_status = "error: failed",
-		},
-	}, 1, function(session)
-		return session.id == 1 and 2 or 0
-	end)
+		1,
+		function(session)
+			return session.id == 1 and 2 or 0
+		end
+	)
 
 	local text = table.concat(lines, "\n")
 	ok(text:find("Sessions", 1, true))
@@ -750,13 +754,7 @@ test("source view summarizes diagnostics in linked context range", function()
 	ok(label:find(("%s1"):format(icons.error), 1, true))
 	ok(label:find(("%s1"):format(icons.warning), 1, true))
 	ok(not label:find(("%s1"):format(icons.hint), 1, true))
-	ok(
-		marks[1].opts.virt_lines[1][1][1]:find(
-			("diagnostics %s1 %s1"):format(icons.error, icons.warning),
-			1,
-			true
-		)
-	)
+	ok(marks[1].opts.virt_lines[1][1][1]:find(("diagnostics %s1 %s1"):format(icons.error, icons.warning), 1, true))
 
 	vim.diagnostic.reset(ns, bufnr)
 	vim.api.nvim_buf_delete(bufnr, { force = true })
@@ -901,9 +899,12 @@ test("health report checks adapter commands and metadata", function()
 		lsp_request_available = true,
 		treesitter_available = true,
 	})
-	local text = table.concat(vim.tbl_map(function(item)
-		return ("%s:%s"):format(item.level, item.message)
-	end, items), "\n")
+	local text = table.concat(
+		vim.tbl_map(function(item)
+			return ("%s:%s"):format(item.level, item.message)
+		end, items),
+		"\n"
+	)
 
 	ok(text:find("ok:blink.cmp available for ACP prompt completion", 1, true))
 	ok(text:find("ok:Neovim diagnostics API available", 1, true))
@@ -929,14 +930,29 @@ test("health report checks adapter commands and metadata", function()
 		lsp_request_available = false,
 		treesitter_available = false,
 	})
-	local codex_text = table.concat(vim.tbl_map(function(item)
-		return ("%s:%s"):format(item.level, item.message)
-	end, codex_items), "\n")
+	local codex_text = table.concat(
+		vim.tbl_map(function(item)
+			return ("%s:%s"):format(item.level, item.message)
+		end, codex_items),
+		"\n"
+	)
 
 	ok(codex_text:find("warn:blink.cmp is missing; ACP prompt completion requires blink.cmp", 1, true))
 	ok(codex_text:find("error:Neovim diagnostics API is missing; ACP diagnostics require vim.diagnostic", 1, true))
-	ok(codex_text:find("warn:Neovim LSP async request API is missing; ACP LSP workflows require vim.lsp.buf_request_all", 1, true))
-	ok(codex_text:find("warn:Tree-sitter APIs are incomplete; ACP Tree-sitter context and preview features will be limited", 1, true))
+	ok(
+		codex_text:find(
+			"warn:Neovim LSP async request API is missing; ACP LSP workflows require vim.lsp.buf_request_all",
+			1,
+			true
+		)
+	)
+	ok(
+		codex_text:find(
+			"warn:Tree-sitter APIs are incomplete; ACP Tree-sitter context and preview features will be limited",
+			1,
+			true
+		)
+	)
 	ok(codex_text:find("error:codex adapter command is missing: missing-acp-test-command", 1, true))
 	ok(codex_text:find("warn:Codex CLI is missing: missing-codex-test-command", 1, true))
 end)
@@ -967,20 +983,24 @@ end)
 
 test("health notifications use shared Nerd Font titles", function()
 	local reports = {}
-	acp_health.notify({
-		default_adapter = "test",
-		adapters = {
-			test = {
-				command = { "missing-acp-test-command" },
+	acp_health.notify(
+		{
+			default_adapter = "test",
+			adapters = {
+				test = {
+					command = { "missing-acp-test-command" },
+				},
 			},
 		},
-	}, "test", function(message, level, opts)
-		table.insert(reports, {
-			message = message,
-			level = level,
-			title = opts and opts.title,
-		})
-	end)
+		"test",
+		function(message, level, opts)
+			table.insert(reports, {
+				message = message,
+				level = level,
+				title = opts and opts.title,
+			})
+		end
+	)
 
 	ok(#reports > 0)
 	eq(reports[1].title, icons.title("ACP"))
@@ -1020,29 +1040,24 @@ test("output dashboard and section helpers are rendered", function()
 
 	eq(acp_output.line_style("You").line_hl_group, "AcpUserHeader")
 	eq(acp_output.line_style("You").sign_text, icons.user)
-	ok(acp_output.line_style("You").separator:find(icons.pulse_mid, 1, true))
-	ok(acp_output.line_style("You").separator:find(icons.user, 1, true))
-	ok(acp_output.line_style("You").separator:find("USER: Prompt", 1, true))
+	eq(acp_output.line_style("You").separator, nil)
 	eq(acp_output.line_style("Agent").sign_text, icons.agent)
-	ok(acp_output.line_style("Agent").separator:find(icons.agent, 1, true))
-	ok(acp_output.line_style("Agent").separator:find("AGENT: Response", 1, true))
-	ok(acp_output.line_style("ACP: test").badge:find(icons.session, 1, true))
+	eq(acp_output.line_style("Agent").separator, nil)
+	eq(acp_output.line_style("ACP: test").sign_text, icons.session)
+	eq(acp_output.line_style("ACP: test").badge, nil)
 	eq(acp_output.line_style("Transcript: 1 section | 0 code | 0 locs | 0 changes").line_hl_group, "AcpOutputMeta")
 	eq(acp_output.line_style("Status: error: failed").line_hl_group, "AcpStatusError")
 	eq(acp_output.line_style("Status: error: failed").sign_text, icons.error)
-	ok(acp_output.line_style("Status: error: failed").separator:find(icons.error, 1, true))
-	ok(acp_output.line_style("Status: error: failed").separator:find("STATUS: Error", 1, true))
+	eq(acp_output.line_style("Status: error: failed").separator, nil)
 	eq(acp_output.line_style("Tool: build").sign_text, icons.tool)
-	ok(acp_output.line_style("Tool: build").separator:find("TOOL: build", 1, true))
-	ok(acp_output.line_style("Tool: build").separator:find(icons.inspect, 1, true))
-	ok(acp_output.line_style("Tool: build").separator:find(icons.jump, 1, true))
-	ok(acp_output.line_style("Tool update: running").separator:find("TOOL UPDATE: running", 1, true))
+	eq(acp_output.line_style("Tool: build").separator, nil)
+	eq(acp_output.line_style("Tool update: running").separator, nil)
 	eq(acp_output.line_style("Terminal: term-1").sign_text, icons.terminal)
-	ok(acp_output.line_style("Terminal: term-1").separator:find("TERMINAL: term-1", 1, true))
+	eq(acp_output.line_style("Terminal: term-1").separator, nil)
 	local warning_style = acp_output.line_style("Terminal output truncated to the configured byte limit.")
 	eq(warning_style.line_hl_group, "AcpWarning")
 	eq(warning_style.sign_text, icons.warning)
-	ok(warning_style.separator:find("TERMINAL WARNING", 1, true))
+	eq(warning_style.separator, nil)
 	eq(acp_output.line_style("Wrote lua/acp/init.lua").sign_text, icons.file)
 	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 1, 1), 3)
 	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 5, -1), 3)
@@ -1058,18 +1073,32 @@ test("output dashboard and section helpers are rendered", function()
 	eq(current.kind, "USER")
 	eq(current.title, "Prompt")
 	eq(current.line, 3)
-	ok(acp_output.window_title({ id = 7, adapter = "test" }, { current_section = current }):find("at USER: Prompt", 1, true))
-	ok(acp_output.window_title({ id = 7, adapter = "test" }, { current_section = current }):find(icons.session, 1, true))
+	ok(
+		acp_output
+			.window_title({ id = 7, adapter = "test" }, { current_section = current })
+			:find("at USER: Prompt", 1, true)
+	)
+	ok(
+		acp_output
+			.window_title({ id = 7, adapter = "test" }, { current_section = current })
+			:find(icons.session, 1, true)
+	)
 	ok(acp_output.window_title({ id = 7, adapter = "test" }, { current_section = current }):find(icons.status, 1, true))
-	ok(acp_output.window_title({ id = 7, adapter = "test" }, { current_section = current }):find(icons.section, 1, true))
+	ok(
+		acp_output
+			.window_title({ id = 7, adapter = "test" }, { current_section = current })
+			:find(icons.section, 1, true)
+	)
 	local range = acp_output.section_range({ "ACP: test", "", "You", "hello", "", "Agent", "world" }, 4)
 	eq(range.kind, "USER")
 	eq(range.line1, 3)
 	eq(range.line2, 5)
-	local section_lines, section_range = acp_output.section_lines({ "ACP: test", "", "You", "hello", "", "Agent", "world" }, 4)
+	local section_lines, section_range =
+		acp_output.section_lines({ "ACP: test", "", "You", "hello", "", "Agent", "world" }, 4)
 	eq(section_range.kind, "USER")
 	eq(section_lines, { "You", "hello" })
-	local section_text, text_range = acp_output.section_text({ "ACP: test", "", "You", "hello", "", "Agent", "world" }, 4)
+	local section_text, text_range =
+		acp_output.section_text({ "ACP: test", "", "You", "hello", "", "Agent", "world" }, 4)
 	eq(text_range.line1, 3)
 	eq(section_text, "You\nhello")
 	local section_summaries = acp_output.section_summaries({
@@ -1097,10 +1126,10 @@ test("output dashboard and section helpers are rendered", function()
 	local rail_lines = { "ACP: test", "Session: #7", "You", "hello", "Agent" }
 	eq(acp_output.statuscolumn_marker(rail_lines, 1), icons.session)
 	eq(acp_output.statuscolumn_marker(rail_lines, 3), icons.user)
-	eq(acp_output.statuscolumn_marker(rail_lines, 4), icons.user)
+	eq(acp_output.statuscolumn_marker(rail_lines, 4), "  ")
 	eq(acp_output.statuscolumn_marker({ "Status: error: failed" }, 1), icons.error)
 	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 2), icons.code)
-	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 3), icons.code)
+	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 3), "  ")
 	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 4), icons.code)
 	eq(acp_output.statuscolumn_marker({}, 1), "  ")
 	local outline, line_sections = acp_output.outline_lines(sections)
@@ -1198,7 +1227,11 @@ test("output dashboard and section helpers are rendered", function()
 	ok(busy_ghost:find(acp_output.motion_frame(2), 1, true))
 	ok(busy_ghost:find("0 sections", 1, true))
 	ok(busy_ghost:find("FLOW", 1, true))
-	local ghost_chunks = acp_output.ghost_text_chunks({ busy = false }, { "ACP: test", "You", "hello", "Agent", "done" }, 1)
+	local ghost_chunks = acp_output.ghost_text_chunks(
+		{ busy = false },
+		{ "ACP: test", "You", "hello", "Agent", "done" },
+		1
+	)
 	eq(ghost_chunks[2][2], "AcpOutputRail")
 	ok(acp_output.ghost_text({ busy = false }, { "ACP: test", "" }):find("Ready", 1, true))
 	ok(acp_output.cursor_hint({ "You", "hello" }, 1, 0):find("? menu", 1, true))
@@ -1390,8 +1423,14 @@ test("output dashboard and section helpers are rendered", function()
 	eq(map_qf[1].bufnr, 99)
 	ok(map_qf[1].text:find("SECTION", 1, true))
 	ok(map_qf[4].text:find("CODE", 1, true))
-	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 1).kind, "code")
-	eq(acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 6, -1).kind, "code")
+	eq(
+		acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 1).kind,
+		"code"
+	)
+	eq(
+		acp_output.next_output_item({ "Status: error: failed", "Agent", "```lua", "print(1)", "```", ref_line }, 6, -1).kind,
+		"code"
+	)
 	local current_problem = acp_output.current_output_item({
 		"Status: error: failed",
 		"Agent",
@@ -1424,7 +1463,11 @@ test("output dashboard and section helpers are rendered", function()
 	}, 6, ref_line:find(ref_file, 1, true) - 1, {})
 	eq(current_reference.kind, "reference")
 	eq(current_reference.index, 3)
-	ok(acp_output.window_title({ id = 7, adapter = "test" }, { current_item = current_code }):find("item 2/3 CODE", 1, true))
+	ok(
+		acp_output
+			.window_title({ id = 7, adapter = "test" }, { current_item = current_code })
+			:find("item 2/3 CODE", 1, true)
+	)
 	local problem_items = acp_output.problem_diagnostics({
 		"Status: error: failed to start session",
 		"",
@@ -2758,7 +2801,10 @@ test("prompt history recalls sent prompts and restores draft", function()
 		}, function(result)
 			blink_result = result
 		end)
-		ok(blink_result and blink_result.items and blink_result.items[1], "blink source should return prompt completions")
+		ok(
+			blink_result and blink_result.items and blink_result.items[1],
+			"blink source should return prompt completions"
+		)
 		eq(blink_result.items[1].label, ("%s @context"):format(icons.source))
 		eq(blink_result.items[1].detail, "ACP workflow")
 		eq(blink_result.items[1].labelDetails.detail, ("  %s ACP workflow"):format(icons.source))
@@ -2774,11 +2820,15 @@ test("prompt history recalls sent prompts and restores draft", function()
 		eq(blink_result.items[1].data.acp_completion_scope, "ACP workflow")
 		eq(blink_result.items[1].data.acp_complete_item.user_data, "acp.nvim:context")
 		local blink_done = false
-		blink_source:execute({
-			bufnr = input_buf,
-		}, blink_result.items[1], function()
-			blink_done = true
-		end)
+		blink_source:execute(
+			{
+				bufnr = input_buf,
+			},
+			blink_result.items[1],
+			function()
+				blink_done = true
+			end
+		)
 		ok(blink_done, "blink execute should complete")
 		local context_text = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
 		ok(not context_text:find("@context", 1, true), "completion action should remove the trigger word")
@@ -2963,10 +3013,9 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local ns = vim.api.nvim_create_namespace("acp.nvim.output")
 		local marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
 		local highlighted_header = false
-		local ghost_text = false
 		local session_sign = false
-		local activity_badge = false
-		local skyline_hud = false
+		local decorative_dashboard_text = false
+		local decorative_dashboard_lines = false
 		for _, mark in ipairs(marks) do
 			if mark[4] and mark[4].line_hl_group == "AcpOutputHeader" then
 				highlighted_header = true
@@ -2974,21 +3023,20 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			if has_sign(mark, icons.session) then
 				session_sign = true
 			end
-			skyline_hud = skyline_hud or has_virt_line(mark, "FLOW")
+			decorative_dashboard_lines = decorative_dashboard_lines or has_virt_line(mark, "FLOW")
 			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
-				if chunk[1] and chunk[1]:find("Ready", 1, true) then
-					ghost_text = true
-				end
-				if chunk[1] and chunk[1]:find("idle | 0 sections", 1, true) then
-					activity_badge = true
+				if
+					(chunk[1] and chunk[1]:find("Ready", 1, true))
+					or (chunk[1] and chunk[1]:find("idle | 0 sections", 1, true))
+				then
+					decorative_dashboard_text = true
 				end
 			end
 		end
 		ok(highlighted_header, "output header should be highlighted")
 		ok(session_sign, "output session sign should be rendered")
-		ok(ghost_text, "output ghost text should be rendered")
-		ok(activity_badge, "output header should render activity badge")
-		ok(skyline_hud, "output should render the skyline ghost HUD")
+		ok(not decorative_dashboard_text, "initial output should avoid decorative dashboard virtual text")
+		ok(not decorative_dashboard_lines, "initial output should avoid the skyline HUD")
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "hello output" })
 		vim.cmd("AcpSend")
@@ -3001,32 +3049,26 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local user_sign = false
 		local agent_sign = false
 		local error_sign = false
-		local user_separator = false
-		local agent_separator = false
-		local user_summary = false
-		local user_timeline = false
+		local section_virt_text = false
+		local section_virt_lines = false
 		for _, mark in ipairs(marks) do
 			user_sign = user_sign or has_sign(mark, icons.user)
 			agent_sign = agent_sign or has_sign(mark, icons.agent)
 			error_sign = error_sign or has_sign(mark, icons.error)
-			user_separator = user_separator or (has_virt_line(mark, icons.pulse_mid) and has_virt_line(mark, "USER: Prompt"))
-			agent_separator = agent_separator or (has_virt_line(mark, icons.pulse_mid) and has_virt_line(mark, "AGENT: Response"))
-			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
-				if chunk[1] and chunk[1]:find("1L | 2w", 1, true) then
-					user_summary = true
+			if (has_sign(mark, icons.user) or has_sign(mark, icons.agent)) and mark[4] then
+				if mark[4].virt_text and #mark[4].virt_text > 0 then
+					section_virt_text = true
 				end
-				if has_sign(mark, icons.user) and chunk[1] and chunk[1]:find("2/4", 1, true) then
-					user_timeline = true
+				if mark[4].virt_lines and #mark[4].virt_lines > 0 then
+					section_virt_lines = true
 				end
 			end
 		end
 		ok(user_sign, "output user sign should be rendered")
 		ok(agent_sign, "output agent sign should be rendered")
 		ok(error_sign, "output error sign should be rendered")
-		ok(user_separator, "output user separator should be rendered")
-		ok(agent_separator, "output agent separator should be rendered")
-		ok(user_summary, "output section summary should be rendered")
-		ok(user_timeline, "output section timeline should be rendered")
+		ok(not section_virt_text, "output section headers should avoid decorative virtual text")
+		ok(not section_virt_lines, "output section headers should avoid decorative virtual separators")
 		local original_output_line_count = vim.api.nvim_buf_line_count(output_buf)
 		vim.bo[output_buf].modifiable = true
 		vim.api.nvim_buf_set_lines(output_buf, -1, -1, false, {
@@ -3041,18 +3083,23 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.bo[output_buf].modifiable = false
 		vim.api.nvim_exec_autocmds("TextChanged", { buffer = output_buf })
 		marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
-		local tool_activity_card = false
-		local terminal_activity_card = false
-		local file_activity_card = false
+		local tool_sign = false
+		local terminal_sign = false
+		local file_sign = false
+		local activity_card = false
 		for _, mark in ipairs(marks) do
-			tool_activity_card = tool_activity_card or has_virt_line(mark, (" %s TOOL CALL "):format(icons.tool))
-			terminal_activity_card = terminal_activity_card
+			tool_sign = tool_sign or has_sign(mark, icons.tool)
+			terminal_sign = terminal_sign or has_sign(mark, icons.terminal)
+			file_sign = file_sign or has_sign(mark, icons.file)
+			activity_card = activity_card
+				or has_virt_line(mark, (" %s TOOL CALL "):format(icons.tool))
 				or has_virt_line(mark, (" %s TERMINAL "):format(icons.terminal))
-			file_activity_card = file_activity_card or has_virt_line(mark, (" %s FILE WRITE "):format(icons.file))
+				or has_virt_line(mark, (" %s FILE WRITE "):format(icons.file))
 		end
-		ok(tool_activity_card, "tool output should render an activity card")
-		ok(terminal_activity_card, "terminal output should render an activity card")
-		ok(file_activity_card, "file writes should render an activity card")
+		ok(tool_sign, "tool output should render a sign marker")
+		ok(terminal_sign, "terminal output should render a sign marker")
+		ok(file_sign, "file writes should render a sign marker")
+		ok(not activity_card, "activity rows should avoid decorative virtual cards")
 		vim.bo[output_buf].modifiable = true
 		vim.api.nvim_buf_set_lines(output_buf, original_output_line_count, -1, false, {})
 		vim.bo[output_buf].modifiable = false
@@ -3076,7 +3123,10 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.api.nvim_win_set_cursor(output_win, { problem_line, 0 })
 		vim.cmd("AcpOutputInspect")
 		local problem_preview_win, problem_preview = output_inspector_text("acp")
-		ok(problem_preview and problem_preview:find("failed to start session", 1, true), "output inspector should preview problems")
+		ok(
+			problem_preview and problem_preview:find("failed to start session", 1, true),
+			"output inspector should preview problems"
+		)
 		ok(vim.wo[problem_preview_win].winbar:find("ACP output problem", 1, true))
 		ok(vim.wo[problem_preview_win].winbar:find(icons.note, 1, true))
 		ok(vim.wo[problem_preview_win].winbar:find(icons.code, 1, true))
@@ -3103,7 +3153,11 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local output_action_preview_found = false
 		for _, winid in ipairs(vim.api.nvim_list_wins()) do
 			local bufnr = vim.api.nvim_win_get_buf(winid)
-			if bufnr ~= output_actions_buf and vim.bo[bufnr].buftype == "nofile" and vim.bo[bufnr].filetype == "acp" then
+			if
+				bufnr ~= output_actions_buf
+				and vim.bo[bufnr].buftype == "nofile"
+				and vim.bo[bufnr].filetype == "acp"
+			then
 				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 				if preview:find("Inspect item", 1, true) and preview:find("Context", 1, true) then
 					output_action_preview_found = true
@@ -3177,7 +3231,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(section_hint, "output cursor should show section action hints")
-		ok(section_ribbon, "output cursor should show a context ribbon")
+		ok(not section_ribbon, "output cursor should avoid the decorative context ribbon")
 
 		vim.cmd("AcpOutputDraft")
 		local draft = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
@@ -3221,7 +3275,11 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local search_preview = false
 		for _, winid in ipairs(vim.api.nvim_list_wins()) do
 			local preview_bufnr = vim.api.nvim_win_get_buf(winid)
-			if preview_bufnr ~= picker_buf and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "acp" then
+			if
+				preview_bufnr ~= picker_buf
+				and vim.bo[preview_bufnr].buftype == "nofile"
+				and vim.bo[preview_bufnr].filetype == "acp"
+			then
 				local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
 				if preview:find("hello output", 1, true) then
 					search_preview = true
@@ -3233,7 +3291,15 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		eq(vim.api.nvim_get_current_win(), output_win)
-		eq(vim.api.nvim_buf_get_lines(output_buf, vim.api.nvim_win_get_cursor(output_win)[1] - 1, vim.api.nvim_win_get_cursor(output_win)[1], false)[1], "hello output")
+		eq(
+			vim.api.nvim_buf_get_lines(
+				output_buf,
+				vim.api.nvim_win_get_cursor(output_win)[1] - 1,
+				vim.api.nvim_win_get_cursor(output_win)[1],
+				false
+			)[1],
+			"hello output"
+		)
 
 		vim.cmd("AcpOutput")
 		picker_buf = vim.api.nvim_get_current_buf()
@@ -3330,7 +3396,10 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(code_hint, "output code blocks should show language-aware ghost hints")
 		vim.cmd("AcpOutputInspect")
 		local code_preview_win, code_preview = output_inspector_text("lua")
-		ok(code_preview and code_preview:find("print('from acp')", 1, true), "output inspector should preview code blocks")
+		ok(
+			code_preview and code_preview:find("print('from acp')", 1, true),
+			"output inspector should preview code blocks"
+		)
 		ok(vim.wo[code_preview_win].winbar:find("lua lines", 1, true))
 		ok(vim.wo[code_preview_win].winbar:find(icons.note, 1, true))
 		ok(vim.wo[code_preview_win].winbar:find(icons.code, 1, true))
@@ -3520,7 +3589,11 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local preview_found = false
 		for _, winid in ipairs(vim.api.nvim_list_wins()) do
 			local preview_bufnr = vim.api.nvim_win_get_buf(winid)
-			if preview_bufnr ~= picker_buf and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "lua" then
+			if
+				preview_bufnr ~= picker_buf
+				and vim.bo[preview_bufnr].buftype == "nofile"
+				and vim.bo[preview_bufnr].filetype == "lua"
+			then
 				local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
 				if preview:find("print('from acp')", 1, true) then
 					preview_found = true
@@ -3581,7 +3654,12 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local ref_badge = false
 		local ref_sign = false
 		for _, mark in ipairs(marks) do
-			if mark[2] == ref_line - 1 and mark[3] == ref_col and mark[4] and mark[4].hl_group == "AcpOutputReference" then
+			if
+				mark[2] == ref_line - 1
+				and mark[3] == ref_col
+				and mark[4]
+				and mark[4].hl_group == "AcpOutputReference"
+			then
 				ref_highlight = true
 			end
 			if mark[2] == ref_line - 1 and has_sign(mark, icons.reference) then
@@ -3621,7 +3699,15 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		eq(vim.api.nvim_get_current_win(), output_win)
-		eq(vim.api.nvim_buf_get_lines(output_buf, vim.api.nvim_win_get_cursor(output_win)[1] - 1, vim.api.nvim_win_get_cursor(output_win)[1], false)[1], "```lua")
+		eq(
+			vim.api.nvim_buf_get_lines(
+				output_buf,
+				vim.api.nvim_win_get_cursor(output_win)[1] - 1,
+				vim.api.nvim_win_get_cursor(output_win)[1],
+				false
+			)[1],
+			"```lua"
+		)
 		vim.cmd("AcpOutputMap")
 		eq(vim.api.nvim_get_current_buf(), map_buf)
 		keys = vim.api.nvim_replace_termcodes("q", true, false, true)
@@ -3650,7 +3736,11 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local item_preview = false
 		for _, winid in ipairs(vim.api.nvim_list_wins()) do
 			local preview_bufnr = vim.api.nvim_win_get_buf(winid)
-			if preview_bufnr ~= picker_buf and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "lua" then
+			if
+				preview_bufnr ~= picker_buf
+				and vim.bo[preview_bufnr].buftype == "nofile"
+				and vim.bo[preview_bufnr].filetype == "lua"
+			then
 				local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
 				if preview:find("print('from acp')", 1, true) then
 					item_preview = true
@@ -3683,7 +3773,15 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		eq(vim.api.nvim_get_current_win(), output_win)
-		eq(vim.api.nvim_buf_get_lines(output_buf, vim.api.nvim_win_get_cursor(output_win)[1] - 1, vim.api.nvim_win_get_cursor(output_win)[1], false)[1], "```lua")
+		eq(
+			vim.api.nvim_buf_get_lines(
+				output_buf,
+				vim.api.nvim_win_get_cursor(output_win)[1] - 1,
+				vim.api.nvim_win_get_cursor(output_win)[1],
+				false
+			)[1],
+			"```lua"
+		)
 		vim.api.nvim_win_set_cursor(output_win, { problem_line, 0 })
 		vim.cmd("AcpOutputNextItem")
 		local item_line = vim.api.nvim_win_get_cursor(output_win)[1]
@@ -3740,7 +3838,11 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local location_preview = false
 		for _, winid in ipairs(vim.api.nvim_list_wins()) do
 			local preview_bufnr = vim.api.nvim_win_get_buf(winid)
-			if preview_bufnr ~= picker_buf and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "lua" then
+			if
+				preview_bufnr ~= picker_buf
+				and vim.bo[preview_bufnr].buftype == "nofile"
+				and vim.bo[preview_bufnr].filetype == "lua"
+			then
 				local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
 				if preview:find("local M = {}", 1, true) then
 					location_preview = true
@@ -6845,7 +6947,11 @@ test("history browser opens when entries exist", function()
 	local preview_found = false
 	for _, winid in ipairs(vim.api.nvim_list_wins()) do
 		local preview_bufnr = vim.api.nvim_win_get_buf(winid)
-		if preview_bufnr ~= bufnr and vim.bo[preview_bufnr].buftype == "nofile" and vim.bo[preview_bufnr].filetype == "acp" then
+		if
+			preview_bufnr ~= bufnr
+			and vim.bo[preview_bufnr].buftype == "nofile"
+			and vim.bo[preview_bufnr].filetype == "acp"
+		then
 			local preview = table.concat(vim.api.nvim_buf_get_lines(preview_bufnr, 0, -1, false), "\n")
 			if preview:find("History Browser Test", 1, true) then
 				preview_found = true
@@ -6875,11 +6981,14 @@ test("history browser can draft a chat from an entry", function()
 	local path = history.save(state, { "ACP: test-adapter", "", "hello from history" })
 	local selected
 
-	ok(history.open_browser({
-		open_chat = function(entry)
-			selected = entry
-		end,
-	}), "history browser should open")
+	ok(
+		history.open_browser({
+			open_chat = function(entry)
+				selected = entry
+			end,
+		}),
+		"history browser should open"
+	)
 	local bufnr = vim.api.nvim_get_current_buf()
 	eq(vim.bo[bufnr].filetype, "acp-history")
 	local text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
@@ -7349,16 +7458,22 @@ test("terminal requests capture bounded output and wait for exit", function()
 		},
 	})
 
-	ok(vim.wait(500, function()
-		return #writes >= 2
-	end, 5), "terminal wait should respond after command exits")
+	ok(
+		vim.wait(500, function()
+			return #writes >= 2
+		end, 5),
+		"terminal wait should respond after command exits"
+	)
 	eq(writes[2].id, 52)
 	eq(writes[2].result.exitCode, 0)
 
-	ok(vim.wait(500, function()
-		local output = connection.terminals:output(terminal_id)
-		return output and output.output == "7890"
-	end, 5), "terminal output should be captured and bounded")
+	ok(
+		vim.wait(500, function()
+			local output = connection.terminals:output(terminal_id)
+			return output and output.output == "7890"
+		end, 5),
+		"terminal output should be captured and bounded"
+	)
 
 	connection:handle_request({
 		id = 53,
@@ -7530,9 +7645,12 @@ test("embedded terminals stream output to active handlers", function()
 	})
 
 	eq(attached, terminal_id)
-	ok(vim.wait(500, function()
-		return table.concat(chunks):find("hello", 1, true) ~= nil
-	end, 5), "embedded terminal output should stream to handlers")
+	ok(
+		vim.wait(500, function()
+			return table.concat(chunks):find("hello", 1, true) ~= nil
+		end, 5),
+		"embedded terminal output should stream to handlers"
+	)
 
 	connection.terminals:release_all()
 	vim.fn.delete(root, "rf")
@@ -7917,9 +8035,12 @@ test("quick file writes are reviewed as one batch", function()
 			path = "nested/two.txt",
 			content = "two",
 		})
-		ok(vim.wait(200, function()
-			return #writes == 2
-		end, 5), "batched write responses should be sent")
+		ok(
+			vim.wait(200, function()
+				return #writes == 2
+			end, 5),
+			"batched write responses should be sent"
+		)
 	end)
 
 	file_review.select = original_select
@@ -8156,8 +8277,7 @@ test("permission request without options sends invalid params", function()
 	end
 
 	connection:handle_permission_request(9, {
-		options = {
-		},
+		options = {},
 	})
 
 	eq(writes[1].id, 9)

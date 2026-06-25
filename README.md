@@ -15,18 +15,15 @@ This plugin provides an editor-native ACP chat surface:
 - plain output buffer for streamed agent responses
 - shared Nerd Font iconography across prompt ribbons, sessions, source overlays, output signs, maps, pickers, and action chips
 - iconized output dashboard with source, model, context window, transcript metrics, and key workflow hints
-- animated dashboard activity badge with run status and live transcript counts
 - live transcript metrics for sections, code blocks, source locations, and changes
 - output-visible run status for active prompts, tools, and completion
 - live output winbar/title with status, model, context, item position, and changed-file counts
 - cursor-aware output breadcrumb showing the active transcript section
-- cursor-following output context ribbon with progress, skyline, section span, and item orientation
 - cursor-aware current-section highlighting in the output buffer
 - cursor-aware current-item highlighting for references, code blocks, and problems
 - unified output item picker for references, code blocks, and problems with previews
 - searchable output transcript picker with progress, context previews, and jump-to-line navigation
 - persistent floating output map with progress rails, previews, quickfix export, summary counts, and live section/problem/code/reference navigation
-- ambient output skyline HUD with Nerd Font pulse rails, injection, status, and problem signals
 - current-section yank action with a short visual pulse in the output buffer
 - follow-up prompt drafting from the current output section
 - direct `gf` navigation from transcript file references into source
@@ -41,16 +38,10 @@ This plugin provides an editor-native ACP chat surface:
 - animated virtual code-block lenses with language-to-filetype mapping, line count, injection status, and action hints
 - searchable output location picker for jumping from transcript file references into source
 - quickfix export for transcript file references
-- Neovim highlight groups and virtual badges for transcript sections, tools, terminal output, and errors
-- tool and terminal virtual headers with activity labels and action hints
-- animated tool, terminal, stderr, and file-write activity cards in the output gutter
+- Neovim highlight groups and sign markers for transcript sections, tools, terminal output, and errors
 - sign-column markers for transcript sections, references, code blocks, run status, tools, files, and errors
-- native statuscolumn transcript rail with section, code, reference, and problem markers
-- right-aligned output timeline badges with section index and transcript progress
-- per-section right-aligned summary badges for line, word, and code-block counts
+- sparse native statuscolumn rail with section, code-fence, reference, and problem markers
 - native output diagnostics and location-list navigation for transcript errors and stderr
-- iconized virtual section ribbons for scanning long output without changing transcript text
-- ghost-text output hints with live transcript counts, motion badges, and animated busy status
 - cursor-sensitive ghost-text action chips for references, code blocks, errors, and sections
 - optional Tree-sitter Markdown/code-fence language injection with injected-language ranges, body highlights, and animated injection badges
 - floating output outline with progress markers for jumping across long transcripts
@@ -320,7 +311,6 @@ In the prompt buffer:
 
 In the output buffer:
 
-- the current line shows a virtual context ribbon with transcript progress, section span, and current/nearby output item
 - the current line shows ghost-text action chips for references, code blocks, errors, and sections
 - fenced code blocks show injected-language badges, body highlights, and animated motion markers
 - `]]` jumps to the next transcript section

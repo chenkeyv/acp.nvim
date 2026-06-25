@@ -118,18 +118,6 @@ local function refresh_output_highlights(state)
 	vim.b[state.output_buf].acp_injected_languages = output.injected_languages(lines)
 	vim.b[state.output_buf].acp_language_injections = output.injection_ranges(lines)
 	refresh_output_diagnostics(state, lines)
-	local dashboard_count = state.output_dashboard_lines or #output.dashboard_lines(state)
-	local activity_badge, activity_hl = output.activity_badge(
-		state,
-		output.transcript_stats(lines, {
-			start_line = dashboard_count + 1,
-			cwd = state.cwd,
-			change_count = changes.count(state),
-		}),
-		state.output_animation_frame
-	)
-	local section_summaries = output.section_summaries(lines)
-	local section_timeline = output.section_timeline(lines)
 	for index, line in ipairs(lines) do
 		local style = output.line_style(line)
 		if style then
@@ -139,64 +127,9 @@ local function refresh_output_highlights(state)
 			if style.line_hl_group then
 				opts.line_hl_group = style.line_hl_group
 			end
-			local summary = section_summaries[index]
-			local timeline = section_timeline[index]
-			local header_activity = index == 1 and line:match("^ACP:") and activity_badge
-			local live_status
-			local live_status_hl
-			if state.busy and line:match("^Status:") then
-				live_status, live_status_hl = output.live_status_label(state, state.output_animation_frame)
-			end
-			if style.badge or summary or timeline or header_activity or live_status then
-				opts.virt_text = {}
-				if timeline then
-					table.insert(opts.virt_text, { timeline.label, "AcpOutputTimeline" })
-				end
-				if summary then
-					table.insert(opts.virt_text, { summary.label, "AcpSectionStats" })
-				end
-				if style.badge then
-					table.insert(opts.virt_text, { style.badge, style.badge_hl or "AcpBadge" })
-				end
-				if header_activity then
-					table.insert(opts.virt_text, { activity_badge, activity_hl or "AcpOutputIdle" })
-				end
-				if live_status then
-					table.insert(opts.virt_text, { live_status, live_status_hl or "AcpOutputLive" })
-				end
-				opts.virt_text_pos = "right_align"
-			end
 			if style.sign_text then
 				opts.sign_text = style.sign_text
 				opts.sign_hl_group = style.sign_hl_group or style.line_hl_group or style.badge_hl or "AcpBadge"
-			end
-			local activity_lens = output.activity_lens_chunks(line, state.output_animation_frame)
-			if style.separator then
-				opts.virt_lines = { { { style.separator, style.separator_hl_group or style.line_hl_group or "AcpOutputMeta" } } }
-				if activity_lens then
-					table.insert(opts.virt_lines, activity_lens)
-				end
-				opts.virt_lines_above = true
-			elseif activity_lens then
-				opts.virt_lines = { activity_lens }
-				opts.virt_lines_above = true
-			end
-			if line:match("^Keys:") then
-				opts.virt_lines = opts.virt_lines or {}
-				table.insert(
-					opts.virt_lines,
-					output.skyline_chunks(lines, {
-						width = 28,
-						frame = state.output_animation_frame,
-						cwd = state.cwd,
-						change_count = changes.count(state),
-						start_line = dashboard_count + 1,
-						language_injection = state.output_language_injection,
-						run_status = state.run_status,
-						busy = state.busy,
-					})
-				)
-				opts.virt_lines_above = false
 			end
 			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, index - 1, 0, opts)
 		end
@@ -277,17 +210,6 @@ local function refresh_output_highlights(state)
 		end
 	end
 
-	local ghost = output.ghost_text_chunks(state, lines, state.output_animation_frame)
-	if ghost and #lines > 0 then
-		local row = #lines - 1
-		local col = #(lines[#lines] or "")
-		pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, row, col, {
-			virt_text = ghost,
-			virt_text_pos = "eol",
-			hl_mode = "combine",
-			priority = 90,
-		})
-	end
 end
 
 local function refresh_current_output_section(state)
@@ -360,11 +282,7 @@ local function refresh_output_cursor_hint(state)
 		language_injection = state.output_language_injection,
 	}
 	local hint = output.cursor_hint_chunks(lines, cursor[1], cursor[2], opts)
-	local ribbon = output.cursor_ribbon_chunks(lines, cursor[1], cursor[2], {
-		cwd = state.cwd,
-		width = 22,
-	})
-	if not hint and not ribbon then
+	if not hint then
 		return
 	end
 
@@ -376,10 +294,6 @@ local function refresh_output_cursor_hint(state)
 	if hint then
 		mark_opts.virt_text = hint
 		mark_opts.virt_text_pos = "eol"
-	end
-	if ribbon then
-		mark_opts.virt_lines = { ribbon }
-		mark_opts.virt_lines_above = true
 	end
 	pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_hint_ns, cursor[1] - 1, #line, mark_opts)
 end
