@@ -1450,7 +1450,8 @@ local function open_output_code_blocks(state)
 	end
 
 	local lines, line_blocks = output.code_block_lines(blocks)
-	picker.open({
+	local view
+	view = picker.open({
 		name = ("ACP://%s/%d/code-blocks"):format(state.adapter, state.id),
 		filetype = "acp-code-blocks",
 		lines = lines,
@@ -1478,6 +1479,14 @@ local function open_output_code_blocks(state)
 			open_output_code_block_buffer(state, block)
 		end,
 	})
+	vim.keymap.set("n", "Q", function()
+		view.close()
+		vim.fn.setqflist({}, " ", {
+			title = ("ACP output code blocks #%s"):format(tostring(state.id or "?")),
+			items = output.code_block_quickfix_items(blocks, state.output_buf),
+		})
+		vim.cmd("copen")
+	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP code blocks quickfix" })
 	return true
 end
 
@@ -2463,6 +2472,14 @@ local function output_action_items(state, context_info)
 		end)
 		add("Code blocks", "Browse fenced code blocks from this transcript", "<leader>ab", function()
 			open_output_code_blocks(state)
+		end)
+		add("Code blocks quickfix", "Send fenced code blocks to quickfix", ":AcpCodeBlocksQuickfix", function()
+			local blocks = output.code_blocks(context_info.lines)
+			vim.fn.setqflist({}, " ", {
+				title = ("ACP output code blocks #%s"):format(tostring(state.id or "?")),
+				items = output.code_block_quickfix_items(blocks, state.output_buf),
+			})
+			vim.cmd("copen")
 		end)
 	end
 	if output.problem_diagnostic_at(context_info.lines, context_info.cursor[1]) then
@@ -3673,6 +3690,9 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>ay", yank_section, { buffer = bufnr, desc = "Yank current ACP output section" })
 		vim.keymap.set("n", "<leader>ai", draft_section, { buffer = bufnr, desc = "Draft from current ACP output section" })
 		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
+		vim.keymap.set("n", "<leader>aB", function()
+			M.open_code_blocks_quickfix()
+		end, { buffer = bufnr, desc = "Open ACP code blocks quickfix" })
 		vim.keymap.set("n", "<leader>aY", yank_code_block, { buffer = bufnr, desc = "Yank ACP output code block" })
 		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
 		vim.keymap.set("n", "<leader>ae", open_problems, { buffer = bufnr, desc = "Open ACP output problems" })
@@ -3939,6 +3959,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
 		M.open_code_blocks()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpCodeBlocksQuickfix", function()
+		M.open_code_blocks_quickfix()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpCodeBlockYank", function()
@@ -4533,6 +4557,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
 			M.open_code_blocks()
+		end)
+		add_action(items, "Code blocks quickfix", "Send fenced output code blocks to quickfix", ":AcpCodeBlocksQuickfix", "session", function()
+			M.open_code_blocks_quickfix()
 		end)
 		add_action(items, "Yank code block", "Copy the fenced code block under the output cursor", "<leader>aY", "session", function()
 			M.yank_code_block()
@@ -6329,6 +6356,25 @@ function M.open_code_blocks()
 	end
 
 	open_output_code_blocks(state)
+end
+
+function M.open_code_blocks_quickfix()
+	local state = current_state()
+	if not state or not valid_buf(state.output_buf) then
+		return
+	end
+
+	local blocks = output.code_blocks(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false))
+	if #blocks == 0 then
+		notify("No ACP code blocks found in the output", vim.log.levels.WARN)
+		return
+	end
+
+	vim.fn.setqflist({}, " ", {
+		title = ("ACP output code blocks #%s"):format(tostring(state.id or "?")),
+		items = output.code_block_quickfix_items(blocks, state.output_buf),
+	})
+	vim.cmd("copen")
 end
 
 function M.yank_code_block()

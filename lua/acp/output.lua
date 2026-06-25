@@ -1232,8 +1232,29 @@ function M.code_block_lines(blocks)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to open a scratch buffer, <leader>aY to yank at cursor, / to filter, or q/<Esc> to close.")
+	table.insert(lines, "Press <Enter> to open a scratch buffer, Q for quickfix, / to filter, or q/<Esc> to close.")
 	return lines, line_blocks
+end
+
+function M.code_block_quickfix_items(blocks, bufnr)
+	local items = {}
+	for _, block in ipairs(blocks or {}) do
+		local language = clean(block.language) or "text"
+		local line_count = tonumber(block.line_count) or 0
+		table.insert(items, {
+			bufnr = bufnr,
+			lnum = block.start_line or 1,
+			col = 1,
+			text = ("CODE %s lines %d-%d (%d line%s)"):format(
+				language,
+				block.start_line or 1,
+				block.end_line or block.start_line or 1,
+				line_count,
+				line_count == 1 and "" or "s"
+			),
+		})
+	end
+	return items
 end
 
 function M.file_references(lines, opts)

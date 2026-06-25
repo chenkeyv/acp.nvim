@@ -120,6 +120,7 @@ test("setup registers public user commands", function()
 		"AcpOutputNextItem",
 		"AcpOutputPrevItem",
 		"AcpCodeBlocks",
+		"AcpCodeBlocksQuickfix",
 		"AcpCodeBlockYank",
 		"AcpOutputLocations",
 		"AcpOutputQuickfix",
@@ -855,8 +856,13 @@ test("output dashboard and section helpers are rendered", function()
 	local block_text = table.concat(block_picker, "\n")
 	ok(block_text:find("ACP Output Code Blocks", 1, true))
 	ok(block_text:find("lua", 1, true))
-	ok(block_text:find("<leader>aY to yank", 1, true))
+	ok(block_text:find("Q for quickfix", 1, true))
 	eq(line_blocks[3].language, "lua")
+	local block_qf = acp_output.code_block_quickfix_items(blocks, 42)
+	eq(#block_qf, 2)
+	eq(block_qf[1].bufnr, 42)
+	eq(block_qf[1].lnum, 2)
+	ok(block_qf[1].text:find("CODE lua lines 2%-4", 1, false))
 
 	local ref_file = vim.fn.tempname() .. ".lua"
 	vim.fn.writefile({ "local one = 1", "local two = 2" }, ref_file)
@@ -2762,13 +2768,17 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(vim.bo[output_actions_buf].filetype, "acp-output-actions")
 		local action_lines = vim.api.nvim_buf_get_lines(output_actions_buf, 0, -1, false)
 		local yank_code_row
+		local code_quickfix_action = false
 		for index, action_line in ipairs(action_lines) do
+			if action_line:find("Code blocks quickfix", 1, true) then
+				code_quickfix_action = true
+			end
 			if action_line:find("Yank code block", 1, true) then
 				yank_code_row = index
-				break
 			end
 		end
 		ok(yank_code_row, "output actions should include code-block actions")
+		ok(code_quickfix_action, "output actions should include code-block quickfix")
 		vim.api.nvim_win_set_cursor(0, { yank_code_row, 0 })
 		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
@@ -2918,6 +2928,25 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			end
 		end
 		ok(preview_found, "code block picker should show language preview")
+		keys = vim.api.nvim_replace_termcodes("Q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		local code_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(code_qflist.title:find("ACP output code blocks", 1, true))
+		eq(#code_qflist.items, 1)
+		eq(code_qflist.items[1].bufnr, output_buf)
+		ok(code_qflist.items[1].text:find("CODE lua lines", 1, true))
+		vim.cmd("cclose")
+
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd("AcpCodeBlocksQuickfix")
+		code_qflist = vim.fn.getqflist({ title = 1, items = 1 })
+		ok(code_qflist.title:find("ACP output code blocks", 1, true))
+		eq(#code_qflist.items, 1)
+		vim.cmd("cclose")
+
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd("AcpCodeBlocks")
+		picker_buf = vim.api.nvim_get_current_buf()
 		keys = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		local code_buf = vim.api.nvim_get_current_buf()
@@ -3226,6 +3255,7 @@ test("actions command opens a session action palette", function()
 		local output_items_quickfix = false
 		local inspect_output = false
 		local output_actions = false
+		local code_blocks_quickfix = false
 		local yank_code_block = false
 		local diagnostics_quickfix = false
 		local smart_context_action = false
@@ -3277,6 +3307,9 @@ test("actions command opens a session action palette", function()
 			end
 			if line:find("Output actions", 1, true) then
 				output_actions = true
+			end
+			if line:find("Code blocks quickfix", 1, true) then
+				code_blocks_quickfix = true
 			end
 			if line:find("Yank code block", 1, true) then
 				yank_code_block = true
@@ -3384,6 +3417,7 @@ test("actions command opens a session action palette", function()
 		ok(output_items_quickfix, "action palette should include output item quickfix")
 		ok(inspect_output, "action palette should include output inspect")
 		ok(output_actions, "action palette should include output actions")
+		ok(code_blocks_quickfix, "action palette should include code blocks quickfix")
 		ok(yank_code_block, "action palette should include code block yank")
 		ok(diagnostics_quickfix, "action palette should include diagnostics quickfix")
 		ok(workspace_diagnostics, "action palette should include workspace diagnostics")

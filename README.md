@@ -35,6 +35,7 @@ This plugin provides an editor-native ACP chat surface:
 - hover-style `K` inspector for output references, code blocks, problems, and sections with winbar status and close keymaps
 - cursor-aware code-block yank action that copies fenced output without Markdown fences
 - searchable output code-block picker with language-aware previews and scratch buffers
+- quickfix export for fenced output code blocks
 - code-block scratch buffers with winbar actions, Tree-sitter/filetype status, Tree-sitter scope drafting/navigation, output return, and yank/close keymaps
 - animated virtual code-block lenses with language-to-filetype mapping, line count, injection status, and action hints
 - searchable output location picker for jumping from transcript file references into source
@@ -200,6 +201,7 @@ completion otherwise.
 - `:AcpOutputActions` opens cursor-aware actions for the current output item
 - `:AcpOutputNextItem` / `:AcpOutputPrevItem` jump between output references, code blocks, and problems
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
+- `:AcpCodeBlocksQuickfix` sends fenced output code blocks to quickfix
 - `:AcpCodeBlockYank` yanks the fenced code block under the output cursor
 - `:AcpOutputLocations` opens local file references from the current output with source previews
 - `:AcpOutputQuickfix` sends local file references from the current output to quickfix
@@ -286,6 +288,7 @@ In the prompt buffer:
 - `<leader>ai` inserts the current output section as follow-up prompt context
 - `<leader>av` opens the output outline
 - `<leader>ab` opens output code blocks
+- `<leader>aB` sends output code blocks to quickfix
 - `<leader>aY` yanks the code block under the cursor
 - `<leader>ag` opens output file references
 - `<leader>ae` opens output errors/stderr in the location list
@@ -351,7 +354,7 @@ In floating ACP pickers:
 - `/` filters visible picker rows
 - `<C-l>` clears the active picker filter
 - source-backed pickers show a live preview beside the picker
-- changed-file, diagnostics, workspace-diagnostics, LSP-code-lens, LSP-call-hierarchy, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-workspace-symbol, LSP-symbol, output-location, and output-item pickers use `Q` to export rows to quickfix
+- changed-file, diagnostics, workspace-diagnostics, LSP-code-lens, LSP-call-hierarchy, LSP-reference, LSP-declaration, LSP-definition, LSP-implementation, LSP-type-definition, LSP-workspace-symbol, LSP-symbol, output-location, output-code-block, and output-item pickers use `Q` to export rows to quickfix
 - `<Enter>` selects the row under the cursor
 - `q` or `<Esc>` closes the picker
 
