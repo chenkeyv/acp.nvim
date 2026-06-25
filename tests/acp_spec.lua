@@ -283,6 +283,44 @@ test("picker chrome renders shared Nerd Font icons", function()
 	eq(picker_chrome.footer("Press <Enter> to select."), ("Press <Enter> to select. %s"):format(icons.key))
 end)
 
+test("floating picker applies chrome highlights", function()
+	local view = picker.open({
+		name = "ACP://highlight-picker",
+		filetype = "acp-highlight-picker",
+		lines = {
+			picker_chrome.title(icons.action, "ACP Highlight Picker"),
+			"",
+			picker_chrome.row(1, icons.action, "alpha action"),
+			picker_chrome.detail(icons.note, "detail row"),
+			"",
+			picker_chrome.footer("Press <Enter> to select, or q/<Esc> to close."),
+		},
+		title = " ACP highlight picker ",
+	})
+	local ns = vim.api.nvim_create_namespace("acp.nvim.picker")
+
+	local function has_mark(field, group)
+		for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(view.bufnr, ns, 0, -1, { details = true })) do
+			if mark[4] and mark[4][field] == group then
+				return true
+			end
+		end
+		return false
+	end
+
+	ok(has_mark("line_hl_group", "AcpPickerHeader"))
+	ok(has_mark("hl_group", "AcpPickerIcon"))
+	ok(has_mark("hl_group", "AcpPickerIndex"))
+	ok(has_mark("line_hl_group", "AcpPickerDetail"))
+	ok(has_mark("line_hl_group", "AcpPickerFooter"))
+	ok(has_mark("hl_group", "AcpPickerKey"))
+
+	view.filter("missing")
+	ok(has_mark("line_hl_group", "AcpPickerFilter"))
+	ok(has_mark("line_hl_group", "AcpPickerEmpty"))
+	view.close()
+end)
+
 test("prompt view renders ghost text and draft stats", function()
 	local empty = prompt_view.info({ "" })
 	ok(empty.empty)

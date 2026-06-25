@@ -2,6 +2,102 @@ local M = {}
 local chrome = require("acp.picker_chrome")
 local icons = require("acp.icons")
 
+local picker_ns = vim.api.nvim_create_namespace("acp.nvim.picker")
+
+function M.define_highlights()
+	vim.api.nvim_set_hl(0, "AcpPickerHeader", { fg = "#7aa2f7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpPickerIcon", { fg = "#7dcfff", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpPickerIndex", { fg = "#e0af68", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpPickerDetail", { link = "Comment", default = true })
+	vim.api.nvim_set_hl(0, "AcpPickerFooter", { link = "Comment", default = true })
+	vim.api.nvim_set_hl(0, "AcpPickerKey", { fg = "#e0af68", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpPickerFilter", { fg = "#bb9af7", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpPickerEmpty", { link = "DiagnosticWarn", default = true })
+end
+
+local function add_hl(bufnr, row, start_col, end_col, group, priority)
+	if end_col <= start_col then
+		return
+	end
+	pcall(vim.api.nvim_buf_set_extmark, bufnr, picker_ns, row, start_col, {
+		end_col = end_col,
+		hl_group = group,
+		priority = priority or 80,
+	})
+end
+
+local function add_line_hl(bufnr, row, group)
+	pcall(vim.api.nvim_buf_set_extmark, bufnr, picker_ns, row, 0, {
+		line_hl_group = group,
+		priority = 70,
+	})
+end
+
+local function highlight_first_token(bufnr, row, line, group)
+	local start_col, end_col = line:find("%S+")
+	if start_col then
+		add_hl(bufnr, row, start_col - 1, end_col, group)
+	end
+end
+
+local function highlight_key_tokens(bufnr, row, line)
+	local start_col = 1
+	while true do
+		local first, last = line:find("<[^>]+>", start_col)
+		if not first then
+			break
+		end
+		add_hl(bufnr, row, first - 1, last, "AcpPickerKey", 90)
+		start_col = last + 1
+	end
+
+	local key_start = 1
+	while true do
+		local first, last = line:find("%f[%w][QKoqx/]%f[%W]", key_start)
+		if not first then
+			break
+		end
+		add_hl(bufnr, row, first - 1, last, "AcpPickerKey", 90)
+		key_start = last + 1
+	end
+end
+
+local function apply_highlights(bufnr, lines)
+	vim.api.nvim_buf_clear_namespace(bufnr, picker_ns, 0, -1)
+	for index, line in ipairs(lines or {}) do
+		local row = index - 1
+		if line:match("^Filter:") then
+			add_line_hl(bufnr, row, "AcpPickerFilter")
+			local first, last = line:find(icons.search, 1, true)
+			if first then
+				add_hl(bufnr, row, first - 1, last, "AcpPickerIcon", 90)
+			end
+		elseif line:find("No matching picker entries", 1, true) then
+			add_line_hl(bufnr, row, "AcpPickerEmpty")
+			highlight_first_token(bufnr, row, line, "AcpPickerIcon")
+		elseif line:match("^Press ") then
+			add_line_hl(bufnr, row, "AcpPickerFooter")
+			highlight_key_tokens(bufnr, row, line)
+			local first, last = line:find(icons.key, 1, true)
+			if first then
+				add_hl(bufnr, row, first - 1, last, "AcpPickerKey", 90)
+			end
+		elseif index == 1 and line ~= "" then
+			add_line_hl(bufnr, row, "AcpPickerHeader")
+			highlight_first_token(bufnr, row, line, "AcpPickerIcon")
+		else
+			local _, prefix_end, prefix, token = line:find("^(%s*%d+%.%s+)(%S+)")
+			if prefix_end then
+				add_hl(bufnr, row, 0, #prefix, "AcpPickerIndex", 90)
+				add_hl(bufnr, row, #prefix, #prefix + #token, "AcpPickerIcon", 90)
+			elseif line:match("^%s+%S+") then
+				add_line_hl(bufnr, row, "AcpPickerDetail")
+				highlight_first_token(bufnr, row, line, "AcpPickerIcon")
+			end
+		end
+	end
+end
+
 local function decorated_title(title, icon)
 	local stripped = tostring(title or "ACP"):gsub("^%s+", ""):gsub("%s+$", "")
 	if stripped == "" then
@@ -105,6 +201,7 @@ end
 
 function M.open(opts)
 	opts = opts or {}
+	M.define_highlights()
 	local lines = opts.lines or { "" }
 	local source_lines = vim.deepcopy(lines)
 	local query = ""
@@ -170,6 +267,7 @@ function M.open(opts)
 		vim.bo[bufnr].modifiable = true
 		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, rendered)
 		vim.bo[bufnr].modifiable = false
+		apply_highlights(bufnr, rendered)
 	end
 
 	render()
