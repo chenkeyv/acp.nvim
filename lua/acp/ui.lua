@@ -3711,6 +3711,9 @@ local function register_keymaps(state)
 	local open_output_action_menu = function()
 		open_output_actions(state)
 	end
+	local open_output_help = function()
+		M.open_output_help()
+	end
 	local open_prompt_action_menu = function()
 		open_prompt_actions(state)
 	end
@@ -3804,6 +3807,7 @@ local function register_keymaps(state)
 		vim.keymap.set("n", "<leader>aD", open_diagnostics_quickfix, { buffer = bufnr, desc = "Open ACP diagnostics quickfix" })
 		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Preview ACP changed files" })
 		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
+		vim.keymap.set("n", "<leader>a?", open_output_help, { buffer = bufnr, desc = "Open ACP output help" })
 		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
 		vim.keymap.set("n", "<leader>ak", open_actions, { buffer = bufnr, desc = "Open ACP actions" })
 		vim.keymap.set("n", "<leader>aa", open_code_actions, { buffer = bufnr, desc = "Open ACP LSP code actions" })
@@ -4051,6 +4055,10 @@ function M.setup(opts)
 
 	vim.api.nvim_create_user_command("AcpOutputActions", function()
 		M.open_output_actions()
+	end, {})
+
+	vim.api.nvim_create_user_command("AcpOutputHelp", function()
+		M.open_output_help()
 	end, {})
 
 	vim.api.nvim_create_user_command("AcpOutputNextItem", function()
@@ -4658,6 +4666,9 @@ local function action_palette_items(state)
 		end)
 		add_action(items, "Output actions", "Show cursor-aware actions for the output item", "?", "session", function()
 			M.open_output_actions()
+		end)
+		add_action(items, "Output help", "Show all output-buffer workflows and shortcuts", "<leader>a?", "session", function()
+			M.open_output_help()
 		end)
 		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
 			M.open_code_blocks()
@@ -6436,6 +6447,171 @@ function M.open_output_actions()
 	end
 
 	open_output_actions(state)
+end
+
+function M.output_help_items(state)
+	local items = {}
+	if not state then
+		return items
+	end
+
+	add_action(items, "Cursor actions", "Open context-specific actions for the current output line", "?", "output", function()
+		open_output_actions(state)
+	end)
+	add_action(items, "Inspect item", "Preview the reference, code block, problem, or section under the cursor", "K", "output", function()
+		inspect_output_at_cursor(state)
+	end)
+	add_action(items, "Open item", "Open the local file reference or scratch code buffer under the cursor", "<Enter>", "output", function()
+		open_output_context_at_cursor(state)
+	end)
+	add_action(items, "Next item", "Jump to the next reference, code block, or problem", "]o", "output", function()
+		jump_output_item(state, 1)
+	end)
+	add_action(items, "Previous item", "Jump to the previous reference, code block, or problem", "[o", "output", function()
+		jump_output_item(state, -1)
+	end)
+	add_action(items, "Output search", "Search every non-empty transcript line with context preview", "<leader>ax", "output", function()
+		open_output_search(state)
+	end)
+	add_action(items, "Output map", "Open the live transcript map with preview and quickfix export", "<leader>am", "output", function()
+		open_output_map(state)
+	end)
+	add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "output", function()
+		open_output_outline(state)
+	end)
+	add_action(items, "Output items", "Browse references, code blocks, and problems together", "<leader>aO", "output", function()
+		open_output_items(state)
+	end)
+	add_action(items, "Output items quickfix", "Send references, code blocks, and problems to quickfix", ":AcpOutputItemsQuickfix", "output", function()
+		open_output_item_quickfix(state)
+	end)
+	add_action(items, "Code blocks", "Browse fenced code blocks with language previews", "<leader>ab", "output", function()
+		open_output_code_blocks(state)
+	end)
+	add_action(items, "Code blocks quickfix", "Send fenced code blocks to quickfix", ":AcpCodeBlocksQuickfix", "output", function()
+		local blocks = output.code_blocks(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false))
+		if #blocks == 0 then
+			notify("No ACP code blocks found in the output", vim.log.levels.WARN)
+			return
+		end
+		vim.fn.setqflist({}, " ", {
+			title = icons.quickfix_title(("ACP output code blocks #%s"):format(tostring(state.id or "?"))),
+			items = output.code_block_quickfix_items(blocks, state.output_buf),
+		})
+		vim.cmd("copen")
+	end)
+	add_action(items, "Output locations", "Browse local file references from the transcript", "<leader>ag", "output", function()
+		open_output_locations(state)
+	end)
+	add_action(items, "Output locations quickfix", "Send transcript file references to quickfix", ":AcpOutputQuickfix", "output", function()
+		open_output_location_quickfix(state)
+	end)
+	add_action(items, "Output problems", "Open transcript errors and stderr in the location list", "<leader>ae", "output", function()
+		open_output_problems(state)
+	end)
+	add_action(items, "Draft section", "Insert the current output section as follow-up prompt context", "<leader>ai", "output", function()
+		draft_output_section(state)
+	end)
+	add_action(items, "Yank section", "Copy the current output section into the unnamed register", "<leader>ay", "output", function()
+		yank_output_section(state)
+	end)
+	add_action(items, "Yank code block", "Copy the fenced code block under the cursor without Markdown fences", "<leader>aY", "output", function()
+		yank_output_code_block(state)
+	end)
+	return items
+end
+
+function M.output_help_preview(state)
+	local lines = { icons.title("ACP Output Help", icons.help), "" }
+	if not state then
+		return {
+			lines = lines,
+			filetype = "acp",
+			title = (" %s ACP output help "):format(icons.help),
+		}
+	end
+
+	table.insert(lines, ("%s Session: #%s %s"):format(icons.session, tostring(state.id or "?"), state.adapter or "adapter"))
+	if state.model and state.model ~= "" then
+		table.insert(lines, ("%s Model: %s"):format(icons.model, state.model))
+	end
+
+	if valid_buf(state.output_buf) then
+		local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+		local stats = output.transcript_stats(output_lines, {
+			change_count = changes.count(state),
+			cwd = state.cwd,
+			start_line = (state.output_dashboard_lines or 0) + 1,
+		})
+		table.insert(
+			lines,
+			("%s Transcript: %d section%s | %d code | %d loc%s | %d change%s"):format(
+				icons.map,
+				stats.sections,
+				stats.sections == 1 and "" or "s",
+				stats.code_blocks,
+				stats.locations,
+				stats.locations == 1 and "" or "s",
+				stats.changes,
+				stats.changes == 1 and "" or "s"
+			)
+		)
+	end
+
+	table.insert(lines, "")
+	table.insert(lines, ("%s Navigation: ]] / [[ sections, ]o / [o items"):format(icons.jump))
+	table.insert(lines, ("%s Inspect/open: K preview, <Enter> open item, gf open reference"):format(icons.inspect))
+	table.insert(lines, ("%s Workflows: <leader>ax search, <leader>am map, <leader>aO items"):format(icons.search))
+	table.insert(lines, ("%s Code: <leader>ab blocks, <leader>aY yank block"):format(icons.code))
+	table.insert(lines, ("%s Problems: <leader>ae location list, quickfix rows use Q in pickers"):format(icons.error))
+	table.insert(lines, ("%s Context: <leader>ai draft section, <leader>ay yank section"):format(icons.edit))
+	return {
+		lines = lines,
+		filetype = "acp",
+		title = (" %s ACP output help "):format(icons.help),
+	}
+end
+
+function M.open_output_help()
+	local state = current_state()
+	if not state or not valid_buf(state.output_buf) then
+		notify("No ACP output buffer is available", vim.log.levels.WARN)
+		return false
+	end
+
+	local items = M.output_help_items(state)
+	if #items == 0 then
+		notify("No ACP output workflows found", vim.log.levels.WARN)
+		return false
+	end
+
+	local lines, line_actions = actions.picker_lines(items)
+	local origin_win = valid_win(state.output_win) and state.output_win or vim.api.nvim_get_current_win()
+	picker.open({
+		name = ("ACP://%s/%d/output-help"):format(state.adapter, state.id),
+		filetype = "acp-output-help",
+		lines = lines,
+		title = " ACP output help ",
+		title_icon = icons.help,
+		submit_desc = "Run ACP output workflow",
+		close_desc = "Close ACP output help",
+		preview = function()
+			return M.output_help_preview(state)
+		end,
+		on_submit = function(row, view)
+			local action = line_actions[row]
+			if not action then
+				return
+			end
+
+			view.close()
+			if valid_win(origin_win) then
+				vim.api.nvim_set_current_win(origin_win)
+			end
+			action.run()
+		end,
+	})
+	return true
 end
 
 function M.next_output_item()

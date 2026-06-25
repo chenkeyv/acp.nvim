@@ -19,6 +19,7 @@ local M = {
 	history = "󰋚",
 	hint = "󰌶",
 	hierarchy = "󰙅",
+	help = "󰋖",
 	idle = "",
 	inspect = "󰍉",
 	jump = "󰁔",

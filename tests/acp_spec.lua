@@ -119,6 +119,7 @@ test("setup registers public user commands", function()
 		"AcpOutputOpen",
 		"AcpOutputInspect",
 		"AcpOutputActions",
+		"AcpOutputHelp",
 		"AcpOutputNextItem",
 		"AcpOutputPrevItem",
 		"AcpCodeBlocks",
@@ -2732,6 +2733,8 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		ok(vim.wo[output_win].winbar:find("ACP test #", 1, true))
 		ok(vim.wo[output_win].winbar:find(icons.session, 1, true))
 		ok(vim.wo[output_win].winbar:find(icons.status, 1, true))
+		vim.api.nvim_set_current_win(output_win)
+		ok(vim.fn.maparg("<leader>a?", "n", false, true).buffer == 1)
 		ok(vim.wo[output_win].winbar:find(icons.model, 1, true))
 		ok(vim.wo[output_win].winbar:find(icons.context, 1, true))
 		eq(vim.wo[output_win].foldmethod, "expr")
@@ -2916,6 +2919,28 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local output_actions_text = table.concat(vim.api.nvim_buf_get_lines(output_actions_buf, 0, -1, false), "\n")
 		ok(output_actions_text:find("Inspect item", 1, true))
 		ok(output_actions_text:find("Output problems", 1, true))
+		keys = vim.api.nvim_replace_termcodes("q", true, false, true)
+		vim.api.nvim_feedkeys(keys, "xt", false)
+		vim.api.nvim_set_current_win(output_win)
+		vim.cmd("AcpOutputHelp")
+		local output_help_buf = vim.api.nvim_get_current_buf()
+		eq(vim.bo[output_help_buf].filetype, "acp-output-help")
+		local output_help_text = table.concat(vim.api.nvim_buf_get_lines(output_help_buf, 0, -1, false), "\n")
+		ok(output_help_text:find("Output map", 1, true))
+		ok(output_help_text:find("Code blocks quickfix", 1, true))
+		ok(output_help_text:find("<leader>ax", 1, true))
+		local help_preview_found = false
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			local bufnr = vim.api.nvim_win_get_buf(winid)
+			if bufnr ~= output_help_buf and vim.bo[bufnr].buftype == "nofile" and vim.bo[bufnr].filetype == "acp" then
+				local preview = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+				if preview:find("ACP Output Help", 1, true) and preview:find("Transcript:", 1, true) then
+					help_preview_found = true
+					break
+				end
+			end
+		end
+		ok(help_preview_found, "output help should show a stats preview")
 		keys = vim.api.nvim_replace_termcodes("q", true, false, true)
 		vim.api.nvim_feedkeys(keys, "xt", false)
 		vim.api.nvim_set_current_win(output_win)

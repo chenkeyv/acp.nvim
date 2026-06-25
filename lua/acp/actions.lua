@@ -46,6 +46,9 @@ local function action_icon(action)
 	if lower:find("quickfix", 1, true) then
 		return icons.quickfix
 	end
+	if lower:find("help", 1, true) then
+		return icons.help
+	end
 	if lower:find("send", 1, true) then
 		return icons.send
 	end

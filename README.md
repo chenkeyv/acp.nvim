@@ -202,6 +202,7 @@ prefers this source when it is configured and falls back to the native
 - `:AcpOutputOpen` opens the local file reference or code block under the output cursor
 - `:AcpOutputInspect` opens a floating preview for the output item under the cursor
 - `:AcpOutputActions` opens cursor-aware actions for the current output item
+- `:AcpOutputHelp` opens all output-buffer workflows with a live stats preview
 - `:AcpOutputNextItem` / `:AcpOutputPrevItem` jump between output references, code blocks, and problems
 - `:AcpCodeBlocks` opens fenced code blocks from the current output with language-aware previews
 - `:AcpCodeBlocksQuickfix` sends fenced output code blocks to quickfix
@@ -328,6 +329,7 @@ In the output buffer:
 - `zM` closes all transcript folds
 - `zR` opens all transcript folds
 - `?` opens cursor-aware actions for the current output item
+- `<leader>a?` opens all output-buffer workflows with a live stats preview
 - `<Enter>` opens the local file reference or code block under the cursor
 - `K` previews the reference, code block, problem, or section under the cursor
 - `gf` opens the local file reference under the cursor
