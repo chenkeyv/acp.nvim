@@ -58,7 +58,7 @@ This plugin provides an editor-native ACP chat surface:
 - floating slash-command picker for adapter-advertised commands
 - native slash-command and `@workflow` completion in the prompt buffer
 - optional `blink.cmp` source for slash-command and `@workflow` prompt completion with scoped labels and documentation
-- prompt-buffer session ribbon, ghost text, and draft statistics while composing
+- prompt-buffer session ribbon with linked-source diagnostics, ghost text, and draft statistics while composing
 - prompt-focused action picker with source, LSP, Tree-sitter, output, and session workflows
 - smart context drafting that combines source, Tree-sitter, diagnostics, and available LSP signals
 - floating session config picker for adapter-advertised model, mode, and reasoning options
@@ -274,7 +274,7 @@ In the sessions panel:
 
 In the prompt buffer:
 
-- prompts show a virtual session ribbon with adapter, model, status, source, and blink-completion state
+- prompts show a virtual session ribbon with adapter, model, status, linked-source diagnostics, source, and blink-completion state
 - empty prompts show ghost-text workflow hints for actions and `@context` completion; non-empty prompts show draft stats
 - `?` opens composer-focused actions with source context preview
 - `<Enter>` inserts a newline

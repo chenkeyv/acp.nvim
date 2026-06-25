@@ -282,7 +282,33 @@ test("prompt view renders ghost text and draft stats", function()
 
 	local source_buf = vim.api.nvim_create_buf(true, true)
 	vim.api.nvim_buf_set_name(source_buf, vim.fs.joinpath(vim.fn.getcwd(), "prompt_source.lua"))
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = 1",
+		"value = value + 1",
+		"print(value)",
+	})
 	vim.bo[source_buf].filetype = "lua"
+	local prompt_diag_ns = vim.api.nvim_create_namespace("acp.nvim.prompt-view-test")
+	vim.diagnostic.set(prompt_diag_ns, source_buf, {
+		{
+			lnum = 0,
+			col = 0,
+			message = "warn in prompt source",
+			severity = vim.diagnostic.severity.WARN,
+		},
+		{
+			lnum = 2,
+			col = 0,
+			message = "error in prompt source",
+			severity = vim.diagnostic.severity.ERROR,
+		},
+		{
+			lnum = 4,
+			col = 0,
+			message = "outside selected source",
+			severity = vim.diagnostic.severity.HINT,
+		},
+	})
 	local draft = prompt_view.info({ "hello ACP", "with context" }, {
 		adapter = "test",
 		blink = true,
@@ -291,7 +317,10 @@ test("prompt view renders ghost text and draft stats", function()
 		run_status = "streaming",
 		source = {
 			bufnr = source_buf,
-			cursor = { 3, 0 },
+			range = {
+				line1 = 1,
+				line2 = 3,
+			},
 		},
 	})
 	local ribbon = {}
@@ -305,11 +334,14 @@ test("prompt view renders ghost text and draft stats", function()
 	ok(ribbon_text:find("model test-model", 1, true))
 	ok(ribbon_text:find("ctx 1k", 1, true))
 	ok(ribbon_text:find("status streaming", 1, true))
+	ok(ribbon_text:find("diagnostics E1 W1", 1, true))
+	ok(not ribbon_text:find("H1", 1, true))
 	ok(ribbon_text:find("[lua]", 1, true))
 	ok(ribbon_text:find("blink", 1, true))
 	ok(draft.stats:find("2 lines", 1, true))
 	ok(draft.stats:find("22 chars", 1, true))
 	ok(draft.stats:find("4 words", 1, true))
+	vim.diagnostic.reset(prompt_diag_ns, source_buf)
 	pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 end)
 
@@ -2273,6 +2305,15 @@ test("prompt history recalls sent prompts and restores draft", function()
 		"local prompt_context_value = 1",
 	})
 	vim.bo[source_buf].filetype = "lua"
+	local prompt_history_diag_ns = vim.api.nvim_create_namespace("acp.nvim.prompt-history-test")
+	vim.diagnostic.set(prompt_history_diag_ns, source_buf, {
+		{
+			lnum = 0,
+			col = 6,
+			message = "prompt source error",
+			severity = vim.diagnostic.severity.ERROR,
+		},
+	})
 	vim.api.nvim_set_current_buf(source_buf)
 
 	local input_buf
@@ -2303,7 +2344,12 @@ test("prompt history recalls sent prompts and restores draft", function()
 					table.insert(text, chunk[1] or "")
 				end
 				text = table.concat(text)
-				if text:find("ACP", 1, true) and text:find("test", 1, true) and text:find("blink", 1, true) then
+				if
+					text:find("ACP", 1, true)
+					and text:find("test", 1, true)
+					and text:find("diagnostics E1", 1, true)
+					and text:find("blink", 1, true)
+				then
 					ribbon = true
 				end
 			end
@@ -2430,6 +2476,7 @@ test("prompt history recalls sent prompts and restores draft", function()
 		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
 	end
 	if source_buf and vim.api.nvim_buf_is_valid(source_buf) then
+		vim.diagnostic.reset(prompt_history_diag_ns, source_buf)
 		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 	end
 	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
