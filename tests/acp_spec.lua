@@ -18,6 +18,7 @@ local lsp_highlights = require("acp.highlights")
 local file_review = require("acp.file_review")
 local hover = require("acp.hover")
 local history = require("acp.history")
+local icons = require("acp.icons")
 local acp_output = require("acp.output")
 local permission = require("acp.permission")
 local picker = require("acp.picker")
@@ -273,11 +274,13 @@ end)
 test("prompt view renders ghost text and draft stats", function()
 	local empty = prompt_view.info({ "" })
 	ok(empty.empty)
+	ok(empty.ghost:find(icons.prompt, 1, true))
 	ok(empty.ghost:find("<C%-s> send"))
 	ok(empty.ghost:find("? actions", 1, true))
 	ok(empty.ghost:find("@context", 1, true))
 
 	local busy = prompt_view.info({ "" }, { busy = true })
+	ok(busy.ghost:find(icons.busy, 1, true))
 	ok(busy.ghost:find("responding", 1, true))
 
 	local source_buf = vim.api.nvim_create_buf(true, true)
@@ -330,11 +333,17 @@ test("prompt view renders ghost text and draft stats", function()
 	local ribbon_text = table.concat(ribbon)
 	ok(not draft.empty)
 	ok(ribbon_text:find("ACP", 1, true))
+	ok(ribbon_text:find(icons.acp, 1, true))
 	ok(ribbon_text:find("test", 1, true))
+	ok(ribbon_text:find(icons.session, 1, true))
 	ok(ribbon_text:find("model test-model", 1, true))
+	ok(ribbon_text:find(icons.model, 1, true))
 	ok(ribbon_text:find("ctx 1k", 1, true))
+	ok(ribbon_text:find(icons.context, 1, true))
 	ok(ribbon_text:find("status streaming", 1, true))
+	ok(ribbon_text:find(icons.status, 1, true))
 	ok(ribbon_text:find("diagnostics E1 W1", 1, true))
+	ok(ribbon_text:find(icons.diagnostics, 1, true))
 	ok(not ribbon_text:find("H1", 1, true))
 	ok(ribbon_text:find("[lua]", 1, true))
 	ok(ribbon_text:find("blink", 1, true))
@@ -365,14 +374,19 @@ test("session panel view renders status and badges", function()
 	local text = table.concat(lines, "\n")
 	ok(text:find("Sessions", 1, true))
 	ok(text:find("> #1 test test-model", 1, true))
+	ok(text:find(icons.session, 1, true))
 	ok(text:find("streaming  2 change(s)", 1, true))
 	ok(text:find("error: failed", 1, true))
 	eq(line_ids[3], 1)
 	eq(line_ids[4], 1)
 	eq(styles[1].line_hl_group, "AcpSessionHeader")
+	ok(styles[1].virt_text[1][1]:find(icons.action, 1, true))
 	eq(styles[3].line_hl_group, "AcpSessionCurrent")
+	ok(styles[3].virt_text[1][1]:find(icons.busy, 1, true))
 	eq(styles[4].line_hl_group, "AcpSessionBusy")
+	ok(styles[4].virt_text[1][1]:find(icons.changes, 1, true))
 	eq(styles[6].line_hl_group, "AcpSessionError")
+	ok(styles[5].virt_text[1][1]:find(icons.error, 1, true))
 end)
 
 test("session panel view renders transcript and source details", function()
@@ -412,6 +426,7 @@ test("restore session view renders metadata and preview", function()
 	local text = table.concat(lines, "\n")
 
 	ok(text:find("ACP Adapter Sessions", 1, true))
+	ok(text:find(icons.restore, 1, true))
 	ok(text:find("Restore Work", 1, true))
 	ok(text:find("id session-1234567890abcdef", 1, true))
 	ok(text:find("updated 2026-06-25T10:00:00Z", 1, true))
@@ -425,6 +440,7 @@ test("restore session view renders metadata and preview", function()
 	local preview_text = table.concat(preview.lines, "\n")
 	eq(preview.filetype, "acp-sessions")
 	ok(preview.title:find("ACP restore Restore Work", 1, true))
+	ok(preview_text:find(icons.restore, 1, true))
 	ok(preview_text:find("Session ID: session-1234567890abcdef", 1, true))
 	ok(preview_text:find("Created: 2026-06-24T09:00:00Z", 1, true))
 end)
@@ -446,8 +462,9 @@ test("source view renders context range marks", function()
 	eq(marks[1].line, 2)
 	eq(marks[3].line, 4)
 	eq(marks[1].opts.line_hl_group, "AcpSourceContext")
-	eq(marks[1].opts.virt_text[1][1], " ACP #9 ready ")
-	eq(marks[1].opts.sign_text, "A>")
+	ok(marks[1].opts.virt_text[1][1]:find("ACP #9 ready", 1, true))
+	ok(marks[1].opts.virt_text[1][1]:find(icons.source, 1, true))
+	eq(marks[1].opts.sign_text, icons.source)
 	ok(marks[1].opts.virt_lines[1][1][1]:find(":AcpSourceActions", 1, true))
 	eq(marks[2].opts.virt_text, nil)
 end)
@@ -614,15 +631,15 @@ test("source view renders LSP document highlights", function()
 	eq(color_range_mark.line, 2)
 	eq(color_range_mark.opts.end_col, 22)
 	ok(color_badge_mark, "source document colors should render a swatch badge")
-	eq(color_badge_mark.opts.sign_text, "C>")
+	eq(color_badge_mark.opts.sign_text, icons.color)
 	ok(link_range_mark, "source document links should render a range mark")
 	eq(link_range_mark.line, 3)
 	eq(link_range_mark.opts.end_col, 38)
 	ok(link_badge_mark, "source document links should render a link badge")
-	eq(link_badge_mark.opts.sign_text, "L>")
+	eq(link_badge_mark.opts.sign_text, icons.reference)
 	eq(fold_range_marks, 3)
 	ok(fold_badge_mark, "source folding ranges should render a fold badge")
-	eq(fold_badge_mark.opts.sign_text, "F>")
+	eq(fold_badge_mark.opts.sign_text, icons.fold)
 
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
@@ -711,24 +728,25 @@ test("output dashboard and section helpers are rendered", function()
 	ok(text:find("<leader>ax search", 1, true))
 
 	eq(acp_output.line_style("You").line_hl_group, "AcpUserHeader")
-	eq(acp_output.line_style("You").sign_text, "U>")
+	eq(acp_output.line_style("You").sign_text, icons.user)
 	eq(acp_output.line_style("You").separator, "---- USER: Prompt ----")
-	eq(acp_output.line_style("Agent").sign_text, "A>")
+	eq(acp_output.line_style("Agent").sign_text, icons.agent)
 	eq(acp_output.line_style("Agent").separator, "---- AGENT: Response ----")
+	ok(acp_output.line_style("ACP: test").badge:find(icons.session, 1, true))
 	eq(acp_output.line_style("Transcript: 1 section | 0 code | 0 locs | 0 changes").line_hl_group, "AcpOutputMeta")
 	eq(acp_output.line_style("Status: error: failed").line_hl_group, "AcpStatusError")
-	eq(acp_output.line_style("Status: error: failed").sign_text, "E!")
+	eq(acp_output.line_style("Status: error: failed").sign_text, icons.error)
 	eq(acp_output.line_style("Status: error: failed").separator, "---- STATUS: Error ----")
-	eq(acp_output.line_style("Tool: build").sign_text, "T>")
+	eq(acp_output.line_style("Tool: build").sign_text, icons.tool)
 	ok(acp_output.line_style("Tool: build").separator:find("TOOL: build", 1, true))
 	ok(acp_output.line_style("Tool update: running").separator:find("TOOL UPDATE: running", 1, true))
-	eq(acp_output.line_style("Terminal: term-1").sign_text, "$>")
+	eq(acp_output.line_style("Terminal: term-1").sign_text, icons.terminal)
 	ok(acp_output.line_style("Terminal: term-1").separator:find("TERMINAL: term-1", 1, true))
 	local warning_style = acp_output.line_style("Terminal output truncated to the configured byte limit.")
 	eq(warning_style.line_hl_group, "AcpWarning")
-	eq(warning_style.sign_text, "W!")
+	eq(warning_style.sign_text, icons.warning)
 	ok(warning_style.separator:find("TERMINAL WARNING", 1, true))
-	eq(acp_output.line_style("Wrote lua/acp/init.lua").sign_text, "F>")
+	eq(acp_output.line_style("Wrote lua/acp/init.lua").sign_text, icons.file)
 	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 1, 1), 3)
 	eq(acp_output.next_section({ "ACP: test", "", "You", "hello", "Agent" }, 5, -1), 3)
 
@@ -779,10 +797,10 @@ test("output dashboard and section helpers are rendered", function()
 	eq(acp_output.statuscolumn_marker(rail_lines, 1), "01")
 	eq(acp_output.statuscolumn_marker(rail_lines, 3), "02")
 	eq(acp_output.statuscolumn_marker(rail_lines, 4), " |")
-	eq(acp_output.statuscolumn_marker({ "Status: error: failed" }, 1), "E!")
-	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 2), "C>")
-	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 3), "C|")
-	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 4), "C<")
+	eq(acp_output.statuscolumn_marker({ "Status: error: failed" }, 1), icons.error)
+	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 2), icons.code)
+	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 3), icons.code)
+	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 4), icons.code)
 	eq(acp_output.statuscolumn_marker({}, 1), "  ")
 	local outline, line_sections = acp_output.outline_lines(sections)
 	local outline_text = table.concat(outline, "\n")
@@ -851,15 +869,15 @@ test("output dashboard and section helpers are rendered", function()
 	eq(error_hl, "AcpBadgeError")
 	local tool_lens = acp_output.activity_lens_chunks("Tool: shell", 2)
 	eq(tool_lens[1][2], "AcpOutputMotion")
-	eq(tool_lens[2][1], " TOOL CALL ")
+	eq(tool_lens[2][1], (" %s TOOL CALL "):format(icons.tool))
 	eq(tool_lens[2][2], "AcpOutputActivityTool")
 	ok(tool_lens[3][1]:find("shell", 1, true))
 	ok(tool_lens[4][1]:find("K inspect", 1, true))
 	local terminal_lens = acp_output.activity_lens_chunks("Terminal: term-1", 2)
-	eq(terminal_lens[2][1], " TERMINAL ")
+	eq(terminal_lens[2][1], (" %s TERMINAL "):format(icons.terminal))
 	eq(terminal_lens[2][2], "AcpOutputActivityTerminal")
 	local file_lens = acp_output.activity_lens_chunks("Wrote lua/acp/init.lua", 2)
-	eq(file_lens[2][1], " FILE WRITE ")
+	eq(file_lens[2][1], (" %s FILE WRITE "):format(icons.file))
 	eq(file_lens[2][2], "AcpOutputActivityFile")
 	local stderr_lens = acp_output.activity_lens_chunks("stderr: failed", 2)
 	eq(stderr_lens[2][2], "AcpOutputActivityProblem")
@@ -957,7 +975,7 @@ test("output dashboard and section helpers are rendered", function()
 	local ref_file = vim.fn.tempname() .. ".lua"
 	vim.fn.writefile({ "local one = 1", "local two = 2" }, ref_file)
 	local ref_line = ("Check %s:2:7 for details."):format(ref_file)
-	eq(acp_output.statuscolumn_marker({ ref_line }, 1), "R>")
+	eq(acp_output.statuscolumn_marker({ ref_line }, 1), icons.reference)
 	local refs = acp_output.file_references({
 		ref_line,
 		"Ignore https://example.com:443 and missing-file.lua:3",
@@ -977,6 +995,7 @@ test("output dashboard and section helpers are rendered", function()
 	local ref_picker, line_refs = acp_output.file_reference_lines(refs)
 	local ref_text = table.concat(ref_picker, "\n")
 	ok(ref_text:find("ACP Output Locations", 1, true))
+	ok(ref_text:find(icons.reference, 1, true))
 	ok(ref_text:find(":2:7", 1, true))
 	ok(ref_text:find("Q for quickfix", 1, true))
 	eq(line_refs[3].line, 2)
@@ -985,8 +1004,8 @@ test("output dashboard and section helpers are rendered", function()
 	eq(qf_items[1].filename, refs[1].path)
 	eq(qf_items[1].lnum, 2)
 	eq(qf_items[1].col, 7)
-	eq(acp_output.reference_badge(1), " REF ")
-	eq(acp_output.reference_badge(3), " REF x3 ")
+	eq(acp_output.reference_badge(1), (" %s REF "):format(icons.reference))
+	eq(acp_output.reference_badge(3), (" %s REF x3 "):format(icons.reference))
 	local output_items = acp_output.output_items({
 		"Status: error: failed",
 		"Agent",
@@ -2549,6 +2568,10 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			return false
 		end
 
+		local function has_sign(mark, icon)
+			return mark[4] and mark[4].sign_text and mark[4].sign_text:find(icon, 1, true) ~= nil
+		end
+
 		local function output_inspector_text(filetype)
 			for _, winid in ipairs(vim.api.nvim_list_wins()) do
 				local preview_bufnr = vim.api.nvim_win_get_buf(winid)
@@ -2575,7 +2598,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			if mark[4] and mark[4].line_hl_group == "AcpOutputHeader" then
 				highlighted_header = true
 			end
-			if mark[4] and mark[4].sign_text == "S>" then
+			if has_sign(mark, icons.session) then
 				session_sign = true
 			end
 			skyline_hud = skyline_hud or has_virt_line(mark, "FLOW")
@@ -2610,16 +2633,16 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local user_summary = false
 		local user_timeline = false
 		for _, mark in ipairs(marks) do
-			user_sign = user_sign or (mark[4] and mark[4].sign_text == "U>")
-			agent_sign = agent_sign or (mark[4] and mark[4].sign_text == "A>")
-			error_sign = error_sign or (mark[4] and mark[4].sign_text == "E!")
+			user_sign = user_sign or has_sign(mark, icons.user)
+			agent_sign = agent_sign or has_sign(mark, icons.agent)
+			error_sign = error_sign or has_sign(mark, icons.error)
 			user_separator = user_separator or has_virt_line(mark, "---- USER: Prompt ----")
 			agent_separator = agent_separator or has_virt_line(mark, "---- AGENT: Response ----")
 			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
 				if chunk[1] and chunk[1]:find("1L | 2w", 1, true) then
 					user_summary = true
 				end
-				if mark[4] and mark[4].sign_text == "U>" and chunk[1] and chunk[1]:find("2/4", 1, true) then
+				if has_sign(mark, icons.user) and chunk[1] and chunk[1]:find("2/4", 1, true) then
 					user_timeline = true
 				end
 			end
@@ -2649,9 +2672,10 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local terminal_activity_card = false
 		local file_activity_card = false
 		for _, mark in ipairs(marks) do
-			tool_activity_card = tool_activity_card or has_virt_line(mark, " TOOL CALL ")
-			terminal_activity_card = terminal_activity_card or has_virt_line(mark, " TERMINAL ")
-			file_activity_card = file_activity_card or has_virt_line(mark, " FILE WRITE ")
+			tool_activity_card = tool_activity_card or has_virt_line(mark, (" %s TOOL CALL "):format(icons.tool))
+			terminal_activity_card = terminal_activity_card
+				or has_virt_line(mark, (" %s TERMINAL "):format(icons.terminal))
+			file_activity_card = file_activity_card or has_virt_line(mark, (" %s FILE WRITE "):format(icons.file))
 		end
 		ok(tool_activity_card, "tool output should render an activity card")
 		ok(terminal_activity_card, "terminal output should render an activity card")
@@ -2838,7 +2862,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local code_body_motion = false
 		local code_injection_badge = false
 		for _, mark in ipairs(marks) do
-			if mark[4] and mark[4].sign_text == "C>" then
+			if has_sign(mark, icons.code) then
 				code_sign = true
 			end
 			if mark[2] == code_line - 1 and mark[4] and mark[4].line_hl_group == "AcpInjectedCode" then
@@ -3121,7 +3145,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 			if mark[2] == ref_line - 1 and mark[3] == ref_col and mark[4] and mark[4].hl_group == "AcpOutputReference" then
 				ref_highlight = true
 			end
-			if mark[2] == ref_line - 1 and mark[4] and mark[4].sign_text == "R>" then
+			if mark[2] == ref_line - 1 and has_sign(mark, icons.reference) then
 				ref_sign = true
 			end
 			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
@@ -4841,7 +4865,7 @@ test("document colors command renders swatches, quickfix, and prompt context", f
 			for _, chunk in ipairs(details.virt_text or {}) do
 				if chunk[1] and chunk[1]:find("COLOR #336699", 1, true) then
 					color_badge_found = true
-					eq(details.sign_text, "C>")
+					ok(details.sign_text and details.sign_text:find(icons.color, 1, true))
 				end
 			end
 			for _, line in ipairs(details.virt_lines or {}) do
@@ -4973,7 +4997,7 @@ test("document links command renders badges, quickfix, and prompt context", func
 			for _, chunk in ipairs(details.virt_text or {}) do
 				if chunk[1] and chunk[1]:find("LINK https://example.com/docs", 1, true) then
 					link_badge_found = true
-					eq(details.sign_text, "L>")
+					ok(details.sign_text and details.sign_text:find(icons.reference, 1, true))
 				end
 			end
 			for _, line in ipairs(details.virt_lines or {}) do
@@ -5106,7 +5130,7 @@ test("folding ranges command renders overlays, quickfix, and prompt context", fu
 			for _, chunk in ipairs(details.virt_text or {}) do
 				if chunk[1] and chunk[1]:find("FOLD region lines 1%-4: setup%(%)") then
 					fold_badge_found = true
-					eq(details.sign_text, "F>")
+					ok(details.sign_text and details.sign_text:find(icons.fold, 1, true))
 				end
 			end
 			for _, line in ipairs(details.virt_lines or {}) do

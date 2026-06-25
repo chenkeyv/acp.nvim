@@ -113,6 +113,7 @@ local function refresh_output_highlights(state)
 
 	vim.api.nvim_buf_clear_namespace(state.output_buf, output_ns, 0, -1)
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	local icons = require("acp.icons")
 	vim.b[state.output_buf].acp_injected_languages = output.injected_languages(lines)
 	vim.b[state.output_buf].acp_language_injections = output.injection_ranges(lines)
 	refresh_output_diagnostics(state, lines)
@@ -208,7 +209,7 @@ local function refresh_output_highlights(state)
 					end_col = #line,
 					hl_group = "AcpCodeFence",
 					priority = 70,
-					sign_text = line_number == block.start_line and "C>" or "C<",
+					sign_text = icons.code,
 					sign_hl_group = "AcpCodeBlockSign",
 				}
 				if line_number == block.start_line then
@@ -264,7 +265,7 @@ local function refresh_output_highlights(state)
 				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, row, 0, {
 					virt_text = { { output.reference_badge(reference_counts[reference.source_line]), "AcpOutputReferenceBadge" } },
 					virt_text_pos = "right_align",
-					sign_text = "R>",
+					sign_text = icons.reference,
 					sign_hl_group = "AcpOutputReferenceBadge",
 					priority = 83,
 				})

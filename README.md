@@ -13,6 +13,7 @@ This plugin provides an editor-native ACP chat surface:
 - searchable floating pickers for actions, sessions, output, history, diagnostics, LSP, and Tree-sitter workflows
 - source preview windows for diagnostics, LSP location, symbol, code-action, inlay-hint, selection-range, and Tree-sitter pickers
 - plain output buffer for streamed agent responses
+- shared Nerd Font iconography across prompt ribbons, sessions, source overlays, output signs, maps, pickers, and action chips
 - visual output dashboard with source, model, context window, and key workflow hints
 - animated dashboard activity badge with run status and live transcript counts
 - live transcript metrics for sections, code blocks, source locations, and changes
@@ -29,7 +30,7 @@ This plugin provides an editor-native ACP chat surface:
 - current-section yank action with a short visual pulse in the output buffer
 - follow-up prompt drafting from the current output section
 - direct `gf` navigation from transcript file references into source
-- inline reference highlights with `R>` signs and right-aligned badges
+- inline reference highlights with icon signs and right-aligned badges
 - context-aware `<Enter>` action for opening transcript references and code blocks
 - cursor-aware output action picker for item-specific transcript workflows
 - hover-style `K` inspector for output references, code blocks, problems, and sections with winbar status and close keymaps
@@ -112,6 +113,7 @@ This plugin provides an editor-native ACP chat surface:
 
 - Neovim nightly
 - An ACP adapter binary on `PATH`
+- A Nerd Font in your terminal for the icon UI
 
 For Codex:
 

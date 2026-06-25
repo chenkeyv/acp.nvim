@@ -1,3 +1,5 @@
+local icons = require("acp.icons")
+
 local M = {}
 
 local function clean(value)
@@ -26,12 +28,12 @@ end
 local function status_style(status)
 	status = status or "idle"
 	if status:match("^error") then
-		return " ERROR ", "AcpSessionError"
+		return (" %s ERROR "):format(icons.error), "AcpSessionError"
 	end
 	if status == "idle" or status:match("^stopped") or status:match("^restored") then
-		return " IDLE ", "AcpSessionIdle"
+		return (" %s IDLE "):format(icons.idle), "AcpSessionIdle"
 	end
-	return " BUSY ", "AcpSessionBusy"
+	return (" %s BUSY "):format(icons.busy), "AcpSessionBusy"
 end
 
 function M.define_highlights()
@@ -87,7 +89,7 @@ function M.panel(sessions, current_id, change_count)
 	local styles = {
 		[1] = {
 			line_hl_group = "AcpSessionHeader",
-			virt_text = { { " <leader>ak actions ", "AcpSessionMeta" } },
+			virt_text = { { (" %s <leader>ak actions "):format(icons.action), "AcpSessionMeta" } },
 		},
 	}
 
@@ -97,11 +99,12 @@ function M.panel(sessions, current_id, change_count)
 		local badge, badge_hl = status_style(status)
 		local marker = session.id == current_id and ">" or " "
 		local model = clean(session.model)
-		local title = ("%s #%d %s%s"):format(
+		local title = ("%s #%d %s%s %s"):format(
 			marker,
 			session.id or 0,
 			clean(session.adapter) or "?",
-			model and (" " .. model) or ""
+			model and (" " .. model) or "",
+			icons.session
 		)
 
 		table.insert(lines, title)
@@ -119,7 +122,9 @@ function M.panel(sessions, current_id, change_count)
 		line_ids[#lines] = session.id
 		styles[#lines] = {
 			line_hl_group = badge_hl,
-			virt_text = changes > 0 and { { (" %d change(s) "):format(changes), "AcpSessionChanged" } } or nil,
+			virt_text = changes > 0 and {
+				{ (" %s %d change(s) "):format(icons.changes, changes), "AcpSessionChanged" },
+			} or nil,
 		}
 
 		local meta = meta_label(session)
@@ -140,7 +145,7 @@ local function restore_title(session)
 end
 
 function M.restore_lines(list)
-	local lines = { "ACP Adapter Sessions", "" }
+	local lines = { ("%s ACP Adapter Sessions"):format(icons.restore), "" }
 	local line_sessions = {}
 
 	for index, session in ipairs(list or {}) do
@@ -160,7 +165,7 @@ function M.restore_lines(list)
 			table.insert(parts, ("model %s"):format(short(model, 28)))
 		end
 
-		table.insert(lines, ("%d. %s"):format(index, short(restore_title(session), 72)))
+		table.insert(lines, ("%d. %s %s"):format(index, short(restore_title(session), 72), icons.restore))
 		line_sessions[#lines] = session
 		table.insert(lines, ("   %s"):format(#parts > 0 and table.concat(parts, "  ") or "no metadata"))
 		line_sessions[#lines] = session
@@ -169,7 +174,7 @@ function M.restore_lines(list)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to restore, or q/<Esc> to close.")
+	table.insert(lines, ("Press <Enter> to restore, or q/<Esc> to close. %s"):format(icons.key))
 	return lines, line_sessions
 end
 
@@ -179,7 +184,7 @@ function M.restore_preview(session)
 	end
 
 	local lines = {
-		"ACP Adapter Session",
+		("%s ACP Adapter Session"):format(icons.restore),
 		"",
 		("Title: %s"):format(restore_title(session)),
 	}

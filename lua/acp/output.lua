@@ -1,3 +1,5 @@
+local icons = require("acp.icons")
+
 local M = {}
 
 local animation_frames = { "|", "/", "-", "\\" }
@@ -326,19 +328,28 @@ end
 function M.activity_separator(line)
 	line = line or ""
 	if line:match("^Tool update:") then
-		return ("---- TOOL UPDATE: %s | K inspect | ]o/[o items ----"):format(short_label((line:gsub("^Tool update:%s*", ""))))
+		return ("---- %s TOOL UPDATE: %s | K inspect | ]o/[o items ----"):format(
+			icons.tool,
+			short_label((line:gsub("^Tool update:%s*", "")))
+		)
 	end
 	if line:match("^Tool:") then
-		return ("---- TOOL: %s | K inspect | ]o/[o items ----"):format(short_label((line:gsub("^Tool:%s*", ""))))
+		return ("---- %s TOOL: %s | K inspect | ]o/[o items ----"):format(
+			icons.tool,
+			short_label((line:gsub("^Tool:%s*", "")))
+		)
 	end
 	if line:match("^Terminal:") then
-		return ("---- TERMINAL: %s | K inspect | ]o/[o items ----"):format(short_label((line:gsub("^Terminal:%s*", ""))))
+		return ("---- %s TERMINAL: %s | K inspect | ]o/[o items ----"):format(
+			icons.terminal,
+			short_label((line:gsub("^Terminal:%s*", "")))
+		)
 	end
 	if line:match("^Terminal output truncated") then
-		return "---- TERMINAL WARNING: output truncated | <leader>ae problems ----"
+		return ("---- %s TERMINAL WARNING: output truncated | <leader>ae problems ----"):format(icons.warning)
 	end
 	if line:match("^stderr:") then
-		return "---- STDERR: problem output | K inspect | <leader>ae problems ----"
+		return ("---- %s STDERR: problem output | K inspect | <leader>ae problems ----"):format(icons.error)
 	end
 end
 
@@ -349,32 +360,32 @@ function M.activity_lens_chunks(line, frame)
 	local hint
 	local hl
 	if line:match("^Tool update:") then
-		label = " TOOL UPDATE "
+		label = (" %s TOOL UPDATE "):format(icons.tool)
 		title = clean(line:gsub("^Tool update:%s*", "")) or "updated"
 		hint = "K inspect | ]o/[o items | ? actions"
 		hl = "AcpOutputActivityTool"
 	elseif line:match("^Tool:") then
-		label = " TOOL CALL "
+		label = (" %s TOOL CALL "):format(icons.tool)
 		title = clean(line:gsub("^Tool:%s*", "")) or "tool"
 		hint = "K inspect | ]o/[o items | ? actions"
 		hl = "AcpOutputActivityTool"
 	elseif line:match("^Terminal:") then
-		label = " TERMINAL "
+		label = (" %s TERMINAL "):format(icons.terminal)
 		title = clean(line:gsub("^Terminal:%s*", "")) or "terminal"
 		hint = "streaming output | K inspect | <leader>ae problems"
 		hl = "AcpOutputActivityTerminal"
 	elseif line:match("^Terminal output truncated") then
-		label = " TERMINAL WARN "
+		label = (" %s TERMINAL WARN "):format(icons.warning)
 		title = "output truncated"
 		hint = "<leader>ae problems | K inspect"
 		hl = "AcpOutputActivityProblem"
 	elseif line:match("^stderr:") then
-		label = " STDERR "
+		label = (" %s STDERR "):format(icons.error)
 		title = clean(line:gsub("^stderr:%s*", "")) or "problem output"
 		hint = "<leader>ae problems | K inspect"
 		hl = "AcpOutputActivityProblem"
 	elseif line:match("^Wrote ") then
-		label = " FILE WRITE "
+		label = (" %s FILE WRITE "):format(icons.file)
 		title = clean(line:gsub("^Wrote%s+", "")) or "file"
 		hint = ":AcpChanges preview | <leader>af files"
 		hl = "AcpOutputActivityFile"
@@ -397,23 +408,23 @@ function M.line_style(line)
 	if line == "You" then
 		return {
 			line_hl_group = "AcpUserHeader",
-			badge = " USER ",
+			badge = (" %s USER "):format(icons.user),
 			badge_hl = "AcpBadgeUser",
-			sign_text = "U>",
+			sign_text = icons.user,
 			separator = "---- USER: Prompt ----",
 		}
 	end
 	if line == "Agent" then
 		return {
 			line_hl_group = "AcpAgentHeader",
-			badge = " AGENT ",
+			badge = (" %s AGENT "):format(icons.agent),
 			badge_hl = "AcpBadgeAgent",
-			sign_text = "A>",
+			sign_text = icons.agent,
 			separator = "---- AGENT: Response ----",
 		}
 	end
 	if line:match("^ACP:") then
-		return { line_hl_group = "AcpOutputHeader", badge = " SESSION ", badge_hl = "AcpBadge", sign_text = "S>" }
+		return { line_hl_group = "AcpOutputHeader", badge = (" %s SESSION "):format(icons.session), badge_hl = "AcpBadge", sign_text = icons.session }
 	end
 	if line:match("^Session:") or line:match("^Model:") or line:match("^Source:") or line:match("^Transcript:") then
 		return { line_hl_group = "AcpOutputMeta" }
@@ -424,81 +435,81 @@ function M.line_style(line)
 	if line:match("^Status:%s+error") then
 		return {
 			line_hl_group = "AcpStatusError",
-			badge = " ERROR ",
+			badge = (" %s ERROR "):format(icons.error),
 			badge_hl = "AcpBadgeError",
-			sign_text = "E!",
+			sign_text = icons.error,
 			separator = "---- STATUS: Error ----",
 		}
 	end
 	if line:match("^Status:%s+stopped") or line:match("^Status:%s+restored") then
 		return {
 			line_hl_group = "AcpStatusDone",
-			badge = " DONE ",
+			badge = (" %s DONE "):format(icons.idle),
 			badge_hl = "AcpBadgeStatus",
-			sign_text = "OK",
+			sign_text = icons.idle,
 			separator = "---- STATUS: Done ----",
 		}
 	end
 	if line:match("^Status:") then
 		return {
 			line_hl_group = "AcpStatus",
-			badge = " LIVE ",
+			badge = (" %s LIVE "):format(icons.status),
 			badge_hl = "AcpBadgeStatus",
-			sign_text = "R>",
+			sign_text = icons.status,
 			separator = "---- STATUS: Live ----",
 		}
 	end
 	if line:match("^Tool") then
 		return {
 			line_hl_group = "AcpTool",
-			badge = " TOOL ",
+			badge = (" %s TOOL "):format(icons.tool),
 			badge_hl = "AcpBadgeTool",
-			sign_text = "T>",
+			sign_text = icons.tool,
 			separator = M.activity_separator(line),
 		}
 	end
 	if line:match("^Terminal:") then
 		return {
 			line_hl_group = "AcpTerminal",
-			badge = " TERM ",
+			badge = (" %s TERM "):format(icons.terminal),
 			badge_hl = "AcpBadgeTool",
-			sign_text = "$>",
+			sign_text = icons.terminal,
 			separator = M.activity_separator(line),
 		}
 	end
 	if line:match("^Terminal output truncated") then
 		return {
 			line_hl_group = "AcpWarning",
-			badge = " WARN ",
+			badge = (" %s WARN "):format(icons.warning),
 			badge_hl = "AcpBadgeWarn",
-			sign_text = "W!",
+			sign_text = icons.warning,
 			separator = M.activity_separator(line),
 		}
 	end
 	if line:match("^Wrote ") then
 		return {
 			line_hl_group = "AcpFile",
-			badge = " FILE ",
+			badge = (" %s FILE "):format(icons.file),
 			badge_hl = "AcpBadgeUser",
-			sign_text = "F>",
+			sign_text = icons.file,
 			separator = "---- FILE WRITE ----",
 		}
 	end
 	if line:match("^Thought:") then
 		return {
 			line_hl_group = "AcpThought",
-			badge = " NOTE ",
+			badge = (" %s NOTE "):format(icons.note),
 			badge_hl = "AcpBadge",
-			sign_text = "N>",
+			sign_text = icons.note,
 			separator = "---- NOTE ----",
 		}
 	end
 	if line:match("^stderr:") then
 		return {
 			line_hl_group = "AcpError",
-			badge = " STDERR ",
+			badge = (" %s STDERR "):format(icons.error),
 			badge_hl = "AcpBadgeError",
-			sign_text = "!>",
+			sign_text = icons.error,
 			separator = M.activity_separator(line),
 		}
 	end
@@ -753,22 +764,16 @@ function M.statuscolumn_marker(lines, lnum, opts)
 
 	local problem = M.problem_diagnostic_at(lines, lnum)
 	if problem then
-		return problem.severity == vim.diagnostic.severity.WARN and "W!" or "E!"
+		return problem.severity == vim.diagnostic.severity.WARN and icons.warning or icons.error
 	end
 
 	local block = M.code_block_at(lines, lnum)
 	if block then
-		if lnum == block.start_line then
-			return "C>"
-		end
-		if lnum == block.end_line and block.closed then
-			return "C<"
-		end
-		return "C|"
+		return icons.code
 	end
 
 	if M.file_reference_at(lines, lnum, 0, { cwd = opts.cwd }) then
-		return "R>"
+		return icons.reference
 	end
 
 	local section_index = 0
@@ -789,7 +794,7 @@ end
 
 function M.outline_lines(sections, opts)
 	opts = opts or {}
-	local lines = { "ACP Output Outline", "" }
+	local lines = { ("%s ACP Output Outline"):format(icons.section), "" }
 	local line_sections = {}
 	local total = opts.total_lines
 	for _, section in ipairs(sections or {}) do
@@ -819,10 +824,10 @@ local map_kind_priority = {
 }
 
 local map_kind_tokens = {
-	section = "SEC",
-	problem = "ERR",
-	code = "COD",
-	reference = "REF",
+	section = icons.section,
+	problem = icons.error,
+	code = icons.code,
+	reference = icons.reference,
 }
 
 function M.output_map_entries(lines, opts)
@@ -880,7 +885,8 @@ function M.output_map_summary(entries)
 			counts[kind] = counts[kind] + 1
 		end
 	end
-	return ("Entries: %d | sections %d | problems %d | code %d | refs %d"):format(
+	return ("%s Entries: %d | sections %d | problems %d | code %d | refs %d"):format(
+		icons.map,
 		counts.total,
 		counts.section,
 		counts.problem,
@@ -891,7 +897,7 @@ end
 
 function M.output_map_lines(entries, opts)
 	opts = opts or {}
-	local lines = { "ACP Output Map", M.output_map_summary(entries), "" }
+	local lines = { ("%s ACP Output Map"):format(icons.map), M.output_map_summary(entries), "" }
 	local line_entries = {}
 	local current_line = tonumber(opts.current_line)
 	local total = tonumber(opts.total_lines)
@@ -908,7 +914,7 @@ function M.output_map_lines(entries, opts)
 		local progress = position_percent(line1, total) or "   ?"
 		local bar = progress_bar(line1, total, opts.bar_width or 10)
 		local token = map_kind_tokens[entry.kind] or "ITM"
-		table.insert(lines, ("%s %s  %4d  %s  %-3s  %-9s  %s"):format(
+		table.insert(lines, ("%s %s  %4d  %s  %s  %-9s  %s"):format(
 			marker,
 			bar,
 			line1,
@@ -925,7 +931,10 @@ function M.output_map_lines(entries, opts)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to jump, K to preview, Q for quickfix, or q/<Esc> to close.")
+	table.insert(
+		lines,
+		("Press <Enter> to jump, K to preview, Q for quickfix, or q/<Esc> to close. %s"):format(icons.key)
+	)
 	return lines, line_entries
 end
 
@@ -952,7 +961,7 @@ local function output_line_context(lines, entry)
 	return {
 		lines = preview,
 		filetype = "acp",
-		title = (" ACP output line %d "):format(line),
+		title = (" %s ACP output line %d "):format(icons.map, line),
 		cursor_line = line - start_line + 1,
 	}
 end
@@ -969,7 +978,8 @@ function M.output_map_preview(lines, entry)
 			return {
 				lines = block.lines,
 				filetype = block.filetype or "text",
-				title = (" ACP %s code lines %d-%d "):format(
+				title = (" %s ACP %s code lines %d-%d "):format(
+					icons.code,
 					block.language or "code",
 					block.start_line or 1,
 					block.end_line or 1
@@ -985,7 +995,8 @@ function M.output_map_preview(lines, entry)
 			return {
 				lines = section_lines,
 				filetype = "acp",
-				title = (" ACP %s section lines %d-%d "):format(
+				title = (" %s ACP %s section lines %d-%d "):format(
+					icons.section,
 					range.kind or "output",
 					range.line1 or 1,
 					range.line2 or 1
@@ -1220,7 +1231,7 @@ function M.code_block_lens(block, injection_active, frame)
 	local injection_hl = injection_active and "AcpInjectedLanguageActive" or "AcpInjectedLanguage"
 	local state_hl = block.closed == false and "AcpOutputLive" or "AcpCodeBlockLensMuted"
 	return {
-		{ " CODE ", "AcpCodeBlockHeader" },
+		{ (" %s CODE "):format(icons.code), "AcpCodeBlockHeader" },
 		{ language, "AcpInjectedLanguage" },
 		{ (" -> %s "):format(filetype), "AcpCodeBlockHeader" },
 		{ ("| %s | "):format(count), "AcpCodeBlockLensMuted" },
@@ -1298,7 +1309,7 @@ function M.injection_badge(block, injection_active, frame)
 end
 
 function M.code_block_lines(blocks)
-	local lines = { "ACP Output Code Blocks", "" }
+	local lines = { ("%s ACP Output Code Blocks"):format(icons.code), "" }
 	local line_blocks = {}
 
 	for _, block in ipairs(blocks or {}) do
@@ -1316,7 +1327,12 @@ function M.code_block_lines(blocks)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to open a scratch buffer, Q for quickfix, / to filter, or q/<Esc> to close.")
+	table.insert(
+		lines,
+		("Press <Enter> to open a scratch buffer, Q for quickfix, / to filter, or q/<Esc> to close. %s"):format(
+			icons.key
+		)
+	)
 	return lines, line_blocks
 end
 
@@ -1408,7 +1424,7 @@ function M.file_reference_at(lines, lnum, col, opts)
 end
 
 function M.file_reference_lines(references)
-	local lines = { "ACP Output Locations", "" }
+	local lines = { ("%s ACP Output Locations"):format(icons.reference), "" }
 	local line_references = {}
 
 	for _, reference in ipairs(references or {}) do
@@ -1422,7 +1438,10 @@ function M.file_reference_lines(references)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Press <Enter> to jump, Q for quickfix, / to filter, or q/<Esc> to close.")
+	table.insert(
+		lines,
+		("Press <Enter> to jump, Q for quickfix, / to filter, or q/<Esc> to close. %s"):format(icons.key)
+	)
 	return lines, line_references
 end
 
@@ -1442,9 +1461,9 @@ end
 function M.reference_badge(count)
 	local number = tonumber(count) or 0
 	if number <= 1 then
-		return " REF "
+		return (" %s REF "):format(icons.reference)
 	end
-	return (" REF x%d "):format(number)
+	return (" %s REF x%d "):format(icons.reference, number)
 end
 
 function M.problem_diagnostics(lines)
@@ -1595,7 +1614,7 @@ end
 
 function M.output_item_lines(items, opts)
 	opts = opts or {}
-	local lines = { "ACP Output Items", "" }
+	local lines = { ("%s ACP Output Items"):format(icons.map), "" }
 	local line_items = {}
 	local total = opts.total_lines
 
@@ -1611,7 +1630,10 @@ function M.output_item_lines(items, opts)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Type / to filter, press <Enter> to jump, Q for quickfix, or q/<Esc> to close.")
+	table.insert(
+		lines,
+		("Type / to filter, press <Enter> to jump, Q for quickfix, or q/<Esc> to close. %s"):format(icons.key)
+	)
 	return lines, line_items
 end
 
@@ -1761,6 +1783,19 @@ local function output_item_hl(kind)
 	return "AcpSectionStats"
 end
 
+local function output_item_icon(kind)
+	if kind == "problem" then
+		return icons.error
+	end
+	if kind == "code" then
+		return icons.code
+	end
+	if kind == "reference" then
+		return icons.reference
+	end
+	return icons.section
+end
+
 function M.cursor_ribbon_chunks(lines, lnum, col, opts)
 	opts = opts or {}
 	lines = lines or {}
@@ -1783,20 +1818,21 @@ function M.cursor_ribbon_chunks(lines, lnum, col, opts)
 	local item_label = nearby and short_label(nearby.label or nearby.kind, 26) or nil
 
 	local chunks = {
-		{ " CTX ", "AcpOutputSkyline" },
+		{ (" %s CTX "):format(icons.context), "AcpOutputSkyline" },
 		{ progress .. " ", "AcpOutputTimeline" },
 		{
 			M.skyline(lines, { width = opts.width or 22, current_line = line_number, cwd = opts.cwd }),
 			"AcpOutputRail",
 		},
 		{ " | ", "AcpOutputSkylineDim" },
-		{ (" %s "):format(section_kind), "AcpSectionStats" },
+		{ (" %s %s "):format(icons.section, section_kind), "AcpSectionStats" },
 		{ title, "AcpOutputHint" },
 		{ (" %s"):format(span), "AcpOutputSkylineDim" },
 	}
 
 	if item_kind then
-		local prefix = item and " | ITEM " or " | NEAR "
+		local prefix = item and (" | %s ITEM "):format(output_item_icon(item_kind))
+			or (" | %s NEAR "):format(output_item_icon(item_kind))
 		table.insert(chunks, { prefix, output_item_hl(item_kind) })
 		table.insert(chunks, { (item_kind or "item"):upper(), output_item_hl(item_kind) })
 		table.insert(chunks, { item_label and (" " .. item_label) or "", "AcpOutputHint" })
@@ -1826,7 +1862,7 @@ function M.cursor_hint_chunks(lines, lnum, col, opts)
 
 	if M.file_reference_at(lines, line_number, col, { cwd = opts.cwd }) then
 		return {
-			{ " REF ", "AcpOutputReferenceBadge" },
+			{ (" %s REF "):format(icons.reference), "AcpOutputReferenceBadge" },
 			{ " ? menu | K inspect | <Enter> open ref | ]o/[o items", "AcpOutputHint" },
 		}
 	end
@@ -1837,7 +1873,7 @@ function M.cursor_hint_chunks(lines, lnum, col, opts)
 		local injection = opts.language_injection and "Tree-sitter injection" or "fence detection"
 		local injection_hl = opts.language_injection and "AcpInjectedLanguageActive" or "AcpInjectedLanguage"
 		return {
-			{ " CODE ", "AcpCodeBlockHeader" },
+			{ (" %s CODE "):format(icons.code), "AcpCodeBlockHeader" },
 			{ ("code %s "):format(filetype), "AcpInjectedLanguage" },
 			{ ("%s "):format(injection), injection_hl },
 			{ "? menu | K inspect | <Enter> open code | <leader>aY yank | ]o/[o items", "AcpOutputHint" },
@@ -1846,14 +1882,14 @@ function M.cursor_hint_chunks(lines, lnum, col, opts)
 
 	if line:match("^Status:%s+error") or line:match("^stderr:") or line:match("^Terminal output truncated") then
 		return {
-			{ " PROBLEM ", "AcpBadgeError" },
+			{ (" %s PROBLEM "):format(icons.error), "AcpBadgeError" },
 			{ " ? menu | K inspect | ]o/[o items | <leader>ae problems", "AcpOutputHint" },
 		}
 	end
 
 	if M.is_section(line) then
 		return {
-			{ " SECTION ", "AcpSectionStats" },
+			{ (" %s SECTION "):format(icons.section), "AcpSectionStats" },
 			{ " ? menu | K inspect | <leader>ai draft | <leader>ay yank", "AcpOutputHint" },
 		}
 	end
@@ -1913,7 +1949,7 @@ end
 
 function M.transcript_entry_lines(entries, opts)
 	opts = opts or {}
-	local lines = { "ACP Output Search", "" }
+	local lines = { ("%s ACP Output Search"):format(icons.search), "" }
 	local line_entries = {}
 	local total = opts.total_lines
 
@@ -1929,7 +1965,7 @@ function M.transcript_entry_lines(entries, opts)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, "Type / to filter, press <Enter> to jump, or q/<Esc> to close.")
+	table.insert(lines, ("Type / to filter, press <Enter> to jump, or q/<Esc> to close. %s"):format(icons.key))
 	return lines, line_entries
 end
 

@@ -1,6 +1,7 @@
 local document_colors = require("acp.document_colors")
 local document_links = require("acp.document_links")
 local folding_ranges = require("acp.folding_ranges")
+local icons = require("acp.icons")
 
 local M = {}
 
@@ -76,7 +77,8 @@ local function highlight_marks(source, highlights)
 				local line_length = #text
 				local start_col = line == line1 and math.max(0, (range.col1 or 1) - 1) or 0
 				start_col = math.min(start_col, line_length)
-				local end_col = line == line2 and math.max(start_col + 1, (range.col2 or start_col + 2) - 1) or line_length
+				local end_col = line == line2 and math.max(start_col + 1, (range.col2 or start_col + 2) - 1)
+					or line_length
 				end_col = math.min(end_col, line_length)
 				if end_col > start_col then
 					table.insert(marks, {
@@ -116,7 +118,8 @@ local function color_marks(source, colors)
 				local line_length = #text
 				local start_col = line == line1 and math.max(0, (range.col1 or 1) - 1) or 0
 				start_col = math.min(start_col, line_length)
-				local end_col = line == line2 and math.max(start_col + 1, (range.col2 or start_col + 2) - 1) or line_length
+				local end_col = line == line2 and math.max(start_col + 1, (range.col2 or start_col + 2) - 1)
+					or line_length
 				end_col = math.min(end_col, line_length)
 				if end_col > start_col then
 					table.insert(marks, {
@@ -134,9 +137,9 @@ local function color_marks(source, colors)
 				line = line1,
 				col = 0,
 				opts = {
-					virt_text = { { (" COLOR %s "):format(document_colors.label(item)), color_hl } },
+					virt_text = { { (" %s COLOR %s "):format(icons.color, document_colors.label(item)), color_hl } },
 					virt_text_pos = "right_align",
-					sign_text = "C>",
+					sign_text = icons.color,
 					sign_hl_group = color_hl,
 					priority = 86,
 				},
@@ -166,7 +169,8 @@ local function link_marks(source, links)
 				local line_length = #text
 				local start_col = line == line1 and math.max(0, (range.col1 or 1) - 1) or 0
 				start_col = math.min(start_col, line_length)
-				local end_col = line == line2 and math.max(start_col + 1, (range.col2 or start_col + 2) - 1) or line_length
+				local end_col = line == line2 and math.max(start_col + 1, (range.col2 or start_col + 2) - 1)
+					or line_length
 				end_col = math.min(end_col, line_length)
 				if end_col > start_col then
 					table.insert(marks, {
@@ -184,9 +188,11 @@ local function link_marks(source, links)
 				line = line1,
 				col = 0,
 				opts = {
-					virt_text = { { (" LINK %s "):format(document_links.label(item)), "AcpSourceLinkBadge" } },
+					virt_text = {
+						{ (" %s LINK %s "):format(icons.reference, document_links.label(item)), "AcpSourceLinkBadge" },
+					},
 					virt_text_pos = "right_align",
-					sign_text = "L>",
+					sign_text = icons.reference,
 					sign_hl_group = "AcpSourceLinkBadge",
 					priority = 87,
 				},
@@ -225,9 +231,11 @@ local function fold_marks(source, folds)
 				line = line1,
 				col = 0,
 				opts = {
-					virt_text = { { (" FOLD %s "):format(folding_ranges.label(item)), "AcpSourceFoldBadge" } },
+					virt_text = {
+						{ (" %s FOLD %s "):format(icons.fold, folding_ranges.label(item)), "AcpSourceFoldBadge" },
+					},
 					virt_text_pos = "right_align",
-					sign_text = "F>",
+					sign_text = icons.fold,
 					sign_hl_group = "AcpSourceFoldBadge",
 					priority = 85,
 				},
@@ -269,7 +277,7 @@ function M.marks(state)
 	end
 
 	local status = state.run_status or (state.busy and "running" or "ready")
-	local label = (" ACP #%s %s "):format(tostring(state.id or "?"), status)
+	local label = (" %s ACP #%s %s "):format(icons.source, tostring(state.id or "?"), status)
 	local diagnostics = diagnostic_summary(source.bufnr, start_line, end_line)
 	local lens_diagnostics = diagnostics and ("diagnostics " .. diagnostics .. "  ") or ""
 	local highlight_count = #(state.source_highlights or {})
@@ -280,7 +288,8 @@ function M.marks(state)
 	local lens_links = link_count > 0 and ("links " .. link_count .. "  ") or ""
 	local fold_count = #(state.source_folding_ranges or {})
 	local lens_folds = fold_count > 0 and ("folds " .. fold_count .. "  ") or ""
-	local lens = (" ACP #%s source context  %s:AcpSourceActions focus/add/refresh/LSP/Tree-sitter "):format(
+	local lens = (" %s ACP #%s source context  %s:AcpSourceActions focus/add/refresh/LSP/Tree-sitter "):format(
+		icons.source,
 		tostring(state.id or "?"),
 		lens_diagnostics .. lens_highlights .. lens_colors .. lens_links .. lens_folds
 	)
@@ -302,7 +311,7 @@ function M.marks(state)
 		marks[1].opts.virt_text_pos = "right_align"
 		marks[1].opts.virt_lines = { { { lens, "AcpSourceLens" } } }
 		marks[1].opts.virt_lines_above = true
-		marks[1].opts.sign_text = "A>"
+		marks[1].opts.sign_text = icons.source
 		marks[1].opts.sign_hl_group = "AcpSourceLabel"
 	end
 	for _, mark in ipairs(highlight_marks(source, state.source_highlights)) do

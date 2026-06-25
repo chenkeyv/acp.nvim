@@ -1,3 +1,5 @@
+local icons = require("acp.icons")
+
 local M = {}
 
 local severity_order = {
@@ -57,17 +59,17 @@ end
 
 local function source_label(source)
 	if not (source and source.bufnr and vim.api.nvim_buf_is_valid(source.bufnr)) then
-		return "source none"
+		return ("%s source none"):format(icons.source)
 	end
 
 	local name = vim.api.nvim_buf_get_name(source.bufnr)
 	local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or ("buffer " .. source.bufnr)
 	local filetype = vim.bo[source.bufnr].filetype ~= "" and vim.bo[source.bufnr].filetype or "text"
 	if source.range then
-		return ("source %s:%d-%d [%s]"):format(path, source.range.line1, source.range.line2, filetype)
+		return ("%s source %s:%d-%d [%s]"):format(icons.source, path, source.range.line1, source.range.line2, filetype)
 	end
 	local cursor = source.cursor or { 1, 0 }
-	return ("source %s:%d [%s]"):format(path, cursor[1] or 1, filetype)
+	return ("%s source %s:%d [%s]"):format(icons.source, path, cursor[1] or 1, filetype)
 end
 
 local function source_lines(source)
@@ -119,29 +121,32 @@ local function diagnostic_label(source)
 	if #badges == 0 then
 		return nil
 	end
-	return "diagnostics " .. table.concat(badges, " ")
+	return ("%s diagnostics %s"):format(icons.diagnostics, table.concat(badges, " "))
 end
 
 local function ribbon_chunks(opts)
 	opts = opts or {}
 	local chunks = {
-		{ " ACP ", "AcpPromptBadge" },
+		{ (" %s ACP "):format(icons.acp), "AcpPromptBadge" },
 	}
 	local adapter = short(opts.adapter, 18)
 	if adapter then
-		table.insert(chunks, { (" %s "):format(adapter), "AcpPromptRibbon" })
+		table.insert(chunks, { (" %s %s "):format(icons.session, adapter), "AcpPromptRibbon" })
 	end
 	local model = short(opts.model, 28)
 	if model then
-		table.insert(chunks, { ("model %s "):format(model), "AcpPromptMeta" })
+		table.insert(chunks, { ("%s model %s "):format(icons.model, model), "AcpPromptMeta" })
 	end
 	local context_window = format_count(opts.context_window)
 	if context_window then
-		table.insert(chunks, { ("ctx %s "):format(context_window), "AcpPromptMeta" })
+		table.insert(chunks, { ("%s ctx %s "):format(icons.context, context_window), "AcpPromptMeta" })
 	end
 	local status = short(opts.run_status or (opts.busy and "running" or "ready"), 28)
 	if status then
-		table.insert(chunks, { ("status %s "):format(status), opts.busy and "AcpPromptBusy" or "AcpPromptMeta" })
+		table.insert(
+			chunks,
+			{ ("%s status %s "):format(icons.status, status), opts.busy and "AcpPromptBusy" or "AcpPromptMeta" }
+		)
 	end
 	local diagnostics = diagnostic_label(opts.source)
 	if diagnostics then
@@ -149,7 +154,7 @@ local function ribbon_chunks(opts)
 	end
 	table.insert(chunks, { short(source_label(opts.source), 64) or "source none", "AcpPromptSource" })
 	if opts.blink then
-		table.insert(chunks, { "  blink", "AcpPromptMeta" })
+		table.insert(chunks, { ("  %s blink"):format(icons.blink), "AcpPromptMeta" })
 	end
 	return chunks
 end
@@ -173,8 +178,8 @@ function M.info(lines, opts)
 	local ribbon = ribbon_chunks(opts)
 
 	if content == "" then
-		local hint = opts.busy and "Agent is responding - <leader>aq stop"
-			or "Ask ACP - <C-s> send | ? actions | @context completion"
+		local hint = opts.busy and ("%s Agent is responding - <leader>aq stop"):format(icons.busy)
+			or ("%s Ask ACP - <C-s> send | ? actions | @context completion"):format(icons.prompt)
 		return {
 			empty = true,
 			ghost = hint,
