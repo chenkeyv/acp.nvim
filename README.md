@@ -214,7 +214,7 @@ prefers this source when it is configured and falls back to the native
 - `:AcpDiagnosticsQuickfix` sends source-buffer diagnostics to quickfix
 - `:AcpWorkspaceDiagnostics` opens diagnostics across loaded project buffers
 - `:AcpWorkspaceDiagnosticsQuickfix` sends loaded-buffer diagnostics to quickfix
-- `:AcpCommands` opens a picker for slash commands advertised by the current ACP session
+- `:AcpCommands` opens a previewed picker for slash commands advertised by the current ACP session
 - `:AcpConfig` opens a previewed picker for config options advertised by the current ACP session
 - `:AcpCodeActions` opens an LSP code-action picker for the source buffer or range
 - `:AcpCodeLens` opens an LSP code-lens picker for the source buffer
@@ -300,7 +300,7 @@ In the prompt buffer:
 - `<leader>ad` opens source-buffer diagnostics
 - `<leader>aD` sends source-buffer diagnostics to quickfix
 - `<leader>af` previews the current session's changed files
-- `<leader>a/` opens advertised ACP slash commands
+- `<leader>a/` opens advertised ACP slash commands with input previews
 - `<leader>ao` opens advertised ACP config options with value previews
 - `<leader>ak` opens the ACP action palette
 - `<leader>aa` opens source-buffer LSP code actions

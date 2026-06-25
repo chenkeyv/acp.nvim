@@ -5399,6 +5399,9 @@ local function open_command_picker(state)
 		title_icon = icons.command,
 		submit_desc = "Draft ACP slash command",
 		close_desc = "Close ACP commands",
+		preview = function(row)
+			return acp_commands.preview(line_commands[row])
+		end,
 		on_submit = function(row, view)
 			local command = line_commands[row]
 			local text = acp_commands.slash_text(command)

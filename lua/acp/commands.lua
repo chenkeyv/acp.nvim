@@ -3,19 +3,41 @@ local chrome = require("acp.picker_chrome")
 
 local M = {}
 
+local function clean(value)
+	if value == nil or value == "" or value == vim.NIL then
+		return nil
+	end
+	return tostring(value):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function command_name(command, fallback)
+	return clean(command and command.name) or fallback
+end
+
+local function input_hint(command)
+	return clean(command and command.input and command.input.hint)
+end
+
 function M.picker_lines(commands)
 	local lines = { chrome.title(icons.command, "ACP Commands"), "" }
 	local line_commands = {}
 	for index, command in ipairs(commands or {}) do
-		local name = command.name or ("command-" .. index)
+		local name = command_name(command, "command-" .. index)
 		table.insert(lines, chrome.row(index, icons.command, ("/%s"):format(name)))
 		line_commands[#lines] = command
 		if command.description and command.description ~= "" then
 			table.insert(lines, chrome.detail(icons.note, command.description))
 			line_commands[#lines] = command
 		end
-		if command.input and command.input.hint and command.input.hint ~= "" then
-			table.insert(lines, chrome.detail(icons.key, ("input: %s"):format(command.input.hint)))
+		local hint = input_hint(command)
+		if hint then
+			table.insert(lines, chrome.detail(icons.key, ("input: %s"):format(hint)))
+			line_commands[#lines] = command
+		elseif command.input then
+			table.insert(lines, chrome.detail(icons.key, "input accepted"))
+			line_commands[#lines] = command
+		else
+			table.insert(lines, chrome.detail(icons.send, "no input"))
 			line_commands[#lines] = command
 		end
 	end
@@ -36,6 +58,40 @@ function M.slash_text(command)
 		text = text .. " "
 	end
 	return text
+end
+
+function M.preview(command)
+	local name = command_name(command)
+	if not name then
+		return nil
+	end
+
+	local slash = M.slash_text(command) or ("/" .. name)
+	local lines = {
+		chrome.title(icons.command, ("/%s"):format(name)),
+		"",
+		("%s Draft: %s"):format(icons.prompt, slash),
+	}
+	local hint = input_hint(command)
+	if hint then
+		table.insert(lines, ("%s Input: %s"):format(icons.key, hint))
+	elseif command.input then
+		table.insert(lines, ("%s Input accepted"):format(icons.key))
+	else
+		table.insert(lines, ("%s No input"):format(icons.send))
+	end
+	if command.description and command.description ~= "" then
+		table.insert(lines, ("%s %s"):format(icons.note, command.description))
+	end
+	table.insert(lines, "")
+	table.insert(lines, ("%s <Enter> drafts this command into the prompt."):format(icons.send))
+
+	return {
+		lines = lines,
+		filetype = "acp-sessions",
+		title = (" %s ACP command /%s "):format(icons.command, name),
+		title_icon = icons.command,
+	}
 end
 
 function M.completion_start(line, cursor_col)
@@ -71,8 +127,8 @@ function M.completion_items(commands, base)
 			if word then
 				local item = {
 					word = word,
-					abbr = ("%s /%s"):format(icons.terminal, name),
-					icon = icons.terminal,
+					abbr = ("%s /%s"):format(icons.command, name),
+					icon = icons.command,
 					kind = "Function",
 					dup = 0,
 				}
