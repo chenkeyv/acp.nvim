@@ -1442,6 +1442,22 @@ test("output line and section helpers are rendered", function()
 	eq(current_reference.kind, "reference")
 	eq(current_reference.index, 3)
 	ok(not acp_output.window_title({ id = 7, adapter = "test" }, { current_item = current_code }):find("item 2/3 CODE", 1, true))
+	local ansi_problem_items = acp_output.problem_diagnostics({
+		"stderr:",
+		"\27[2m2026-06-26 trace\27[0m",
+	})
+	eq(ansi_problem_items[1].message, "stderr: 2026-06-26 trace")
+	eq(acp_output.strip_ansi("\27[2m2026\27[0m ^[[31mred^[[0m"), "2026 red")
+	local ansi_winbar = acp_output.winbar({ id = 7, adapter = "test" }, {
+		current_section = {
+			kind = "STDERR",
+			title = "\27[2mstderr\27[0m",
+			line = 1,
+		},
+	})
+	ok(not ansi_winbar:find("\27", 1, true))
+	ok(not ansi_winbar:find("%^%[%[", 1, false))
+	ok(ansi_winbar:find("at STDERR: stderr", 1, true))
 	local problem_items = acp_output.problem_diagnostics({
 		"Status: error: failed to start session",
 		"",
@@ -3909,7 +3925,7 @@ test("agent status header keeps a blank row before streamed content", function()
 		"      printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"session-1\"}}'",
 		"      ;;",
 		"    *'\"method\":\"session/prompt\"'*)",
-		"      printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"session-1\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"answer\"}}}}'",
+		"      printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"session-1\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"\\u001b[2manswer\\u001b[0m\"}}}}'",
 		"      printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"stopReason\":\"end_turn\"}}'",
 		"      ;;",
 		"  esac",
@@ -3975,6 +3991,7 @@ test("agent status header keeps a blank row before streamed content", function()
 		ok(agent_line, "agent status header should be present")
 		eq(lines[agent_line + 1], "")
 		eq(lines[agent_line + 2], "answer")
+		ok(not table.concat(lines, "\n"):find("\27", 1, true))
 	end)
 
 	pcall(vim.cmd, "AcpCloseAll")

@@ -37,11 +37,19 @@ local motion_frames = {
 	motion_frame(2),
 }
 
+function M.strip_ansi(value)
+	return tostring(value or "")
+		:gsub("\27%][^\7]*\7", "")
+		:gsub("\27%[[0-?]*[ -/]*[@-~]", "")
+		:gsub("%^%[%[[0-?]*[ -/]*[@-~]", "")
+end
+
 local function clean(value)
 	if value == nil or value == "" or value == vim.NIL then
 		return nil
 	end
-	return tostring(value):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+	local text = M.strip_ansi(value):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+	return text ~= "" and text or nil
 end
 
 function M.is_agent_header(line)

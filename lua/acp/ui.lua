@@ -654,6 +654,14 @@ local function set_output_lines(state, start, stop, lines)
 		return
 	end
 
+	if lines then
+		local sanitized = {}
+		for index, line in ipairs(lines) do
+			sanitized[index] = output.strip_ansi(line)
+		end
+		lines = sanitized
+	end
+
 	vim.bo[state.output_buf].modifiable = true
 	vim.api.nvim_buf_set_lines(state.output_buf, start, stop, false, lines)
 	vim.bo[state.output_buf].modifiable = false
