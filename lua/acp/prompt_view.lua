@@ -171,6 +171,9 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpPromptDiagnostics", { link = "DiagnosticError", default = true })
 	vim.api.nvim_set_hl(0, "AcpPromptSource", { fg = "#7dcfff", default = true })
 	vim.api.nvim_set_hl(0, "AcpPromptWarning", { link = "DiagnosticWarn", default = true })
+	vim.api.nvim_set_hl(0, "AcpPromptFloat", { link = "NormalFloat", default = true })
+	vim.api.nvim_set_hl(0, "AcpPromptBorder", { fg = "#7aa2f7", default = true })
+	vim.api.nvim_set_hl(0, "AcpPromptTitle", { fg = "#9ece6a", bold = true, default = true })
 end
 
 function M.info(lines, opts)

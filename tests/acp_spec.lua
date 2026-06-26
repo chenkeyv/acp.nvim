@@ -1007,37 +1007,7 @@ test("health notifications use shared Nerd Font titles", function()
 	ok(reports[1].title:find(icons.acp, 1, true))
 end)
 
-test("output dashboard and section helpers are rendered", function()
-	local lines = acp_output.dashboard_lines({
-		id = 7,
-		adapter = "test",
-		mode = "window",
-		model = "test-model",
-		context_window = 1000,
-	})
-	local text = table.concat(lines, "\n")
-
-	ok(text:find("ACP: test", 1, true))
-	ok(text:find(icons.acp, 1, true))
-	ok(text:find("Session: #7 | Mode: window", 1, true))
-	ok(text:find(icons.session, 1, true))
-	ok(text:find("Model: test-model | Context: 1k", 1, true))
-	ok(text:find(icons.model, 1, true))
-	ok(text:find(icons.context, 1, true))
-	ok(text:find(icons.source, 1, true))
-	ok(text:find("Transcript: 0 sections | 0 code | 0 locs | 0 changes", 1, true))
-	ok(text:find(icons.map, 1, true))
-	ok(text:find("? actions", 1, true))
-	ok(text:find("K inspect", 1, true))
-	ok(text:find("]o/[o items", 1, true))
-	ok(text:find("[[/]] sections", 1, true))
-	ok(text:find("<leader>ax search", 1, true))
-	ok(text:find(icons.help, 1, true))
-	ok(text:find(icons.inspect, 1, true))
-	ok(text:find(icons.search, 1, true))
-	ok(text:find(icons.reference, 1, true))
-	ok(text:find(icons.yank, 1, true))
-
+test("output line and section helpers are rendered", function()
 	eq(acp_output.line_style("You").line_hl_group, "AcpUserHeader")
 	eq(acp_output.line_style("You").sign_text, icons.user)
 	eq(acp_output.line_style("You").separator, nil)
@@ -1132,6 +1102,8 @@ test("output dashboard and section helpers are rendered", function()
 	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 3), "  ")
 	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 4), icons.code)
 	eq(acp_output.statuscolumn_marker({}, 1), "  ")
+	local rail_hl = vim.api.nvim_get_hl(0, { name = "AcpOutputRail", link = false })
+	eq(rail_hl.bg, nil)
 	local outline, line_sections = acp_output.outline_lines(sections)
 	local outline_text = table.concat(outline, "\n")
 	ok(outline_text:find("ACP Output Outline", 1, true))
@@ -2921,7 +2893,77 @@ test("prompt history recalls sent prompts and restores draft", function()
 	end
 end)
 
-test("output buffer shows dashboard, chrome, and section navigation", function()
+test("tab input float fits the output text area with padding", function()
+	local source_buf = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_name(source_buf, vim.fn.tempname() .. ".lua")
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
+		"local value = 1",
+	})
+	vim.bo[source_buf].filetype = "lua"
+	vim.api.nvim_set_current_buf(source_buf)
+
+	local original_tabpage = vim.api.nvim_get_current_tabpage()
+	local tabpage
+	local input_buf
+	local output_buf
+	local original_notify = vim.notify
+	vim.notify = function() end
+
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatTab test")
+		tabpage = vim.api.nvim_get_current_tabpage()
+		input_buf = vim.api.nvim_get_current_buf()
+		local input_name = vim.api.nvim_buf_get_name(input_buf)
+		local output_name = input_name:gsub("/input$", "/output")
+		for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+			if vim.api.nvim_buf_get_name(bufnr) == output_name then
+				output_buf = bufnr
+				break
+			end
+		end
+
+		ok(output_buf, "output buffer should exist")
+		local input_win = vim.fn.bufwinid(input_buf)
+		local output_win = vim.fn.bufwinid(output_buf)
+		ok(input_win and input_win > 0, "input window should be visible")
+		ok(output_win and output_win > 0, "output window should be visible")
+
+		local output_position = vim.api.nvim_win_get_position(output_win)
+		local output_width = vim.api.nvim_win_get_width(output_win)
+		local output_height = vim.api.nvim_win_get_height(output_win)
+		local output_info = vim.fn.getwininfo(output_win)[1] or {}
+		local textoff = output_info.textoff or 0
+		local input_config = vim.api.nvim_win_get_config(input_win)
+		local padding = 2
+
+		eq(input_config.relative, "editor")
+		eq(input_config.col, output_position[2] + textoff + padding)
+		eq(input_config.width + 2, output_width - textoff - padding * 2)
+		eq(input_config.height + 2, 7)
+		eq(input_config.row, output_position[1] + output_height - input_config.height - 2 - padding)
+		ok(type(input_config.border[1]) == "table", "input border should use highlighted border chunks")
+		eq(input_config.border[1][2], "AcpPromptBorder")
+		ok(vim.wo[input_win].winhighlight:find("AcpPromptBorder", 1, true))
+	end)
+
+	vim.notify = original_notify
+	if tabpage and vim.api.nvim_tabpage_is_valid(tabpage) then
+		pcall(vim.api.nvim_set_current_tabpage, tabpage)
+		pcall(vim.cmd, "tabclose!")
+	end
+	if original_tabpage and vim.api.nvim_tabpage_is_valid(original_tabpage) then
+		pcall(vim.api.nvim_set_current_tabpage, original_tabpage)
+	end
+	if source_buf and vim.api.nvim_buf_is_valid(source_buf) then
+		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
+	end
+	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("output buffer starts blank and shows chrome and section navigation", function()
 	local source_buf = vim.api.nvim_create_buf(true, true)
 	vim.api.nvim_buf_set_name(source_buf, vim.fn.tempname() .. ".lua")
 	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, {
@@ -2953,14 +2995,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		output_win = vim.fn.bufwinid(output_buf)
 		ok(output_win and output_win > 0, "output window should be visible")
 
-		local dashboard = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, 7, false), "\n")
-		ok(dashboard:find("ACP: test", 1, true))
-		ok(dashboard:find("Session: #", 1, true))
-		ok(dashboard:find("Model: test-model | Context: 1k", 1, true))
-		ok(dashboard:find("Source:", 1, true))
-		ok(dashboard:find("Transcript: 0 sections | 0 code | 0 locs | 0 changes", 1, true))
-		ok(dashboard:find("[[/]] sections", 1, true))
-		ok(dashboard:find("<leader>ax search", 1, true))
+		eq(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), { "" })
 		ok(vim.wo[output_win].winbar:find("ACP test #", 1, true))
 		ok(vim.wo[output_win].winbar:find(icons.session, 1, true))
 		ok(vim.wo[output_win].winbar:find(icons.status, 1, true))
@@ -2974,6 +3009,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		eq(vim.wo[output_win].foldlevel, 99)
 		eq(vim.wo[output_win].foldcolumn, "1")
 		eq(vim.wo[output_win].signcolumn, "yes:1")
+		eq(vim.wo[output_win].cursorline, false)
 		ok(vim.wo[output_win].statuscolumn:find("acp_nvim_output_statuscolumn", 1, true))
 		ok(
 			vim.b[output_buf].acp_language_injection == "treesitter-markdown"
@@ -3012,31 +3048,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 
 		local ns = vim.api.nvim_create_namespace("acp.nvim.output")
 		local marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
-		local highlighted_header = false
-		local session_sign = false
-		local decorative_dashboard_text = false
-		local decorative_dashboard_lines = false
-		for _, mark in ipairs(marks) do
-			if mark[4] and mark[4].line_hl_group == "AcpOutputHeader" then
-				highlighted_header = true
-			end
-			if has_sign(mark, icons.session) then
-				session_sign = true
-			end
-			decorative_dashboard_lines = decorative_dashboard_lines or has_virt_line(mark, "FLOW")
-			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
-				if
-					(chunk[1] and chunk[1]:find("Ready", 1, true))
-					or (chunk[1] and chunk[1]:find("idle | 0 sections", 1, true))
-				then
-					decorative_dashboard_text = true
-				end
-			end
-		end
-		ok(highlighted_header, "output header should be highlighted")
-		ok(session_sign, "output session sign should be rendered")
-		ok(not decorative_dashboard_text, "initial output should avoid decorative dashboard virtual text")
-		ok(not decorative_dashboard_lines, "initial output should avoid the skyline HUD")
+		eq(#marks, 0)
 
 		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "hello output" })
 		vim.cmd("AcpSend")
@@ -3044,17 +3056,19 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		local text = table.concat(lines, "\n")
 		ok(text:find("You", 1, true))
 		ok(text:find("Agent", 1, true))
-		ok(text:find("Status: error: failed to start session", 1, true))
+		ok(not text:find("Status:", 1, true))
+		eq(vim.api.nvim_get_current_buf(), input_buf)
+		eq(vim.bo[input_buf].filetype, "markdown")
+		eq(vim.bo[output_buf].filetype, "acp")
+		ok(vim.wo[output_win].winbar:find("error: failed to start session", 1, true))
 		marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
 		local user_sign = false
 		local agent_sign = false
-		local error_sign = false
 		local section_virt_text = false
 		local section_virt_lines = false
 		for _, mark in ipairs(marks) do
 			user_sign = user_sign or has_sign(mark, icons.user)
 			agent_sign = agent_sign or has_sign(mark, icons.agent)
-			error_sign = error_sign or has_sign(mark, icons.error)
 			if (has_sign(mark, icons.user) or has_sign(mark, icons.agent)) and mark[4] then
 				if mark[4].virt_text and #mark[4].virt_text > 0 then
 					section_virt_text = true
@@ -3066,7 +3080,6 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		end
 		ok(user_sign, "output user sign should be rendered")
 		ok(agent_sign, "output agent sign should be rendered")
-		ok(error_sign, "output error sign should be rendered")
 		ok(not section_virt_text, "output section headers should avoid decorative virtual text")
 		ok(not section_virt_lines, "output section headers should avoid decorative virtual separators")
 		local original_output_line_count = vim.api.nvim_buf_line_count(output_buf)
@@ -3104,16 +3117,28 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.api.nvim_buf_set_lines(output_buf, original_output_line_count, -1, false, {})
 		vim.bo[output_buf].modifiable = false
 		vim.api.nvim_exec_autocmds("TextChanged", { buffer = output_buf })
-		local updated_dashboard = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, 7, false), "\n")
-		ok(updated_dashboard:find("Transcript: 3 sections | 0 code | 0 locs | 0 changes", 1, true))
+		local updated_output = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), "\n")
+		ok(not updated_output:find("Transcript:", 1, true))
 		local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
 		local output_diagnostics = vim.diagnostic.get(output_buf, { namespace = output_diagnostic_ns })
+		eq(#output_diagnostics, 0)
+		vim.bo[output_buf].modifiable = true
+		vim.api.nvim_buf_set_lines(output_buf, -1, -1, false, {
+			"",
+			"stderr:",
+			"failed to start session",
+			"",
+		})
+		vim.bo[output_buf].modifiable = false
+		vim.api.nvim_exec_autocmds("TextChanged", { buffer = output_buf })
+		lines = vim.api.nvim_buf_get_lines(output_buf, 0, -1, false)
+		output_diagnostics = vim.diagnostic.get(output_buf, { namespace = output_diagnostic_ns })
 		eq(#output_diagnostics, 1)
 		eq(output_diagnostics[1].severity, vim.diagnostic.severity.ERROR)
 		ok(output_diagnostics[1].message:find("failed to start session", 1, true))
 		local problem_line
 		for index, output_line in ipairs(lines) do
-			if output_line:find("Status: error", 1, true) then
+			if output_line:find("stderr:", 1, true) then
 				problem_line = index
 				break
 			end
@@ -3202,36 +3227,16 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 
 		vim.api.nvim_set_current_win(output_win)
 		vim.api.nvim_win_set_cursor(output_win, { 1, 0 })
-		keys = vim.api.nvim_replace_termcodes("]]", true, false, true)
-		vim.api.nvim_feedkeys(keys, "xt", false)
+		vim.cmd("doautocmd CursorMoved")
 		local line = vim.api.nvim_win_get_cursor(output_win)[1]
 		eq(vim.api.nvim_buf_get_lines(output_buf, line - 1, line, false)[1], "You")
 		ok(vim.wo[output_win].winbar:find("at USER: Prompt", 1, true))
 		local current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_section")
 		local current_marks = vim.api.nvim_buf_get_extmarks(output_buf, current_ns, 0, -1, { details = true })
-		local current_section_highlight = false
-		for _, mark in ipairs(current_marks) do
-			if mark[2] == line - 1 and mark[4] and mark[4].line_hl_group == "AcpCurrentSection" then
-				current_section_highlight = true
-				break
-			end
-		end
-		ok(current_section_highlight, "current output section should be highlighted")
+		eq(#current_marks, 0)
 		local hint_ns = vim.api.nvim_create_namespace("acp.nvim.output.hints")
 		local hint_marks = vim.api.nvim_buf_get_extmarks(output_buf, hint_ns, 0, -1, { details = true })
-		local section_hint = false
-		local section_ribbon = false
-		for _, mark in ipairs(hint_marks) do
-			section_ribbon = section_ribbon or (has_virt_line(mark, "CTX") and has_virt_line(mark, "USER"))
-			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
-				if chunk[1] and chunk[1]:find("<leader>ai draft", 1, true) then
-					section_hint = true
-					break
-				end
-			end
-		end
-		ok(section_hint, "output cursor should show section action hints")
-		ok(not section_ribbon, "output cursor should avoid the decorative context ribbon")
+		eq(#hint_marks, 0)
 
 		vim.cmd("AcpOutputDraft")
 		local draft = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
@@ -3384,16 +3389,7 @@ test("output buffer shows dashboard, chrome, and section navigation", function()
 		vim.api.nvim_win_set_cursor(output_win, { code_line, 0 })
 		vim.cmd("doautocmd CursorMoved")
 		local code_hint_marks = vim.api.nvim_buf_get_extmarks(output_buf, hint_ns, 0, -1, { details = true })
-		local code_hint = false
-		for _, mark in ipairs(code_hint_marks) do
-			for _, chunk in ipairs((mark[4] and mark[4].virt_text) or {}) do
-				if chunk[1] and chunk[1]:find("code lua", 1, true) then
-					code_hint = true
-					break
-				end
-			end
-		end
-		ok(code_hint, "output code blocks should show language-aware ghost hints")
+		eq(#code_hint_marks, 0)
 		vim.cmd("AcpOutputInspect")
 		local code_preview_win, code_preview = output_inspector_text("lua")
 		ok(
@@ -3954,6 +3950,20 @@ test("actions command opens a session action palette", function()
 	local passed, err = pcall(function()
 		vim.cmd("AcpChatWindow test")
 		input_buf = vim.api.nvim_get_current_buf()
+		local input_name = vim.api.nvim_buf_get_name(input_buf)
+		local output_name = input_name:gsub("/input$", "/output")
+		local output_buf
+		for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+			if vim.api.nvim_buf_get_name(bufnr) == output_name then
+				output_buf = bufnr
+				break
+			end
+		end
+		ok(output_buf, "output buffer should exist")
+		vim.bo[output_buf].modifiable = true
+		vim.api.nvim_buf_set_lines(output_buf, 0, -1, false, { "You", "hello" })
+		vim.bo[output_buf].modifiable = false
+		vim.api.nvim_exec_autocmds("TextChanged", { buffer = output_buf })
 		vim.cmd("AcpActions")
 		local action_buf = vim.api.nvim_get_current_buf()
 		eq(vim.bo[action_buf].filetype, "acp-actions")

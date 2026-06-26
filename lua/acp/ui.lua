@@ -21,7 +21,6 @@ local symbols = require("acp.symbols")
 local treesitter = require("acp.treesitter")
 
 local M = {}
-local uv = vim.uv or vim.loop
 
 local defaults = {
 	default_adapter = "codex",
@@ -30,6 +29,7 @@ local defaults = {
 		width_ratio = 0.88,
 		height_ratio = 0.86,
 		input_height = 7,
+		input_padding = 2,
 		session_panel_width = 28,
 	},
 	adapters = {
@@ -68,6 +68,35 @@ local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
 local session_panel_ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
 local source_ns = vim.api.nvim_create_namespace("acp.nvim.source")
 local output_map_lines = {}
+local prompt_frame = {
+	size = 2,
+	border = {
+		{ "╭", "AcpPromptBorder" },
+		{ "─", "AcpPromptBorder" },
+		{ "╮", "AcpPromptBorder" },
+		{ "│", "AcpPromptBorder" },
+		{ "╯", "AcpPromptBorder" },
+		{ "─", "AcpPromptBorder" },
+		{ "╰", "AcpPromptBorder" },
+		{ "│", "AcpPromptBorder" },
+	},
+}
+
+function prompt_frame.padding()
+	return math.max(0, tonumber(config.layout.input_padding) or 0)
+end
+
+function prompt_frame.copy_border()
+	return vim.deepcopy(prompt_frame.border)
+end
+
+function prompt_frame.content_width(outer_width)
+	return math.max(20, outer_width - prompt_frame.size)
+end
+
+function prompt_frame.content_height(outer_height)
+	return math.max(3, outer_height - prompt_frame.size)
+end
 
 local function notify(message, level)
 	vim.notify(message, level or vim.log.levels.INFO, { title = icons.title("ACP") })
@@ -218,23 +247,6 @@ local function refresh_current_output_section(state)
 	end
 
 	vim.api.nvim_buf_clear_namespace(state.output_buf, output_current_ns, 0, -1)
-	if not valid_win(state.output_win) or vim.api.nvim_win_get_buf(state.output_win) ~= state.output_buf then
-		return
-	end
-
-	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local range = output.section_range(lines, cursor[1])
-	if not range then
-		return
-	end
-
-	for line = range.line1, range.line2 do
-		pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_current_ns, line - 1, 0, {
-			line_hl_group = "AcpCurrentSection",
-			priority = 10,
-		})
-	end
 end
 
 local function refresh_current_output_item(state)
@@ -271,31 +283,6 @@ local function refresh_output_cursor_hint(state)
 	end
 
 	vim.api.nvim_buf_clear_namespace(state.output_buf, output_hint_ns, 0, -1)
-	if not valid_win(state.output_win) or vim.api.nvim_win_get_buf(state.output_win) ~= state.output_buf then
-		return
-	end
-
-	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local opts = {
-		cwd = state.cwd,
-		language_injection = state.output_language_injection,
-	}
-	local hint = output.cursor_hint_chunks(lines, cursor[1], cursor[2], opts)
-	if not hint then
-		return
-	end
-
-	local line = lines[cursor[1]] or ""
-	local mark_opts = {
-		hl_mode = "combine",
-		priority = 96,
-	}
-	if hint then
-		mark_opts.virt_text = hint
-		mark_opts.virt_text_pos = "eol"
-	end
-	pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_hint_ns, cursor[1] - 1, #line, mark_opts)
 end
 
 local function set_output_map_lines(bufnr, lines)
@@ -662,8 +649,6 @@ local function enable_output_language_injection(state)
 	vim.b[state.output_buf].acp_language_injection = ok and "treesitter-markdown" or "fence-detection"
 end
 
-local refresh_output_dashboard
-
 local function set_output_lines(state, start, stop, lines)
 	if not valid_buf(state.output_buf) then
 		return
@@ -678,9 +663,6 @@ local function set_output_lines(state, start, stop, lines)
 	refresh_output_cursor_hint(state)
 	refresh_output_map(state)
 	save_output_history(state)
-	if refresh_output_dashboard and not state.refreshing_output_dashboard and start ~= 0 then
-		refresh_output_dashboard(state)
-	end
 end
 
 local function set_panel_lines(bufnr, lines)
@@ -792,25 +774,6 @@ local function refresh_source_marks(state)
 	end
 end
 
-function refresh_output_dashboard(state)
-	if not valid_buf(state.output_buf) then
-		return
-	end
-
-	local old_count = state.output_dashboard_lines or #output.dashboard_lines(state)
-	local current_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local stats = output.transcript_stats(current_lines, {
-		start_line = old_count + 1,
-		cwd = state.cwd,
-		change_count = changes.count(state),
-	})
-	local lines = output.dashboard_lines(state, { stats = stats })
-	state.output_dashboard_lines = #lines
-	state.refreshing_output_dashboard = true
-	set_output_lines(state, 0, old_count, lines)
-	state.refreshing_output_dashboard = false
-end
-
 function refresh_output_chrome(state)
 	if not valid_win(state.output_win) then
 		return
@@ -866,32 +829,6 @@ local function stop_output_animation(state)
 	pcall(function()
 		timer:close()
 	end)
-end
-
-local function start_output_animation(state)
-	if state.output_animation_timer or not (uv and uv.new_timer) then
-		return
-	end
-
-	local timer = uv.new_timer()
-	if not timer then
-		return
-	end
-
-	state.output_animation_timer = timer
-	state.output_animation_frame = state.output_animation_frame or 1
-	timer:start(0, 160, vim.schedule_wrap(function()
-		if state.closed or not state.busy or not valid_buf(state.output_buf) then
-			stop_output_animation(state)
-			if valid_buf(state.output_buf) then
-				refresh_output_highlights(state)
-			end
-			return
-		end
-
-		state.output_animation_frame = (state.output_animation_frame or 0) + 1
-		refresh_output_highlights(state)
-	end))
 end
 
 local function jump_output_section(state, direction)
@@ -1631,6 +1568,19 @@ local function follow_output(state)
 end
 
 local function append_lines(state, lines)
+	if valid_buf(state.output_buf) then
+		local current = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+		if #current == 1 and current[1] == "" then
+			local replacement = vim.deepcopy(lines or {})
+			while #replacement > 1 and replacement[1] == "" do
+				table.remove(replacement, 1)
+			end
+			set_output_lines(state, 0, -1, replacement)
+			follow_output(state)
+			return
+		end
+	end
+
 	set_output_lines(state, -1, -1, lines)
 	follow_output(state)
 end
@@ -1722,7 +1672,7 @@ local function render_session_panel(state)
 			item.transcript_stats = output.transcript_stats(vim.api.nvim_buf_get_lines(session.output_buf, 0, -1, false), {
 				change_count = changes.count(session),
 				cwd = session.cwd,
-				start_line = (session.output_dashboard_lines or 0) + 1,
+				start_line = 1,
 			})
 		end
 		local source = session.source
@@ -1757,7 +1707,7 @@ end
 local refresh_prompt_hints
 
 local function set_run_status(state, status)
-	if not valid_buf(state.output_buf) then
+	if not state then
 		return
 	end
 
@@ -1765,26 +1715,11 @@ local function set_run_status(state, status)
 		return
 	end
 
-	local line = ("Status: %s"):format(status)
-	local line_count = vim.api.nvim_buf_line_count(state.output_buf)
-	if state.run_status_line and state.run_status_line < line_count then
-		set_output_lines(state, state.run_status_line, state.run_status_line + 1, { line })
-	else
-		state.run_status_line = line_count
-		set_output_lines(state, -1, -1, { line, "" })
-	end
-
 	state.run_status = status
-	if state.busy then
-		start_output_animation(state)
-	else
-		stop_output_animation(state)
-	end
-	refresh_output_highlights(state)
+	stop_output_animation(state)
 	refresh_output_chrome(state)
 	refresh_source_marks(state)
 	refresh_prompt_hints(state)
-	follow_output(state)
 	refresh_session_panels()
 end
 
@@ -1843,7 +1778,7 @@ local function refresh_prompt_chrome(state)
 
 	local win_config = vim.api.nvim_win_get_config(state.input_win)
 	if win_config.relative ~= "" then
-		win_config.title = title
+		win_config.title = { { title, "AcpPromptTitle" } }
 		pcall(vim.api.nvim_win_set_config, state.input_win, win_config)
 	end
 end
@@ -3207,49 +3142,78 @@ end
 local function float_layout()
 	local columns = vim.o.columns
 	local lines = vim.o.lines
+	local padding = prompt_frame.padding()
 	local width = math.max(48, math.floor(columns * config.layout.width_ratio))
 	width = math.min(width, math.max(20, columns - 4))
+	local input_inset = width > 24 + padding * 2 and padding or 0
+	local input_outer_width = math.max(22, width + prompt_frame.size - input_inset * 2)
+	local input_width = prompt_frame.content_width(input_outer_width)
 
 	local total_height = math.max(12, math.floor(lines * config.layout.height_ratio))
 	total_height = math.min(total_height, math.max(8, lines - 4))
 
-	local input_height = math.min(config.layout.input_height, math.max(3, total_height - 6))
-	local gap = 1
-	local output_height = math.max(5, total_height - input_height - gap)
+	local input_outer_height = math.min(config.layout.input_height, math.max(5, total_height - 6))
+	local input_height = prompt_frame.content_height(input_outer_height)
+	local gap = math.max(1, padding)
+	local output_height = math.max(5, total_height - input_outer_height - gap - prompt_frame.size)
 	local row = math.max(0, lines - total_height - 2)
 	local col = math.max(0, math.floor((columns - width) / 2))
 
 	return {
 		width = width,
+		input_width = input_width,
 		output_height = output_height,
 		input_height = input_height,
 		output_row = row,
-		input_row = row + output_height + gap,
+		input_row = row + output_height + prompt_frame.size + gap,
 		col = col,
+		input_col = col + input_inset,
 	}
 end
 
 local function input_float_config(state)
-	local output_config = valid_win(state.output_win) and vim.api.nvim_win_get_config(state.output_win) or {}
-	local output_position = valid_win(state.output_win) and vim.api.nvim_win_get_position(state.output_win) or { 0, 0 }
 	local columns = vim.o.columns
 	local lines = vim.o.lines
-	local col = output_config.relative == "" and output_position[2] or 0
-	local width = valid_win(state.output_win) and vim.api.nvim_win_get_width(state.output_win)
-		or math.max(48, math.floor(columns * config.layout.width_ratio))
-	width = math.min(width, math.max(20, columns - col))
+	local padding = prompt_frame.padding()
+	local row = 0
+	local col = math.max(0, math.floor((columns - math.max(48, math.floor(columns * config.layout.width_ratio))) / 2))
+	local width = math.max(48, math.floor(columns * config.layout.width_ratio))
+	local output_height = lines
 
-	local input_height = math.min(config.layout.input_height, math.max(3, lines - 6))
+	if valid_win(state.output_win) then
+		local output_position = vim.api.nvim_win_get_position(state.output_win)
+		local output_width = vim.api.nvim_win_get_width(state.output_win)
+		output_height = vim.api.nvim_win_get_height(state.output_win)
+		local textoff = 0
+		local info = vim.fn.getwininfo(state.output_win)[1]
+		if info and type(info.textoff) == "number" then
+			textoff = math.max(0, info.textoff)
+		end
+
+		row = output_position[1]
+		col = output_position[2] + textoff
+		width = math.max(20, output_width - textoff)
+	end
+
+	local inset = width > 24 + padding * 2 and padding or 0
+	col = col + inset
+	local outer_width = math.max(22, width - inset * 2)
+	outer_width = math.min(outer_width, math.max(22, columns - col))
+	width = prompt_frame.content_width(outer_width)
+
+	local outer_height = math.min(config.layout.input_height, math.max(5, output_height - inset * 2))
+	local input_height = prompt_frame.content_height(outer_height)
+	row = row + math.max(0, output_height - outer_height - inset)
 
 	return {
 		relative = "editor",
-		row = math.max(0, lines - input_height - 3),
-		col = output_config.relative == "" and col or math.max(0, math.floor((columns - width) / 2)),
+		row = math.max(0, math.min(row, math.max(0, lines - outer_height - 2))),
+		col = col,
 		width = width,
 		height = input_height,
 		style = "minimal",
-		border = "rounded",
-		title = prompt_title(state),
+		border = prompt_frame.copy_border(),
+		title = { { prompt_title(state), "AcpPromptTitle" } },
 		title_pos = "left",
 		zindex = 50,
 	}
@@ -3283,7 +3247,7 @@ local function apply_window_options(state)
 	end
 
 	if valid_win(state.output_win) then
-		vim.wo[state.output_win].cursorline = true
+		vim.wo[state.output_win].cursorline = false
 		vim.wo[state.output_win].foldmethod = "expr"
 		vim.wo[state.output_win].foldexpr = "v:lua.acp_nvim_output_foldexpr()"
 		vim.wo[state.output_win].foldtext = "v:lua.acp_nvim_output_foldtext()"
@@ -3294,6 +3258,11 @@ local function apply_window_options(state)
 			vim.wo[state.output_win].statuscolumn = "%s%C%#AcpOutputRail#%{v:lua.acp_nvim_output_statuscolumn()}%* "
 		end)
 		refresh_output_chrome(state)
+	end
+
+	if valid_win(state.input_win) and state.mode ~= "window" then
+		vim.wo[state.input_win].winhighlight =
+			"NormalFloat:AcpPromptFloat,FloatBorder:AcpPromptBorder,FloatTitle:AcpPromptTitle"
 	end
 
 	if state.mode ~= "float" and state.mode == "window" and valid_win(state.input_win) then
@@ -3322,12 +3291,12 @@ local function apply_float_layout(state)
 	local input_config = {
 		relative = "editor",
 		row = dims.input_row,
-		col = dims.col,
-		width = dims.width,
+		col = dims.input_col,
+		width = dims.input_width,
 		height = dims.input_height,
 		style = "minimal",
-		border = "rounded",
-		title = prompt_title(state),
+		border = prompt_frame.copy_border(),
+		title = { { prompt_title(state), "AcpPromptTitle" } },
 		title_pos = "left",
 		zindex = 50,
 	}
@@ -3474,9 +3443,11 @@ local function create_buffers(state)
 	vim.b[state.input_buf].acp_blink_source = true
 	vim.b[state.input_buf].acp_state_id = state.id
 
-	local dashboard = output.dashboard_lines(state)
-	state.output_dashboard_lines = #dashboard
-	set_output_lines(state, 0, -1, dashboard)
+	refresh_output_highlights(state)
+	refresh_current_output_section(state)
+	refresh_current_output_item(state)
+	refresh_output_cursor_hint(state)
+	refresh_output_map(state)
 	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
 	refresh_prompt_hints(state)
 end
@@ -4366,14 +4337,12 @@ local function chat_handlers(state, opts)
 				set_tab_title(state, update.title)
 			end
 			if metadata.apply_session(state, update) then
-				refresh_output_dashboard(state)
 				refresh_output_chrome(state)
 				refresh_prompt_chrome(state)
 			end
 		end,
 		usage = function(update)
 			if metadata.apply_session(state, update) then
-				refresh_output_dashboard(state)
 				refresh_output_chrome(state)
 				refresh_prompt_chrome(state)
 			end
@@ -4906,7 +4875,6 @@ local function refresh_source_context(state, opts)
 	state.source_highlights = nil
 	link_source_state(state)
 	refresh_source_marks(state)
-	refresh_output_dashboard(state)
 	refresh_output_chrome(state)
 	refresh_prompt_chrome(state)
 	refresh_session_panels()
@@ -5219,8 +5187,7 @@ local function session_picker_preview(state)
 	table.insert(lines, "")
 	table.insert(lines, chrome.title(icons.history, "Transcript"))
 	if valid_buf(state.output_buf) then
-		local start_line = math.min(state.output_dashboard_lines or 0, vim.api.nvim_buf_line_count(state.output_buf))
-		local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, start_line, -1, false)
+		local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 		local tail = {}
 		for index = #output_lines, 1, -1 do
 			local line = output_lines[index]
@@ -6480,7 +6447,7 @@ function M.output_help_preview(state)
 		local stats = output.transcript_stats(output_lines, {
 			change_count = changes.count(state),
 			cwd = state.cwd,
-			start_line = (state.output_dashboard_lines or 0) + 1,
+			start_line = 1,
 		})
 		table.insert(
 			lines,
@@ -8588,7 +8555,6 @@ function M.send()
 	state.busy = true
 	state.streaming = false
 	state.run_status = nil
-	state.run_status_line = nil
 
 	clear_input(state)
 	append_lines(state, { "", "You", "" })

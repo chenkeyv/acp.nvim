@@ -14,12 +14,10 @@ This plugin provides an editor-native ACP chat surface:
 - source preview windows for diagnostics, LSP location, symbol, code-action, inlay-hint, selection-range, and Tree-sitter pickers
 - plain output buffer for streamed agent responses
 - shared Nerd Font iconography across prompt ribbons, sessions, source overlays, output signs, maps, pickers, and action chips
-- iconized output dashboard with source, model, context window, transcript metrics, and key workflow hints
 - live transcript metrics for sections, code blocks, source locations, and changes
 - output-visible run status for active prompts, tools, and completion
 - live output winbar/title with status, model, context, item position, and changed-file counts
 - cursor-aware output breadcrumb showing the active transcript section
-- cursor-aware current-section highlighting in the output buffer
 - cursor-aware current-item highlighting for references, code blocks, and problems
 - unified output item picker for references, code blocks, and problems with previews
 - searchable output transcript picker with progress, context previews, and jump-to-line navigation
@@ -42,7 +40,6 @@ This plugin provides an editor-native ACP chat surface:
 - sign-column markers for transcript sections, references, code blocks, run status, tools, files, and errors
 - sparse native statuscolumn rail with section, code-fence, reference, and problem markers
 - native output diagnostics and location-list navigation for transcript errors and stderr
-- cursor-sensitive ghost-text action chips for references, code blocks, errors, and sections
 - optional Tree-sitter Markdown/code-fence language injection with injected-language ranges, body highlights, and animated injection badges
 - floating output outline with progress markers for jumping across long transcripts
 - native folds for collapsing transcript sections
@@ -94,7 +91,7 @@ This plugin provides an editor-native ACP chat surface:
 - floating batch file-write review with winbar status, highlighted diff previews, and apply/cancel keys before edits
 - previewed changed-file picker with quickfix export for files written by the agent
 - floating diagnostics picker for drafting focused fixes
-- floating Markdown input prompt for completion-friendly editing
+- custom-framed Markdown input prompt visually fitted to the output text area for completion-friendly editing
 - native `:checkhealth acp` diagnostics for adapter commands, prompt metadata, blink.cmp, diagnostics, LSP, and Tree-sitter
 - `codex-acp` and `claude-agent-acp` adapter presets
 - basic ACP JSON-RPC, session, prompt, permission, terminal, and file read/write support
@@ -311,7 +308,6 @@ In the prompt buffer:
 
 In the output buffer:
 
-- the current line shows ghost-text action chips for references, code blocks, errors, and sections
 - fenced code blocks show injected-language badges, body highlights, and animated motion markers
 - `]]` jumps to the next transcript section
 - `[[` jumps to the previous transcript section
