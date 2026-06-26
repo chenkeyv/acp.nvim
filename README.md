@@ -91,7 +91,7 @@ This plugin provides an editor-native ACP chat surface:
 - floating batch file-write review with winbar status, highlighted diff previews, and apply/cancel keys before edits
 - previewed changed-file picker with quickfix export for files written by the agent
 - floating diagnostics picker for drafting focused fixes
-- custom-framed Markdown input prompt visually fitted to the output text area for completion-friendly editing
+- custom-framed `acp-prompt` input prompt visually fitted to the output text area
 - native `:checkhealth acp` diagnostics for adapter commands, prompt metadata, blink.cmp, diagnostics, LSP, and Tree-sitter
 - `codex-acp` and `claude-agent-acp` adapter presets
 - basic ACP JSON-RPC, session, prompt, permission, terminal, and file read/write support

@@ -2943,7 +2943,34 @@ test("tab input float fits the output text area with padding", function()
 		eq(input_config.row, output_position[1] + output_height - input_config.height - 2 - padding)
 		ok(type(input_config.border[1]) == "table", "input border should use highlighted border chunks")
 		eq(input_config.border[1][2], "AcpPromptBorder")
+		local input_info = vim.fn.getwininfo(input_win)[1] or {}
+		eq(vim.wo[input_win].signcolumn, "yes:1")
+		eq(input_info.textoff, 2)
 		ok(vim.wo[input_win].winhighlight:find("AcpPromptBorder", 1, true))
+		ok(vim.wo[input_win].winhighlight:find("SignColumn:AcpPromptFloat", 1, true))
+		local title_chunks = input_config.title
+		local title_parts = {}
+		for _, chunk in ipairs(title_chunks) do
+			table.insert(title_parts, chunk[1])
+		end
+		local function has_title_chunk(text, hl_group)
+			for _, chunk in ipairs(title_chunks) do
+				if chunk[1]:find(text, 1, true) and chunk[2] == hl_group then
+					return true
+				end
+			end
+			return false
+		end
+		local title_text = table.concat(title_parts)
+		ok(title_text:find(icons.prompt, 1, true))
+		ok(has_title_chunk(icons.model, "AcpPromptTitleModel"))
+		ok(has_title_chunk("test-model", "AcpPromptTitleModel"))
+		ok(has_title_chunk(icons.context, "AcpPromptTitleContext"))
+		ok(has_title_chunk("ctx 1k", "AcpPromptTitleContext"))
+		ok(not title_text:find("<Enter>", 1, true))
+		ok(not title_text:find("<C-Enter>", 1, true))
+		ok(not title_text:find("M-p/M-n", 1, true))
+		ok(not title_text:find("<leader>aq", 1, true))
 	end)
 
 	vim.notify = original_notify
@@ -3058,7 +3085,7 @@ test("output buffer starts blank and shows chrome and section navigation", funct
 		ok(text:find("Agent", 1, true))
 		ok(not text:find("Status:", 1, true))
 		eq(vim.api.nvim_get_current_buf(), input_buf)
-		eq(vim.bo[input_buf].filetype, "markdown")
+		eq(vim.bo[input_buf].filetype, "acp-prompt")
 		eq(vim.bo[output_buf].filetype, "acp")
 		ok(vim.wo[output_win].winbar:find("error: failed to start session", 1, true))
 		marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
@@ -7876,7 +7903,7 @@ test("fix diagnostics command opens a prefilled prompt", function()
 
 	vim.cmd("AcpFixDiagnostics test")
 	local input_buf = vim.api.nvim_get_current_buf()
-	eq(vim.bo[input_buf].filetype, "markdown")
+	eq(vim.bo[input_buf].filetype, "acp-prompt")
 	local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
 	ok(prompt:find("Fix the diagnostics below", 1, true))
 	ok(prompt:find("Context", 1, true))
@@ -7903,7 +7930,7 @@ test("review command opens a range-aware draft prompt", function()
 
 	vim.cmd("1,2AcpReview test")
 	local input_buf = vim.api.nvim_get_current_buf()
-	eq(vim.bo[input_buf].filetype, "markdown")
+	eq(vim.bo[input_buf].filetype, "acp-prompt")
 	local prompt = table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n")
 	ok(prompt:find("Review this code. Prioritize correctness, edge cases, and maintainability.", 1, true))
 	ok(prompt:find("Context", 1, true))

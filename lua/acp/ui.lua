@@ -1744,25 +1744,41 @@ local function format_count(value)
 	return tostring(number)
 end
 
-local function prompt_title(state)
-	local parts = { "Prompt" }
-	local metadata = {}
+local function prompt_title(state, as_chunks)
+	local chunks = {
+		{ " ", "AcpPromptTitle" },
+		{ icons.prompt, "AcpPromptTitle" },
+		{ " Prompt", "AcpPromptTitle" },
+	}
+
+	local function add_gap()
+		table.insert(chunks, { "  ", "AcpPromptTitleMeta" })
+	end
+
+	local function add_icon_text(icon, hl_group, text)
+		add_gap()
+		table.insert(chunks, { icon, hl_group })
+		table.insert(chunks, { (" %s"):format(text), hl_group })
+	end
 
 	if state.model and state.model ~= "" then
-		table.insert(metadata, state.model)
+		add_icon_text(icons.model, "AcpPromptTitleModel", state.model)
 	end
 	if state.context_window then
-		table.insert(metadata, ("ctx %s"):format(format_count(state.context_window)))
-	end
-	if #metadata > 0 then
-		table.insert(parts, table.concat(metadata, " "))
+		add_icon_text(icons.context, "AcpPromptTitleContext", ("ctx %s"):format(format_count(state.context_window)))
 	end
 
-	table.insert(parts, "<Enter> newline")
-	table.insert(parts, "<C-Enter> send")
-	table.insert(parts, "M-p/M-n history")
-	table.insert(parts, "<leader>aq stop")
-	return (" %s "):format(table.concat(parts, "  "))
+	table.insert(chunks, { " ", "AcpPromptTitle" })
+
+	if as_chunks then
+		return chunks
+	end
+
+	local parts = {}
+	for _, chunk in ipairs(chunks) do
+		table.insert(parts, chunk[1])
+	end
+	return table.concat(parts)
 end
 
 local function refresh_prompt_chrome(state)
@@ -1778,7 +1794,7 @@ local function refresh_prompt_chrome(state)
 
 	local win_config = vim.api.nvim_win_get_config(state.input_win)
 	if win_config.relative ~= "" then
-		win_config.title = { { title, "AcpPromptTitle" } }
+		win_config.title = prompt_title(state, true)
 		pcall(vim.api.nvim_win_set_config, state.input_win, win_config)
 	end
 end
@@ -3213,7 +3229,7 @@ local function input_float_config(state)
 		height = input_height,
 		style = "minimal",
 		border = prompt_frame.copy_border(),
-		title = { { prompt_title(state), "AcpPromptTitle" } },
+		title = prompt_title(state, true),
 		title_pos = "left",
 		zindex = 50,
 	}
@@ -3261,8 +3277,9 @@ local function apply_window_options(state)
 	end
 
 	if valid_win(state.input_win) and state.mode ~= "window" then
+		vim.wo[state.input_win].signcolumn = "yes:1"
 		vim.wo[state.input_win].winhighlight =
-			"NormalFloat:AcpPromptFloat,FloatBorder:AcpPromptBorder,FloatTitle:AcpPromptTitle"
+			"NormalFloat:AcpPromptFloat,FloatBorder:AcpPromptBorder,FloatTitle:AcpPromptTitle,SignColumn:AcpPromptFloat"
 	end
 
 	if state.mode ~= "float" and state.mode == "window" and valid_win(state.input_win) then
@@ -3296,7 +3313,7 @@ local function apply_float_layout(state)
 		height = dims.input_height,
 		style = "minimal",
 		border = prompt_frame.copy_border(),
-		title = { { prompt_title(state), "AcpPromptTitle" } },
+		title = prompt_title(state, true),
 		title_pos = "left",
 		zindex = 50,
 	}
@@ -3437,7 +3454,7 @@ local function create_buffers(state)
 	set_buf_options(state.input_buf, {
 		bufhidden = "wipe",
 		buftype = "nofile",
-		filetype = "markdown",
+		filetype = "acp-prompt",
 		swapfile = false,
 	})
 	vim.b[state.input_buf].acp_blink_source = true
