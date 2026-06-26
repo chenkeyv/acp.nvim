@@ -44,6 +44,18 @@ local function clean(value)
 	return tostring(value):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+function M.is_agent_header(line)
+	return line == "Agent" or tostring(line or ""):match("^Agent:%s+") ~= nil
+end
+
+function M.agent_status_line(status)
+	status = clean(status)
+	if not status then
+		return "Agent"
+	end
+	return ("Agent: %s"):format(status)
+end
+
 local function normalize_path(path)
 	if not path or path == "" then
 		return nil
@@ -362,7 +374,7 @@ function M.line_style(line)
 			sign_text = icons.user,
 		}
 	end
-	if line == "Agent" then
+	if M.is_agent_header(line) then
 		return {
 			line_hl_group = "AcpAgentHeader",
 			sign_text = icons.agent,
@@ -435,7 +447,7 @@ end
 
 function M.is_section(line)
 	return line == "You"
-		or line == "Agent"
+		or M.is_agent_header(line)
 		or line:match("^ACP:")
 		or line:match("^Status:")
 		or line:match("^Tool")
@@ -450,7 +462,7 @@ local function section_label(line)
 	if line == "You" then
 		return "USER", "Prompt"
 	end
-	if line == "Agent" then
+	if M.is_agent_header(line) then
 		return "AGENT", "Response"
 	end
 	if line:match("^ACP:") then

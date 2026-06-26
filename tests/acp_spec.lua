@@ -1013,6 +1013,8 @@ test("output line and section helpers are rendered", function()
 	eq(acp_output.line_style("You").separator, nil)
 	eq(acp_output.line_style("Agent").sign_text, icons.agent)
 	eq(acp_output.line_style("Agent").separator, nil)
+	eq(acp_output.line_style("Agent: streaming").sign_text, icons.agent)
+	eq(acp_output.agent_status_line("stopped: end_turn"), "Agent: stopped: end_turn")
 	eq(acp_output.line_style("ACP: test").sign_text, icons.session)
 	eq(acp_output.line_style("ACP: test").badge, nil)
 	eq(acp_output.line_style("Transcript: 1 section | 0 code | 0 locs | 0 changes").line_hl_group, "AcpOutputMeta")
@@ -1036,6 +1038,9 @@ test("output line and section helpers are rendered", function()
 	eq(#sections, 3)
 	eq(sections[2].kind, "USER")
 	eq(sections[2].preview, "hello")
+	local agent_status_sections = acp_output.sections({ "You", "hello", "Agent: stopped: end_turn", "world" })
+	eq(agent_status_sections[2].kind, "AGENT")
+	eq(agent_status_sections[2].title, "Response")
 	local terminal_sections = acp_output.sections({ "Terminal output truncated to the configured byte limit." })
 	eq(terminal_sections[1].kind, "TERM")
 	eq(terminal_sections[1].title, "Output truncated")
@@ -1097,6 +1102,7 @@ test("output line and section helpers are rendered", function()
 	eq(acp_output.statuscolumn_marker(rail_lines, 1), icons.session)
 	eq(acp_output.statuscolumn_marker(rail_lines, 3), icons.user)
 	eq(acp_output.statuscolumn_marker(rail_lines, 4), "  ")
+	eq(acp_output.statuscolumn_marker({ "Agent: streaming" }, 1), icons.agent)
 	eq(acp_output.statuscolumn_marker({ "Status: error: failed" }, 1), icons.error)
 	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 2), icons.code)
 	eq(acp_output.statuscolumn_marker({ "Agent", "```lua", "print(1)", "```" }, 3), "  ")
@@ -3080,7 +3086,8 @@ test("output buffer starts blank and shows chrome and section navigation", funct
 		local text = table.concat(lines, "\n")
 		ok(text:find("You", 1, true))
 		ok(text:find("Agent", 1, true))
-		ok(not text:find("Status:", 1, true))
+		ok(not text:find("Agent: connecting", 1, true))
+		ok(text:find("Status: error: failed to start session", 1, true))
 		eq(vim.api.nvim_get_current_buf(), input_buf)
 		eq(vim.bo[input_buf].filetype, "acp-prompt")
 		eq(vim.bo[output_buf].filetype, "acp")
@@ -3145,16 +3152,6 @@ test("output buffer starts blank and shows chrome and section navigation", funct
 		ok(not updated_output:find("Transcript:", 1, true))
 		local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
 		local output_diagnostics = vim.diagnostic.get(output_buf, { namespace = output_diagnostic_ns })
-		eq(#output_diagnostics, 0)
-		vim.bo[output_buf].modifiable = true
-		vim.api.nvim_buf_set_lines(output_buf, -1, -1, false, {
-			"",
-			"stderr:",
-			"failed to start session",
-			"",
-		})
-		vim.bo[output_buf].modifiable = false
-		vim.api.nvim_exec_autocmds("TextChanged", { buffer = output_buf })
 		lines = vim.api.nvim_buf_get_lines(output_buf, 0, -1, false)
 		output_diagnostics = vim.diagnostic.get(output_buf, { namespace = output_diagnostic_ns })
 		eq(#output_diagnostics, 1)
@@ -3162,7 +3159,7 @@ test("output buffer starts blank and shows chrome and section navigation", funct
 		ok(output_diagnostics[1].message:find("failed to start session", 1, true))
 		local problem_line
 		for index, output_line in ipairs(lines) do
-			if output_line:find("stderr:", 1, true) then
+			if output_line:find("Status: error", 1, true) then
 				problem_line = index
 				break
 			end
@@ -3894,6 +3891,101 @@ test("output buffer starts blank and shows chrome and section navigation", funct
 		pcall(vim.api.nvim_buf_delete, source_buf, { force = true })
 	end
 	vim.api.nvim_set_current_buf(vim.api.nvim_create_buf(true, true))
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("agent status header keeps a blank row before streamed content", function()
+	local script = vim.fn.tempname()
+	vim.fn.writefile({
+		"#!/bin/sh",
+		"while IFS= read -r line; do",
+		"  case \"$line\" in",
+		"    *'\"method\":\"initialize\"'*)",
+		"      printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"authMethods\":[]}}'",
+		"      ;;",
+		"    *'\"method\":\"session/new\"'*)",
+		"      printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"sessionId\":\"session-1\"}}'",
+		"      ;;",
+		"    *'\"method\":\"session/prompt\"'*)",
+		"      printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"session-1\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"answer\"}}}}'",
+		"      printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"stopReason\":\"end_turn\"}}'",
+		"      ;;",
+		"  esac",
+		"done",
+	}, script)
+	vim.fn.setfperm(script, "rwx------")
+
+	require("acp").setup({
+		default_adapter = "test",
+		default_mode = "window",
+		adapters = {
+			test = {
+				command = { "missing-acp-test-command" },
+				timeout_ms = 10,
+				metadata = {
+					model = "test-model",
+					context_window = 1000,
+				},
+			},
+			stream = {
+				command = { "sh", script },
+				timeout_ms = 1000,
+			},
+		},
+	})
+
+	local input_buf
+	local output_buf
+	local original_notify = vim.notify
+	vim.notify = function() end
+
+	local passed, err = pcall(function()
+		vim.cmd("AcpChatWindow stream")
+		input_buf = vim.api.nvim_get_current_buf()
+		local output_name = vim.api.nvim_buf_get_name(input_buf):gsub("/input$", "/output")
+		for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+			if vim.api.nvim_buf_get_name(bufnr) == output_name then
+				output_buf = bufnr
+				break
+			end
+		end
+		ok(output_buf, "stream output buffer should exist")
+
+		vim.api.nvim_buf_set_lines(input_buf, 0, -1, false, { "hello" })
+		vim.cmd("AcpSend")
+		ok(
+			vim.wait(1000, function()
+				local text = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), "\n")
+				return text:find("Agent: stopped: end_turn", 1, true)
+					and text:find("answer", 1, true)
+			end, 10),
+			"streamed response should finish"
+		)
+
+		local lines = vim.api.nvim_buf_get_lines(output_buf, 0, -1, false)
+		local agent_line
+		for index, line in ipairs(lines) do
+			if line == "Agent: stopped: end_turn" then
+				agent_line = index
+				break
+			end
+		end
+		ok(agent_line, "agent status header should be present")
+		eq(lines[agent_line + 1], "")
+		eq(lines[agent_line + 2], "answer")
+	end)
+
+	pcall(vim.cmd, "AcpCloseAll")
+	vim.notify = original_notify
+	vim.fn.delete(script)
+	if input_buf and vim.api.nvim_buf_is_valid(input_buf) then
+		pcall(vim.api.nvim_buf_delete, input_buf, { force = true })
+	end
+	if output_buf and vim.api.nvim_buf_is_valid(output_buf) then
+		pcall(vim.api.nvim_buf_delete, output_buf, { force = true })
+	end
 	if not passed then
 		error(err, 2)
 	end

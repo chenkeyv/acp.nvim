@@ -1563,7 +1563,168 @@ local function follow_output(state)
 	pcall(vim.api.nvim_win_set_cursor, state.output_win, { line_count, 0 })
 end
 
+local output_status = {}
+
+local function agent_status_attaches(state, status)
+	if not status or status == "" then
+		return false
+	end
+	if status:match("^error:") or status:match("^restor") then
+		return false
+	end
+	return state.busy or status:match("^stopped") ~= nil
+end
+
+function output_status.line_index(state)
+	if not valid_buf(state.output_buf) or not state.run_status_line then
+		return nil
+	end
+
+	local row = tonumber(state.run_status_line)
+	local line_count = vim.api.nvim_buf_line_count(state.output_buf)
+	if not row or row < 0 or row >= line_count then
+		state.run_status_line = nil
+		return nil
+	end
+
+	local line = vim.api.nvim_buf_get_lines(state.output_buf, row, row + 1, false)[1] or ""
+	if not line:match("^Status:") then
+		state.run_status_line = nil
+		return nil
+	end
+
+	return row
+end
+
+function output_status.agent_line_index(state)
+	if not valid_buf(state.output_buf) then
+		return nil
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	for index = #lines, 1, -1 do
+		if output.is_agent_header(lines[index]) then
+			state.run_status_agent_line = index - 1
+			return index - 1
+		end
+	end
+end
+
+function output_status.clear(state)
+	local row = output_status.line_index(state)
+	if not row then
+		return false
+	end
+
+	set_output_lines(state, row, row + 1, {})
+	state.run_status_line = nil
+	return true
+end
+
+function output_status.clear_agent(state)
+	local row = output_status.agent_line_index(state)
+	if not row then
+		return false
+	end
+
+	local line = vim.api.nvim_buf_get_lines(state.output_buf, row, row + 1, false)[1] or ""
+	if line == "Agent" then
+		return false
+	end
+
+	set_output_lines(state, row, row + 1, { "Agent" })
+	state.run_status_agent_line = nil
+	return true
+end
+
+function output_status.attach_to_agent(state)
+	if not agent_status_attaches(state, state.run_status) then
+		return false
+	end
+
+	output_status.clear(state)
+	local row = output_status.agent_line_index(state)
+	if not row then
+		return false
+	end
+
+	set_output_lines(state, row, row + 1, { output.agent_status_line(state.run_status) })
+	state.run_status_agent_line = row
+	return true
+end
+
+function output_status.write(state)
+	if not valid_buf(state.output_buf) or not state.run_status or state.run_status == "" then
+		return
+	end
+
+	if output_status.attach_to_agent(state) then
+		return
+	end
+
+	output_status.clear_agent(state)
+	local line = ("Status: %s"):format(state.run_status)
+	local row = output_status.line_index(state)
+	if row then
+		set_output_lines(state, row, row + 1, { line })
+		state.run_status_line = row
+		return
+	end
+
+	local current = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	if #current == 1 and current[1] == "" then
+		set_output_lines(state, 0, -1, { line })
+		state.run_status_line = 0
+		return
+	end
+
+	set_output_lines(state, -1, -1, { line })
+	state.run_status_line = vim.api.nvim_buf_line_count(state.output_buf) - 1
+end
+
+function output_status.restore(state, status)
+	if status and status ~= "" then
+		state.run_status = status
+		output_status.write(state)
+	end
+end
+
+function output_status.ensure_agent_content_gap(state)
+	if not valid_buf(state.output_buf) then
+		return
+	end
+
+	local row = output_status.agent_line_index(state)
+	if not row then
+		return
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, row + 1, -1, false)
+	local blank_count = 0
+	for _, line in ipairs(lines) do
+		if line == "" then
+			blank_count = blank_count + 1
+		else
+			return
+		end
+	end
+
+	local missing = 2 - blank_count
+	if missing <= 0 then
+		return
+	end
+
+	local insert_at = row + 1 + blank_count
+	local blanks = {}
+	for _ = 1, missing do
+		table.insert(blanks, "")
+	end
+	set_output_lines(state, insert_at, insert_at, blanks)
+end
+
 local function append_lines(state, lines)
+	local status = state.run_status
+	output_status.clear(state)
 	if valid_buf(state.output_buf) then
 		local current = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 		if #current == 1 and current[1] == "" then
@@ -1572,12 +1733,14 @@ local function append_lines(state, lines)
 				table.remove(replacement, 1)
 			end
 			set_output_lines(state, 0, -1, replacement)
+			output_status.restore(state, status)
 			follow_output(state)
 			return
 		end
 	end
 
 	set_output_lines(state, -1, -1, lines)
+	output_status.restore(state, status)
 	follow_output(state)
 end
 
@@ -1586,12 +1749,15 @@ local function append_text(state, text)
 		return
 	end
 
+	local status = state.run_status
+	output_status.clear(state)
 	local line_count = vim.api.nvim_buf_line_count(state.output_buf)
 	local last = vim.api.nvim_buf_get_lines(state.output_buf, line_count - 1, line_count, false)[1] or ""
 	local parts = vim.split(text, "\n", { plain = true })
 
 	if #parts == 1 then
 		set_output_lines(state, line_count - 1, line_count, { last .. parts[1] })
+		output_status.restore(state, status)
 		follow_output(state)
 		return
 	end
@@ -1602,6 +1768,7 @@ local function append_text(state, text)
 	end
 
 	set_output_lines(state, line_count - 1, line_count, replacement)
+	output_status.restore(state, status)
 	follow_output(state)
 end
 
@@ -1707,11 +1874,12 @@ local function set_run_status(state, status)
 		return
 	end
 
-	if state.run_status == status then
+	if state.run_status == status and output_status.line_index(state) then
 		return
 	end
 
 	state.run_status = status
+	output_status.write(state)
 	stop_output_animation(state)
 	refresh_output_chrome(state)
 	refresh_source_marks(state)
@@ -4281,6 +4449,9 @@ local function append_role_text(state, role, text)
 	if state.stream_role ~= role then
 		append_lines(state, { "", role, "" })
 		state.stream_role = role
+	end
+	if role == "Agent" then
+		output_status.ensure_agent_content_gap(state)
 	end
 	append_text(state, text)
 end
@@ -8568,6 +8739,7 @@ function M.send()
 	state.busy = true
 	state.streaming = false
 	state.run_status = nil
+	output_status.clear(state)
 
 	clear_input(state)
 	append_lines(state, { "", "You", "" })

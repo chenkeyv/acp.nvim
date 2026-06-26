@@ -117,6 +117,7 @@ end
 local function is_transcript_section(line)
 	return line == "You"
 		or line == "Agent"
+		or line:match("^Agent:%s+")
 		or line:match("^ACP:")
 		or line:match("^Status:")
 		or line:match("^Tool")
@@ -151,6 +152,7 @@ local function transcript_metrics(lines)
 		if
 			line == "You"
 			or line == "Agent"
+			or line:match("^Agent:%s+")
 			or line:match("^ACP:")
 			or line:match("^Status:")
 			or line:match("^Tool")
