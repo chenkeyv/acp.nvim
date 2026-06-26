@@ -16,7 +16,7 @@ This plugin provides an editor-native ACP chat surface:
 - shared Nerd Font iconography across prompt ribbons, sessions, source overlays, output signs, maps, pickers, and action chips
 - live transcript metrics for sections, code blocks, source locations, and changes
 - output-visible run status for active prompts, tools, and completion
-- live output winbar/title with status, model, context, item position, and changed-file counts
+- live output winbar/title with the colored current section
 - cursor-aware output breadcrumb showing the active transcript section
 - cursor-aware current-item highlighting for references, code blocks, and problems
 - unified output item picker for references, code blocks, and problems with previews

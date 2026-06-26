@@ -780,12 +780,10 @@ function refresh_output_chrome(state)
 	end
 
 	local current_section
-	local current_item
 	if valid_buf(state.output_buf) and vim.api.nvim_win_get_buf(state.output_win) == state.output_buf then
 		local cursor = vim.api.nvim_win_get_cursor(state.output_win)
 		local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 		current_section = output.current_section(lines, cursor[1])
-		current_item = output.current_output_item(lines, cursor[1], cursor[2], { cwd = state.cwd })
 	end
 	refresh_current_output_section(state)
 	refresh_current_output_item(state)
@@ -794,7 +792,6 @@ function refresh_output_chrome(state)
 	local title = output.window_title(state, {
 		change_count = changes.count(state),
 		current_section = current_section,
-		current_item = current_item,
 	})
 	local win_config = vim.api.nvim_win_get_config(state.output_win)
 	if win_config.relative ~= "" then
@@ -804,7 +801,6 @@ function refresh_output_chrome(state)
 		vim.wo[state.output_win].winbar = output.winbar(state, {
 			change_count = changes.count(state),
 			current_section = current_section,
-			current_item = current_item,
 		})
 	end
 end
@@ -3271,7 +3267,7 @@ local function apply_window_options(state)
 		vim.wo[state.output_win].foldcolumn = "1"
 		vim.wo[state.output_win].signcolumn = "yes:1"
 		pcall(function()
-			vim.wo[state.output_win].statuscolumn = "%s%C%#AcpOutputRail#%{v:lua.acp_nvim_output_statuscolumn()}%* "
+			vim.wo[state.output_win].statuscolumn = "%s%C "
 		end)
 		refresh_output_chrome(state)
 	end
@@ -8632,18 +8628,6 @@ function _G.acp_nvim_output_foldtext()
 		return ""
 	end
 	return require("acp.output").fold_text(lines, vim.v.foldstart, vim.v.foldend)
-end
-
-function _G.acp_nvim_output_statuscolumn()
-	local bufnr = vim.api.nvim_get_current_buf()
-	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, 0, -1, false)
-	if not ok then
-		return "  "
-	end
-	local state = states[bufnr]
-	return require("acp.output").statuscolumn_marker(lines, vim.v.lnum, {
-		cwd = state and state.cwd,
-	})
 end
 
 return M

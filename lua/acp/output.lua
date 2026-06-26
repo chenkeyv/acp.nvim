@@ -203,48 +203,29 @@ local function progress_bar(line, total, width)
 	return string.rep(icons.pulse_full, filled) .. string.rep(icons.pulse_empty, width - filled)
 end
 
-local function title_parts(state, opts)
+local function title_entries(state, opts)
 	opts = opts or {}
-	local parts = {
-		("%s ACP %s #%s"):format(icons.session, clean(state and state.adapter) or "?", tostring(state and state.id or "?")),
-		("%s %s"):format(icons.status, clean(state and state.run_status) or (state and state.busy and "running" or "idle")),
-	}
+	local entries = {}
 
-	local model = clean(state and state.model)
-	if model then
-		table.insert(parts, ("%s %s"):format(icons.model, model))
-	end
-	local context_window = clean(state and state.context_window)
-	if context_window then
-		table.insert(parts, ("%s ctx %s"):format(icons.context, format_count(context_window)))
-	end
-	if opts.change_count and opts.change_count > 0 then
-		table.insert(parts, ("%s %d change(s)"):format(icons.changes, opts.change_count))
-	end
-	if opts.current_item then
-		local item_label = clean(opts.current_item.label) or opts.current_item.kind or "item"
-		if #item_label > 36 then
-			item_label = item_label:sub(1, 33) .. "..."
-		end
-		table.insert(
-			parts,
-			("%s item %d/%d %s: %s"):format(
-				icons.map,
-				opts.current_item.index or 1,
-				opts.current_item.total or 1,
-				(opts.current_item.kind or "item"):upper(),
-				item_label
-			)
-		)
-	end
 	if opts.current_section then
 		local section_title = clean(opts.current_section.title) or opts.current_section.kind or "section"
 		if #section_title > 36 then
 			section_title = section_title:sub(1, 33) .. "..."
 		end
-		table.insert(parts, ("%s at %s: %s"):format(icons.section, opts.current_section.kind or "SECTION", section_title))
+		table.insert(entries, {
+			text = ("%s at %s: %s"):format(icons.section, opts.current_section.kind or "SECTION", section_title),
+			hl = "AcpOutputWinbarSection",
+		})
 	end
 
+	return entries
+end
+
+local function title_parts(state, opts)
+	local parts = {}
+	for _, entry in ipairs(title_entries(state, opts)) do
+		table.insert(parts, entry.text)
+	end
 	return parts
 end
 
@@ -252,8 +233,20 @@ function M.window_title(state, opts)
 	return (" %s "):format(table.concat(title_parts(state, opts), " | "))
 end
 
+local function statusline_chunk(text, hl_group)
+	return ("%%#%s#%s%%*"):format(hl_group, tostring(text or ""):gsub("%%", "%%%%"))
+end
+
 function M.winbar(state, opts)
-	return M.window_title(state, opts):gsub("%%", "%%%%")
+	local chunks = { " " }
+	for index, entry in ipairs(title_entries(state, opts)) do
+		if index > 1 then
+			table.insert(chunks, statusline_chunk(" | ", "AcpOutputWinbarSeparator"))
+		end
+		table.insert(chunks, statusline_chunk(entry.text, entry.hl or "AcpOutputWinbarMeta"))
+	end
+	table.insert(chunks, " ")
+	return table.concat(chunks)
 end
 
 function M.define_highlights()
@@ -307,6 +300,8 @@ function M.define_highlights()
 	vim.api.nvim_set_hl(0, "AcpOutputSkylineDim", { link = "Comment", default = true })
 	vim.api.nvim_set_hl(0, "AcpOutputSpark", { fg = "#ff9e64", bold = true, default = true })
 	vim.api.nvim_set_hl(0, "AcpInjectedCode", { link = "Visual", default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputWinbarSection", { fg = "#ff9e64", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpOutputWinbarSeparator", { link = "Comment", default = true })
 end
 
 function M.activity_lens_chunks(line, frame)

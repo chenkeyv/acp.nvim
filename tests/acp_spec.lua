@@ -1051,14 +1051,14 @@ test("output line and section helpers are rendered", function()
 	ok(
 		acp_output
 			.window_title({ id = 7, adapter = "test" }, { current_section = current })
-			:find(icons.session, 1, true)
-	)
-	ok(acp_output.window_title({ id = 7, adapter = "test" }, { current_section = current }):find(icons.status, 1, true))
-	ok(
-		acp_output
-			.window_title({ id = 7, adapter = "test" }, { current_section = current })
 			:find(icons.section, 1, true)
 	)
+	local colored_winbar = acp_output.winbar({ id = 7, adapter = "test" }, { current_section = current })
+	ok(colored_winbar:find("%#AcpOutputWinbarSection#", 1, true))
+	ok(colored_winbar:find("at USER: Prompt", 1, true))
+	ok(not colored_winbar:find("%#AcpOutputWinbarSession#", 1, true))
+	ok(not colored_winbar:find("%#AcpOutputWinbarSeparator#", 1, true))
+	ok(not colored_winbar:find(icons.status, 1, true))
 	local range = acp_output.section_range({ "ACP: test", "", "You", "hello", "", "Agent", "world" }, 4)
 	eq(range.kind, "USER")
 	eq(range.line1, 3)
@@ -1435,11 +1435,7 @@ test("output line and section helpers are rendered", function()
 	}, 6, ref_line:find(ref_file, 1, true) - 1, {})
 	eq(current_reference.kind, "reference")
 	eq(current_reference.index, 3)
-	ok(
-		acp_output
-			.window_title({ id = 7, adapter = "test" }, { current_item = current_code })
-			:find("item 2/3 CODE", 1, true)
-	)
+	ok(not acp_output.window_title({ id = 7, adapter = "test" }, { current_item = current_code }):find("item 2/3 CODE", 1, true))
 	local problem_items = acp_output.problem_diagnostics({
 		"Status: error: failed to start session",
 		"",
@@ -3023,24 +3019,25 @@ test("output buffer starts blank and shows chrome and section navigation", funct
 		ok(output_win and output_win > 0, "output window should be visible")
 
 		eq(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), { "" })
-		ok(vim.wo[output_win].winbar:find("ACP test #", 1, true))
-		ok(vim.wo[output_win].winbar:find(icons.session, 1, true))
-		ok(vim.wo[output_win].winbar:find(icons.status, 1, true))
+		ok(vim.wo[output_win].winbar:match("^%s*$"), "empty output winbar should contain only padding")
+		ok(not vim.wo[output_win].winbar:find("%#AcpOutputWinbarSeparator#", 1, true))
 		vim.api.nvim_set_current_win(output_win)
 		ok(vim.fn.maparg("<leader>a?", "n", false, true).buffer == 1)
-		ok(vim.wo[output_win].winbar:find(icons.model, 1, true))
-		ok(vim.wo[output_win].winbar:find(icons.context, 1, true))
+		ok(not vim.wo[output_win].winbar:find(icons.session, 1, true))
+		ok(not vim.wo[output_win].winbar:find(icons.status, 1, true))
+		ok(not vim.wo[output_win].winbar:find(icons.model, 1, true))
+		ok(not vim.wo[output_win].winbar:find(icons.context, 1, true))
 		eq(vim.wo[output_win].foldmethod, "expr")
 		ok(vim.wo[output_win].foldexpr:find("acp_nvim_output_foldexpr", 1, true))
 		ok(vim.wo[output_win].foldtext:find("acp_nvim_output_foldtext", 1, true))
 		eq(vim.wo[output_win].foldlevel, 99)
-		eq(vim.wo[output_win].foldcolumn, "1")
-		eq(vim.wo[output_win].signcolumn, "yes:1")
-		eq(vim.wo[output_win].cursorline, false)
-		ok(vim.wo[output_win].statuscolumn:find("acp_nvim_output_statuscolumn", 1, true))
-		ok(
-			vim.b[output_buf].acp_language_injection == "treesitter-markdown"
-				or vim.b[output_buf].acp_language_injection == "fence-detection"
+			eq(vim.wo[output_win].foldcolumn, "1")
+			eq(vim.wo[output_win].signcolumn, "yes:1")
+			eq(vim.wo[output_win].cursorline, false)
+			eq(vim.wo[output_win].statuscolumn, "%s%C ")
+			ok(
+				vim.b[output_buf].acp_language_injection == "treesitter-markdown"
+					or vim.b[output_buf].acp_language_injection == "fence-detection"
 		)
 
 		local function has_virt_line(mark, text)
@@ -3087,7 +3084,7 @@ test("output buffer starts blank and shows chrome and section navigation", funct
 		eq(vim.api.nvim_get_current_buf(), input_buf)
 		eq(vim.bo[input_buf].filetype, "acp-prompt")
 		eq(vim.bo[output_buf].filetype, "acp")
-		ok(vim.wo[output_win].winbar:find("error: failed to start session", 1, true))
+		ok(not vim.wo[output_win].winbar:find("error: failed to start session", 1, true))
 		marks = vim.api.nvim_buf_get_extmarks(output_buf, ns, 0, -1, { details = true })
 		local user_sign = false
 		local agent_sign = false
@@ -3809,9 +3806,10 @@ test("output buffer starts blank and shows chrome and section navigation", funct
 		vim.cmd("AcpOutputNextItem")
 		local item_line = vim.api.nvim_win_get_cursor(output_win)[1]
 		eq(vim.api.nvim_buf_get_lines(output_buf, item_line - 1, item_line, false)[1], "```lua")
-		ok(vim.wo[output_win].winbar:find("item 2/", 1, true))
-		ok(vim.wo[output_win].winbar:find("CODE", 1, true))
-		ok(vim.wo[output_win].winbar:find(icons.map, 1, true))
+		ok(not vim.wo[output_win].winbar:find("item 2/", 1, true))
+		ok(not vim.wo[output_win].winbar:find("%#AcpOutputWinbarItem#", 1, true))
+		ok(vim.wo[output_win].winbar:find("AGENT", 1, true))
+		ok(vim.wo[output_win].winbar:find("%#AcpOutputWinbarSection#", 1, true))
 		local current_item_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_item")
 		local item_marks = vim.api.nvim_buf_get_extmarks(output_buf, current_item_ns, 0, -1, { details = true })
 		local highlighted_code_lines = 0
@@ -3823,7 +3821,8 @@ test("output buffer starts blank and shows chrome and section navigation", funct
 		eq(highlighted_code_lines, 3)
 		vim.cmd("AcpOutputNextItem")
 		eq(vim.api.nvim_win_get_cursor(output_win)[1], ref_line)
-		ok(vim.wo[output_win].winbar:find("REFERENCE", 1, true))
+		ok(not vim.wo[output_win].winbar:find("REFERENCE", 1, true))
+		ok(vim.wo[output_win].winbar:find("AGENT", 1, true))
 		item_marks = vim.api.nvim_buf_get_extmarks(output_buf, current_item_ns, 0, -1, { details = true })
 		eq(#item_marks, 1)
 		vim.cmd("AcpOutputPrevItem")
