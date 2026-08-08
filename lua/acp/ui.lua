@@ -1,5 +1,6 @@
 local Codex = require("acp.codex").Client
 local context = require("acp.context")
+local reloader = require("acp.reload")
 local render = require("acp.render")
 local requests = require("acp.requests")
 
@@ -25,7 +26,9 @@ local defaults = {
 }
 
 local config = vim.deepcopy(defaults)
+local setup_opts = {}
 local client
+local client_managed = false
 local state
 
 local select_model
@@ -96,6 +99,18 @@ local function fresh_state(cwd)
 		threads = nil,
 		tokens = nil,
 	}
+end
+
+local function apply_state_defaults(value)
+	if type(value) ~= "table" then
+		return value
+	end
+	for key, default in pairs(fresh_state(value.cwd)) do
+		if value[key] == nil then
+			value[key] = default
+		end
+	end
+	return value
 end
 
 local function with_modifiable(bufnr, callback)
@@ -610,6 +625,8 @@ local function local_command(text)
 		open_threads()
 	elseif name == "login" then
 		M.login()
+	elseif name == "reload" then
+		reloader.reload()
 	else
 		return false
 	end
@@ -1074,6 +1091,12 @@ function M.open_actions()
 		{ label = "Compact context", run = compact_thread },
 		{ label = "Show status", run = show_status },
 		{ label = "Stop active turn", run = M.stop },
+		{
+			label = "Reload acp.nvim",
+			run = function()
+				reloader.reload()
+			end,
+		},
 	}
 	vim.ui.select(actions, {
 		prompt = "Codex actions",
@@ -1223,13 +1246,8 @@ local function handle_request(method, params, reply)
 	return requests.handle(method, params, reply)
 end
 
-local function make_client()
-	local instance = Codex.new({
-		command = config.command,
-		timeout_ms = config.timeout_ms,
-		client_info = config.client_info,
-		capabilities = config.capabilities,
-		service_name = config.service_name,
+local function client_handlers()
+	return {
 		on_notification = M._handle_notification,
 		on_request = handle_request,
 		on_stderr = handle_stderr,
@@ -1244,7 +1262,24 @@ local function make_client()
 				append_lines({ "", ("> %s"):format(message), "" })
 			end
 		end,
-	})
+	}
+end
+
+local function bind_client(instance)
+	if instance and instance.set_handlers then
+		instance:set_handlers(client_handlers())
+	end
+end
+
+local function make_client()
+	local options = {
+		command = config.command,
+		timeout_ms = config.timeout_ms,
+		client_info = config.client_info,
+		capabilities = config.capabilities,
+		service_name = config.service_name,
+	}
+	local instance = Codex.new(vim.tbl_extend("force", options, client_handlers()))
 	return instance
 end
 
@@ -1259,15 +1294,7 @@ local function create_command(name, callback, opts)
 	vim.api.nvim_create_user_command(name, callback, opts)
 end
 
-function M.setup(opts)
-	if state then
-		M._reset()
-	elseif client then
-		client:stop()
-	end
-	config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
-	client = make_client()
-
+local function register_commands()
 	create_command("AcpChat", function(command)
 		M.open({ prompt = command.args ~= "" and command.args or nil, range = command_range(command) })
 	end, { nargs = "*", range = true })
@@ -1299,7 +1326,12 @@ function M.setup(opts)
 	create_command("AcpSend", M.send)
 	create_command("AcpStop", M.stop)
 	create_command("AcpClose", M.close)
+	create_command("AcpReload", function()
+		reloader.reload()
+	end)
+end
 
+local function register_autocmds()
 	local group = vim.api.nvim_create_augroup("acp.nvim", { clear = true })
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		group = group,
@@ -1309,11 +1341,73 @@ function M.setup(opts)
 			end
 		end,
 	})
+end
+
+local function register_runtime()
+	register_commands()
+	register_autocmds()
+	if state and valid_buf(state.input_buf) and valid_buf(state.output_buf) then
+		set_buffer_keymaps()
+		state.keymaps_set = true
+	end
+	if state then
+		if valid_win(state.output_win) then
+			configure_window(state.output_win, true)
+		end
+		if valid_win(state.input_win) then
+			configure_window(state.input_win, false)
+		end
+		update_chrome()
+	end
+end
+
+function M.setup(opts)
+	if state then
+		M._reset()
+	elseif client then
+		client:stop()
+	end
+	setup_opts = vim.deepcopy(opts or {})
+	config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), setup_opts)
+	client = make_client()
+	client_managed = true
+	register_runtime()
 	return M
 end
 
 function M.get_config()
 	return vim.deepcopy(config)
+end
+
+function M._export_runtime()
+	return {
+		setup_opts = vim.deepcopy(setup_opts),
+		config = vim.deepcopy(config),
+		client = client,
+		client_managed = client_managed,
+		state = state,
+	}
+end
+
+function M._adopt_runtime(runtime)
+	if type(runtime) ~= "table" then
+		error("Invalid acp.nvim runtime")
+	end
+	setup_opts = vim.deepcopy(runtime.setup_opts or {})
+	if runtime.setup_opts ~= nil then
+		config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), setup_opts)
+	else
+		config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), runtime.config or {})
+	end
+	state = apply_state_defaults(runtime.state)
+	client = runtime.client
+	client_managed = runtime.client_managed == true
+	if client_managed and client then
+		client = Codex.adopt(client)
+	end
+	bind_client(client)
+	register_runtime()
+	return M
 end
 
 function M._state()
@@ -1324,17 +1418,14 @@ function M._client()
 	return client
 end
 
-function M._set_client(value)
+function M._set_client(value, opts)
+	opts = opts or {}
 	if client and client ~= value and client.stop then
 		client:stop()
 	end
 	client = value
-	if client and client.set_handlers then
-		client:set_handlers({
-			on_notification = M._handle_notification,
-			on_request = handle_request,
-		})
-	end
+	client_managed = opts.managed == true
+	bind_client(client)
 end
 
 function M._reset()
@@ -1352,6 +1443,7 @@ function M._reset()
 	end
 	state = nil
 	client = nil
+	client_managed = false
 end
 
 return M

@@ -68,6 +68,17 @@ function Client.new(opts)
 	}, Client)
 end
 
+function Client.adopt(instance)
+	if type(instance) ~= "table" then
+		return instance
+	end
+	setmetatable(instance, Client)
+	if type(instance.line_buffer) == "table" then
+		setmetatable(instance.line_buffer, jsonrpc.LineBuffer)
+	end
+	return instance
+end
+
 function Client:set_handlers(handlers)
 	handlers = handlers or {}
 	for _, name in ipairs({ "on_notification", "on_request", "on_stderr", "on_exit", "on_error" }) do

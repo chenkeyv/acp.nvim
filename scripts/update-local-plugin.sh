@@ -153,4 +153,5 @@ if [ -e "$legacy_backup_dir" ]; then
 	echo "  $legacy_backup_dir"
 fi
 echo
-echo "Restart Neovim, then run :checkhealth acp or :AcpChat."
+echo "Run :AcpReload in Neovim to load these changes without ending the current Codex thread."
+echo "If the loaded version predates :AcpReload, restart Neovim once."

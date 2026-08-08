@@ -24,6 +24,8 @@ phase.
 - Codex `request_user_input` questions and basic MCP elicitation when enabled
   by the server's negotiated capabilities
 - review, context compaction, login, and a read-only unified diff view
+- transactional Lua hot reloads that preserve the Codex process, thread, tab,
+  prompt draft, and active turn
 
 Codex app-server owns command execution, file changes, sandboxing, and policy.
 This plugin sends prompts/editor context and displays the server's events and
@@ -103,9 +105,10 @@ require("acp").setup({
 | `:AcpSend` | Send the prompt buffer |
 | `:AcpStop` | Interrupt the active turn |
 | `:AcpClose` | Close the Codex tab without stopping app-server |
+| `:AcpReload` | Reload plugin Lua while preserving the current Codex session and tab |
 
 The prompt also accepts `/model`, `/reasoning`, `/review`, `/compact`,
-`/status`, `/new`, `/threads`, and `/login`.
+`/status`, `/new`, `/threads`, `/login`, and `/reload`.
 
 Codex tab keymaps:
 
@@ -114,6 +117,20 @@ Codex tab keymaps:
 - `n`, `t`, `d`, `m`, `r`, and `s` select new chat, threads, diff, model,
   reasoning, and stop from output
 - `q` closes the Codex tab and returns to the source tab
+
+## Hot reload during development
+
+After updating the files on Neovim's runtime path, run `:AcpReload`. The reload
+is transactional: it keeps the existing app-server process and state tables,
+loads fresh `acp.*` modules, then rebinds server callbacks, commands, keymaps,
+and autocommands. Before unloading anything, it compiles every Lua module under
+`lua/acp/`. If preflight, module loading, or runtime adoption fails, the previous
+modules stay active and the current chat is left untouched. Development
+environments may safely drive this command from their own debounced filesystem
+watcher.
+
+An installation that predates `:AcpReload` needs one final Neovim restart to
+load the command. Later updates can use hot reload.
 
 ## Current scope
 

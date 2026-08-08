@@ -433,6 +433,7 @@ test("setup exposes only the focused Codex command surface", function()
 		"AcpSend",
 		"AcpStop",
 		"AcpClose",
+		"AcpReload",
 	}) do
 		eq(vim.fn.exists(":" .. command), 2)
 	end
@@ -623,6 +624,102 @@ test("health reports the direct app-server architecture", function()
 	contains(text, "Neovim supports vim.system")
 	contains(text, "Codex executable found: sh")
 	contains(text, "codex app-server directly")
+end)
+
+test("hot reload preserves the live client, thread, draft, and Codex tab", function()
+	ui._reset()
+	ui.setup({ auto_context = false, command = { "missing-codex" } })
+	local process = fake_process()
+	local live_client = Client.new({ spawn = process.spawn })
+	live_client:start()
+	live_client.initialized = true
+	local pending_result
+	live_client:request("test/pending", { value = 1 }, function(result, err)
+		pending_result = { result = result, err = err }
+	end)
+	live_client.line_buffer.data = '{"partial":'
+	local pending_requests = live_client.pending
+	local line_buffer = live_client.line_buffer
+	local process_handle = live_client.handle
+	ui._set_client(live_client, { managed = true })
+	ui.open()
+	local state = ui._state()
+	state.thread_id = "thread-hot-reload"
+	state.turn_id = "turn-hot-reload"
+	state.busy = true
+	state.status = "responding"
+	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "preserve this draft" })
+
+	local tabpage = state.tabpage
+	local output_buf = state.output_buf
+	local input_buf = state.input_buf
+	local process_client = ui._client()
+	local reload = require("acp.reload")
+	local current_ui = ui
+	local original_export = ui._export_runtime
+	local bad_file = vim.fn.tempname() .. ".lua"
+	local passed, err = pcall(function()
+		vim.fn.writefile({ "local broken =" }, bad_file)
+		local preflight, preflight_err = reload.reload({ silent = true, _files = { bad_file } })
+		ok(not preflight, "expected invalid Lua to fail reload preflight")
+		contains(preflight_err, "Reload preflight failed")
+		ok(package.loaded["acp.ui"] == ui, "preflight failure must not unload the UI module")
+		ok(ui._client() == process_client, "preflight failure must preserve the app-server client")
+
+		package.preload["acp.ui"] = function()
+			error("simulated reload failure")
+		end
+		local failed, failure = reload.reload({ silent = true })
+		package.preload["acp.ui"] = nil
+		ok(not failed, "expected the simulated reload to fail")
+		contains(failure, "simulated reload failure")
+		ok(package.loaded["acp.ui"] == ui, "expected the previous UI module after rollback")
+		ok(ui._state() == state, "rollback must preserve the state table")
+		ok(ui._client() == process_client, "rollback must preserve the app-server client")
+		ok(process.killed == nil, "rollback must not stop the app-server client")
+
+		ui._export_runtime = nil
+		local reloaded, new_ui = reload.reload({ silent = true })
+		ok(reloaded, new_ui)
+		current_ui = new_ui
+		ok(new_ui ~= ui, "expected a newly loaded UI module")
+		ok(new_ui._state() == state, "expected the same state table")
+		ok(new_ui._client() == process_client, "expected the same app-server client")
+		ok(live_client.handle == process_handle, "expected the same process handle")
+		ok(live_client.pending == pending_requests, "expected the same pending request table")
+		ok(live_client.line_buffer == line_buffer, "expected the same stream buffer")
+		eq(live_client.line_buffer.data, '{"partial":')
+		ok(process.killed == nil, "hot reload must not stop the app-server client")
+		ok(getmetatable(live_client) == require("acp.codex").Client, "expected methods from the reloaded client module")
+		eq(state.thread_id, "thread-hot-reload")
+		eq(state.turn_id, "turn-hot-reload")
+		eq(state.busy, true)
+		eq(state.tabpage, tabpage)
+		eq(state.output_buf, output_buf)
+		eq(state.input_buf, input_buf)
+		eq(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), { "preserve this draft" })
+
+		live_client.on_notification("item/agentMessage/delta", {
+			threadId = "thread-hot-reload",
+			turnId = "turn-hot-reload",
+			itemId = "message-after-reload",
+			delta = "Still connected.",
+		})
+		local output = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), "\n")
+		contains(output, "Still connected.")
+		live_client:handle_message({ id = 0, result = { preserved = true } })
+		eq(pending_result, { result = { preserved = true }, err = nil })
+	end)
+	package.preload["acp.ui"] = nil
+	pcall(vim.fn.delete, bad_file)
+	if package.loaded["acp.ui"] == ui then
+		ui._export_runtime = original_export
+	end
+	current_ui._reset()
+	eq(process.killed, 15)
+	if not passed then
+		error(err, 2)
+	end
 end)
 
 local failures = {}
