@@ -1,5 +1,6 @@
 local Codex = require("acp.codex").Client
 local context = require("acp.context")
+local output_ui = require("acp.output_ui")
 local reloader = require("acp.reload")
 local render = require("acp.render")
 local requests = require("acp.requests")
@@ -208,6 +209,7 @@ local function refresh_output_view(start_row)
 		return
 	end
 	view.refresh_transcript(state.output_buf, start_row)
+	output_ui.refresh(state)
 end
 
 local function set_output(lines)
@@ -391,6 +393,7 @@ function M.close()
 	if not state then
 		return
 	end
+	output_ui.close(state)
 	local current_win = vim.api.nvim_get_current_win()
 	local current_tab = vim.api.nvim_get_current_tabpage()
 	local chat_tab = valid_tab(state.tabpage) and state.tabpage or nil
@@ -439,9 +442,12 @@ local function create_buffers()
 		vim.bo[state.output_buf].buftype = "nofile"
 		vim.bo[state.output_buf].bufhidden = "hide"
 		vim.bo[state.output_buf].swapfile = false
-		vim.bo[state.output_buf].filetype = "markdown"
+		vim.bo[state.output_buf].filetype = "acp"
 		vim.bo[state.output_buf].modifiable = false
 		set_output(render.thread({ turns = {} }, state.cwd))
+	end
+	if vim.bo[state.output_buf].filetype ~= "acp" then
+		vim.bo[state.output_buf].filetype = "acp"
 	end
 	if not valid_buf(state.input_buf) then
 		created = true
@@ -537,6 +543,7 @@ local function normal_window_in_tab(winid, tabpage)
 end
 
 local function open_layout()
+	state._position_prompt = position_prompt
 	if
 		valid_win(state.output_win)
 		and valid_win(state.input_win)
@@ -554,6 +561,7 @@ local function open_layout()
 		configure_sessions_window(state.sessions_win)
 		render_sessions()
 		refresh_output_view(0)
+		pcall(vim.cmd, "redraw")
 		update_chrome()
 		focus_input(false)
 		return
@@ -612,6 +620,7 @@ local function open_layout()
 	end
 	render_sessions()
 	refresh_output_view(0)
+	pcall(vim.cmd, "redraw")
 	update_chrome()
 	focus_input(false)
 end
@@ -929,6 +938,70 @@ local function set_buffer_keymaps()
 		select_reasoning()
 	end, vim.tbl_extend("force", output_opts, { desc = "Select Codex reasoning" }))
 	vim.keymap.set("n", "s", M.stop, vim.tbl_extend("force", output_opts, { desc = "Stop Codex turn" }))
+	vim.keymap.set("n", "]]", function()
+		output_ui.jump_section(state, 1)
+	end, vim.tbl_extend("force", output_opts, { desc = "Next Codex output section" }))
+	vim.keymap.set("n", "[[", function()
+		output_ui.jump_section(state, -1)
+	end, vim.tbl_extend("force", output_opts, { desc = "Previous Codex output section" }))
+	vim.keymap.set("n", "]o", function()
+		output_ui.jump_item(state, 1)
+	end, vim.tbl_extend("force", output_opts, { desc = "Next Codex output item" }))
+	vim.keymap.set("n", "[o", function()
+		output_ui.jump_item(state, -1)
+	end, vim.tbl_extend("force", output_opts, { desc = "Previous Codex output item" }))
+	vim.keymap.set("n", "<CR>", function()
+		output_ui.open_current(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex output item" }))
+	vim.keymap.set("n", "K", function()
+		output_ui.inspect(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Inspect Codex output item" }))
+	vim.keymap.set("n", "gf", function()
+		output_ui.open_reference(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex output file reference" }))
+	vim.keymap.set("n", "?", function()
+		output_ui.actions(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Codex output actions" }))
+	vim.keymap.set("n", "<leader>a?", function()
+		output_ui.help(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Codex output help" }))
+	vim.keymap.set("n", "<leader>ax", function()
+		output_ui.search(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Search Codex output" }))
+	vim.keymap.set("n", "<leader>am", function()
+		output_ui.open_map(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex output map" }))
+	vim.keymap.set("n", "<leader>aO", function()
+		output_ui.open_items(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex output items" }))
+	vim.keymap.set("n", "<leader>ay", function()
+		output_ui.yank_section(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Yank Codex output section" }))
+	vim.keymap.set("n", "<leader>ai", function()
+		output_ui.draft_section(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Draft Codex output section" }))
+	vim.keymap.set("n", "<leader>av", function()
+		output_ui.open_outline(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex output outline" }))
+	vim.keymap.set("n", "<leader>ab", function()
+		output_ui.open_code_blocks(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex code blocks" }))
+	vim.keymap.set("n", "<leader>aB", function()
+		output_ui.code_blocks_quickfix(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Send Codex code blocks to quickfix" }))
+	vim.keymap.set("n", "<leader>aY", function()
+		output_ui.yank_code_block(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Yank Codex code block" }))
+	vim.keymap.set("n", "<leader>ag", function()
+		output_ui.open_locations(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex output locations" }))
+	vim.keymap.set("n", "<leader>ae", function()
+		output_ui.open_problems(state)
+	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex output problems" }))
+	vim.keymap.set("n", "<leader>az", "za", vim.tbl_extend("force", output_opts, {
+		desc = "Toggle Codex output fold",
+		remap = false,
+	}))
 
 	if valid_buf(state.sessions_buf) then
 		local sessions_opts = { buffer = state.sessions_buf, silent = true }
@@ -1423,6 +1496,12 @@ function M.open_actions()
 			end,
 		},
 		{ label = "Open latest diff", run = M.open_diff },
+		{
+			label = "Output actions",
+			run = function()
+				output_ui.actions(state)
+			end,
+		},
 		{ label = "Compact context", run = compact_thread },
 		{ label = "Show status", run = show_status },
 		{ label = "Stop active turn", run = M.stop },
@@ -1650,6 +1729,15 @@ local function schedule_prompt_position()
 end
 
 local function register_commands()
+	local function output_action(callback)
+		return function()
+			if not state then
+				M.open()
+			end
+			callback(state)
+		end
+	end
+
 	create_command("AcpChat", function(command)
 		M.open({ prompt = command.args ~= "" and command.args or nil, range = command_range(command) })
 	end, { nargs = "*", range = true })
@@ -1676,6 +1764,30 @@ local function register_commands()
 		start_review(command.args ~= "" and command.args or nil)
 	end, { nargs = "*" })
 	create_command("AcpDiff", M.open_diff)
+	create_command("AcpOutput", output_action(output_ui.open_outline))
+	create_command("AcpOutputMap", output_action(output_ui.open_map))
+	create_command("AcpOutputSearch", output_action(output_ui.search))
+	create_command("AcpOutputItems", output_action(output_ui.open_items))
+	create_command("AcpOutputItemsQuickfix", output_action(output_ui.items_quickfix))
+	create_command("AcpOutputYank", output_action(output_ui.yank_section))
+	create_command("AcpOutputDraft", output_action(output_ui.draft_section))
+	create_command("AcpOutputOpen", output_action(output_ui.open_current))
+	create_command("AcpOutputInspect", output_action(output_ui.inspect))
+	create_command("AcpOutputActions", output_action(output_ui.actions))
+	create_command("AcpOutputHelp", output_action(output_ui.help))
+	create_command("AcpOutputNextItem", output_action(function(value)
+		output_ui.jump_item(value, 1)
+	end))
+	create_command("AcpOutputPrevItem", output_action(function(value)
+		output_ui.jump_item(value, -1)
+	end))
+	create_command("AcpCodeBlocks", output_action(output_ui.open_code_blocks))
+	create_command("AcpCodeBlocksQuickfix", output_action(output_ui.code_blocks_quickfix))
+	create_command("AcpCodeBlockDraft", output_action(output_ui.draft_code_block))
+	create_command("AcpCodeBlockYank", output_action(output_ui.yank_code_block))
+	create_command("AcpOutputLocations", output_action(output_ui.open_locations))
+	create_command("AcpOutputQuickfix", output_action(output_ui.locations_quickfix))
+	create_command("AcpOutputProblems", output_action(output_ui.open_problems))
 	create_command("AcpActions", M.open_actions)
 	create_command("AcpLogin", M.login)
 	create_command("AcpSend", M.send)
@@ -1698,6 +1810,15 @@ local function register_autocmds()
 			view.define_highlights()
 			refresh_output_view(0)
 			update_chrome()
+		end,
+	})
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
+		callback = function(event)
+			if state and event.buf == state.output_buf then
+				output_ui.cursor_moved(state)
+				update_chrome()
+			end
 		end,
 	})
 	vim.api.nvim_create_autocmd("VimLeavePre", {

@@ -2,7 +2,10 @@ local approval = require("acp.approval")
 local Client = require("acp.codex").Client
 local context = require("acp.context")
 local health = require("acp.health")
+local icons = require("acp.icons")
 local jsonrpc = require("acp.jsonrpc")
+local output = require("acp.output")
+local output_ui = require("acp.output_ui")
 local permission = require("acp.permission")
 local render = require("acp.render")
 local requests = require("acp.requests")
@@ -325,17 +328,26 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 		"Use `turn/steer`.",
 		"## Codex",
 		"> Command completed: `nvim --headless`",
+		"> Tool completed: `mcp/read`",
+		"> update `lua/acp/view.lua`",
+		"> Warning: check this result",
+		"> Error: failed to apply change",
+		"### Plan",
 		"```lua",
 	})
 	view.define_highlights()
 	view.refresh_transcript(bufnr, 0)
 	local marks = vim.api.nvim_buf_get_extmarks(bufnr, view.transcript_namespace, 0, -1, { details = true })
 	local groups = {}
+	local signs = {}
 	local concealed = false
 	for _, extmark in ipairs(marks) do
 		local details = extmark[4] or {}
 		if details.hl_group then
 			groups[details.hl_group] = true
+		end
+		if details.sign_text then
+			signs[vim.trim(details.sign_text)] = true
 		end
 		if details.conceal == "" then
 			concealed = true
@@ -346,15 +358,145 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	ok(groups.AcpTranscriptTool)
 	ok(groups.AcpCodeFence)
 	ok(groups.AcpInlineCode)
+	for _, name in ipairs({ "user", "agent", "command", "tool", "changes", "warning", "error", "section", "code" }) do
+		ok(signs[icons.get(name)], ("expected the previous %s icon in the chat sign column"):format(name))
+	end
 	ok(concealed, "expected Markdown role prefixes to be visually concealed")
 	local evaluated = vim.api.nvim_eval_statusline(view.chat_winbar({
 		status = "running command",
 		busy = true,
 		tokens = { totalTokens = 42000, modelContextWindow = 272000 },
 	}), { maxwidth = 49 })
-	ok(evaluated.str:find("^ Codex", 1, false), "chat title should survive narrow-window truncation")
+	contains(evaluated.str, icons.get("agent") .. " Codex")
 	contains(evaluated.str, "running command")
+	local previous_have_nerd_font = vim.g.have_nerd_font
+	vim.g.have_nerd_font = false
+	eq(icons.get("user"), "U")
+	eq(icons.get("code"), "{}")
+	vim.g.have_nerd_font = previous_have_nerd_font
 	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
+test("custom output model restores sections, items, folds, references, and problems", function()
+	local lines = {
+		"## You",
+		"Please inspect the transcript.",
+		"## Codex",
+		"I will check it.",
+		"> Command completed: `nvim --headless`",
+		"> update `lua/acp/view.lua`",
+		"### Plan",
+		"1. Verify behavior",
+		"```lua",
+		"print('ok')",
+		"```",
+		"> Warning: check this result",
+		"> Error: failed to apply change",
+	}
+
+	local sections = output.sections(lines)
+	eq(#sections, 7)
+	eq(sections[1].kind, "USER")
+	eq(sections[2].kind, "AGENT")
+	eq(sections[3].kind, "COMMAND")
+	eq(sections[4].kind, "FILE")
+	eq(sections[5].kind, "PLAN")
+	eq(output.next_section(lines, 1, 1), 3)
+	eq(output.fold_level(lines, 1), ">1")
+	eq(output.fold_level(lines, 2), "1")
+	contains(output.fold_text(lines, 1, 2), "USER")
+
+	local blocks = output.code_blocks(lines)
+	eq(#blocks, 1)
+	eq(blocks[1].filetype, "lua")
+	eq(output.code_block_text(blocks[1]), "print('ok')")
+
+	local references = output.file_references(lines, { cwd = vim.fn.getcwd() })
+	eq(#references, 1)
+	contains(references[1].display_path, "lua/acp/view.lua")
+	eq(references[1].line, 1)
+
+	local diagnostics = output.problem_diagnostics(lines)
+	eq(#diagnostics, 2)
+	eq(diagnostics[1].severity, vim.diagnostic.severity.WARN)
+	eq(diagnostics[2].severity, vim.diagnostic.severity.ERROR)
+
+	local items = output.output_items(lines, { cwd = vim.fn.getcwd() })
+	eq(#items, 4)
+	eq(output.transcript_stats(lines, { cwd = vim.fn.getcwd() }), {
+		sections = 7,
+		code_blocks = 1,
+		locations = 1,
+		changes = 0,
+	})
+	ok(#output.output_map_entries(lines, { cwd = vim.fn.getcwd() }) > #sections)
+end)
+
+test("output UI restores semantic visuals and section drafting", function()
+	local output_buf = vim.api.nvim_create_buf(false, true)
+	local input_buf = vim.api.nvim_create_buf(false, true)
+	local lines = {
+		"## You",
+		"Review `lua/acp/view.lua:1`.",
+		"## Codex",
+		"```lua",
+		"return true",
+		"```",
+		"> Warning: inspect this",
+	}
+	vim.api.nvim_buf_set_lines(output_buf, 0, -1, false, lines)
+	local output_win = vim.api.nvim_open_win(output_buf, false, {
+		relative = "editor",
+		row = 0,
+		col = 0,
+		width = 40,
+		height = 5,
+		style = "minimal",
+	})
+	vim.api.nvim_win_set_cursor(output_win, { 2, lines[2]:find("lua", 1, true) - 1 })
+	local state = {
+		cwd = vim.fn.getcwd(),
+		output_buf = output_buf,
+		output_win = output_win,
+		input_buf = input_buf,
+	}
+
+	output_ui.refresh(state)
+	local visual_marks = vim.api.nvim_buf_get_extmarks(output_buf, output_ui.namespaces.visual, 0, -1, {
+		details = true,
+	})
+	ok(#visual_marks > 0)
+	local reference_highlighted = false
+	for _, extmark in ipairs(visual_marks) do
+		local details = extmark[4] or {}
+		if details.hl_group == "AcpOutputReference" then
+			reference_highlighted = true
+		end
+		ok(not details.sign_text, "transcript references should not add sign icons")
+		if details.virt_text_pos == "right_align" then
+			for _, chunk in ipairs(details.virt_text or {}) do
+				ok(not tostring(chunk[1]):find("REF", 1, true), "transcript references should not add REF badges")
+			end
+		end
+	end
+	ok(reference_highlighted, "transcript references should remain highlighted")
+	local current_marks = vim.api.nvim_buf_get_extmarks(output_buf, output_ui.namespaces.current, 0, -1, {
+		details = true,
+	})
+	ok(#current_marks > 0, "the current reference should remain highlighted")
+	for _, extmark in ipairs(current_marks) do
+		ok(not (extmark[4] or {}).virt_text, "cursor highlights should not add virtual text")
+	end
+	eq(#vim.diagnostic.get(output_buf, { namespace = output_ui.namespaces.diagnostics }), 1)
+	ok(output_ui.yank_section(state))
+	contains(vim.fn.getreg('"'), "Review")
+	ok(output_ui.draft_section(state))
+	contains(table.concat(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), "\n"), "follow-up context")
+
+	output_ui.close(state)
+	vim.api.nvim_win_close(output_win, true)
+	vim.api.nvim_buf_delete(output_buf, { force = true })
+	vim.api.nvim_buf_delete(input_buf, { force = true })
 end)
 
 test("approval requests return Codex decision payloads", function()
@@ -532,6 +674,33 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.api.nvim_tabpage_list_wins(origin_tab), origin_windows)
 		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 3)
 		eq(vim.bo[state.sessions_buf].filetype, "acp-sessions")
+		eq(vim.bo[state.output_buf].filetype, "acp")
+		eq(vim.bo[state.input_buf].filetype, "acp-prompt")
+		eq(vim.wo[state.output_win].foldmethod, "expr")
+		eq(vim.wo[state.output_win].foldexpr, "v:lua.acp_nvim_output_foldexpr()")
+		eq(vim.wo[state.output_win].foldcolumn, "1")
+		local output_keymaps = {}
+		for _, keymap in ipairs(vim.api.nvim_buf_get_keymap(state.output_buf, "n")) do
+			output_keymaps[keymap.desc] = true
+		end
+		for _, description in ipairs({
+			"Next Codex output section",
+			"Previous Codex output item",
+			"Inspect Codex output item",
+			"Search Codex output",
+			"Open Codex output map",
+			"Yank Codex code block",
+		}) do
+			ok(output_keymaps[description], "missing output keymap: " .. description)
+		end
+		eq(vim.fn.exists(":AcpOutputMap"), 2)
+		eq(vim.fn.exists(":AcpOutputItemsQuickfix"), 2)
+		eq(vim.fn.exists(":AcpCodeBlockDraft"), 2)
+		ok(output_ui.open_map(state))
+		ok(vim.api.nvim_win_is_valid(state.output_map_win))
+		eq(vim.api.nvim_win_get_config(state.output_map_win).relative, "win")
+		contains(table.concat(vim.api.nvim_buf_get_lines(state.output_map_buf, 0, -1, false), "\n"), "Output Map")
+		output_ui.close(state)
 		eq(vim.fn.winlayout(), {
 			"row",
 			{
@@ -910,6 +1079,7 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 	state.busy = true
 	state.status = "responding"
 	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "preserve this draft" })
+	vim.bo[state.output_buf].filetype = "markdown"
 
 	local tabpage = state.tabpage
 	local sessions_buf = state.sessions_buf
@@ -964,6 +1134,7 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 		eq(state.output_buf, output_buf)
 		eq(state.input_buf, input_buf)
 		eq(state.input_win, input_win)
+		eq(vim.bo[state.output_buf].filetype, "acp")
 		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
 		eq(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), { "preserve this draft" })
 

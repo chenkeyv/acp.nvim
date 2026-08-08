@@ -16,7 +16,7 @@ phase.
 - one long-lived `codex app-server` process per Neovim instance
 - new, recent, and resumed Codex threads, including VS Code-created threads
 - a persistent left sessions split with the current chat pinned at the top
-- an inset floating prompt with role, status, and tool-aware chat styling
+- an inset floating prompt with role, status, and tool-aware chat styling and icons
 - streamed agent messages and plans
 - command, tool, and file-change summaries
 - model and reasoning-effort selectors from the server catalog
@@ -81,6 +81,13 @@ The prompt floats over reserved blank rows at the bottom of the chat, so it
 does not cover the latest response. `input_height` includes the frame and
 `input_padding` controls its inset from the chat text area.
 
+The chat transcript uses the custom `acp` filetype rather than Markdown, while
+the editable prompt uses `acp-prompt`. This keeps their styling and filetype
+options independent and lets `FileType acp` customizations target only chats.
+Transcript signs reuse the earlier semantic Nerd Font icons for people, tools,
+changes, code, and diagnostics. Set `vim.g.have_nerd_font = false` to use
+compact text fallbacks instead.
+
 The sessions split is scoped to the current working directory, like
 `codex resume` without `--all`. It includes the CLI and VS Code interactive
 sources plus `appServer`, so chats created by acp.nvim remain resumable too.
@@ -113,6 +120,16 @@ require("acp").setup({
 | `:AcpReasoning` | Choose a supported reasoning effort |
 | `:AcpReview [instructions]` | Review uncommitted changes or use custom instructions |
 | `:AcpDiff` | Open the latest unified diff |
+| `:AcpOutput`, `:AcpOutputSearch`, `:AcpOutputMap` | Open the transcript outline, searchable lines, or persistent live map |
+| `:AcpOutputItems[Quickfix]` | Browse references, code blocks, and problems or export them to quickfix |
+| `:AcpOutputOpen`, `:AcpOutputInspect`, `:AcpOutputActions` | Open, preview, or choose actions for the item under the chat cursor |
+| `:AcpOutputYank`, `:AcpOutputDraft` | Yank or draft a follow-up from the current transcript section |
+| `:AcpOutputNextItem`, `:AcpOutputPrevItem` | Move between references, code blocks, and problems |
+| `:AcpCodeBlocks[Quickfix]` | Browse fenced code blocks or export them to quickfix |
+| `:AcpCodeBlockYank`, `:AcpCodeBlockDraft` | Yank or draft the fenced block under the cursor |
+| `:AcpOutputLocations`, `:AcpOutputQuickfix` | Browse local transcript references or export them to quickfix |
+| `:AcpOutputProblems` | Open transcript errors and warnings in the location list |
+| `:AcpOutputHelp` | Open the cursor-aware transcript workflow selector |
 | `:AcpActions` | Open the native action selector |
 | `:AcpLogin` | Inspect account state or start ChatGPT login |
 | `:AcpSend` | Send the prompt buffer |
@@ -130,6 +147,18 @@ Codex tab keymaps:
 - `i` focuses the prompt from output
 - `n`, `t`, `d`, `m`, `r`, and `s` select new chat, sessions, diff, model,
   reasoning, and stop from output
+- `]]` / `[[` move between transcript sections; `]o` / `[o` move between
+  references, code blocks, and problems
+- `<Enter>` opens the item under the cursor, `K` previews it, `gf` opens a
+  local file reference, and `?` opens context-aware output actions
+- `za`, `zM`, and `zR` toggle, close, and open the native transcript folds
+- `<leader>ax`, `<leader>am`, `<leader>aO`, and `<leader>av` open transcript
+  search, the persistent output map, unified items, and the section outline
+- `<leader>ay` / `<leader>ai` yank or draft the current section;
+  `<leader>ab` / `<leader>aB` browse or quickfix code blocks, and
+  `<leader>aY` yanks the current block
+- `<leader>ag` opens local output references and `<leader>ae` opens transcript
+  problems in the location list; `<leader>az` toggles the current fold
 - in the sessions split, `<Enter>` resumes a session, `r` refreshes the list,
   `n` starts a new chat, and `i` focuses the prompt
 - `q` closes the Codex tab and returns to the source tab

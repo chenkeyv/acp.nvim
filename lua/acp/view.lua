@@ -1,3 +1,6 @@
+local icons = require("acp.icons")
+local output = require("acp.output")
+
 local M = {}
 
 local transcript_ns = vim.api.nvim_create_namespace("acp.nvim.transcript")
@@ -56,6 +59,7 @@ local function add_title_chunk(chunks, text, highlight)
 end
 
 function M.define_highlights()
+	output.define_highlights()
 	for name, definition in pairs({
 		AcpPromptFloat = { link = "NormalFloat" },
 		AcpPromptBorder = { fg = "#7aa2f7" },
@@ -86,6 +90,15 @@ function M.define_highlights()
 	end
 end
 
+local function current_section(state)
+	if not state or not valid_buf(state.output_buf) or not valid_win(state.output_win) then
+		return nil
+	end
+	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
+	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
+	return output.current_section(lines, cursor[1])
+end
+
 local function status_highlight(state)
 	local status = tostring(state.status or "idle"):lower()
 	if status:find("error", 1, true) or status == "disconnected" then
@@ -96,12 +109,37 @@ local function status_highlight(state)
 	return "AcpChatStatusOk"
 end
 
+local function status_icon(state)
+	local status = tostring(state.status or "idle"):lower()
+	if status:find("error", 1, true) or status == "disconnected" then
+		return icons.get("error")
+	elseif state.busy or state.starting or status == "stopping" then
+		return icons.get("busy")
+	end
+	return icons.get("idle")
+end
+
 function M.chat_winbar(state)
 	state = state or {}
-	local chunks = { statusline_chunk(" Codex ", "AcpChatTitle") }
+	local chunks = { statusline_chunk((" %s Codex "):format(icons.get("agent")), "AcpChatTitle") }
 	table.insert(chunks, separator())
-	table.insert(chunks, statusline_chunk(state.status or "idle", status_highlight(state)))
+	table.insert(
+		chunks,
+		statusline_chunk(("%s %s"):format(status_icon(state), state.status or "idle"), status_highlight(state))
+	)
 	table.insert(chunks, "%<")
+	local section = current_section(state)
+	if section then
+		local title = tostring(section.title or section.kind or "output")
+		if #title > 32 then
+			title = title:sub(1, 29) .. "..."
+		end
+		table.insert(chunks, separator())
+		table.insert(
+			chunks,
+			statusline_chunk(("%s %s"):format(icons.get("section"), title), "AcpChatMeta")
+		)
+	end
 	if state.tokens then
 		local used = format_count(state.tokens.totalTokens or 0)
 		local window = state.tokens.modelContextWindow
@@ -297,6 +335,12 @@ function M.configure_output_window(winid, reserved_rows)
 	vim.wo[winid].signcolumn = "yes:1"
 	vim.wo[winid].conceallevel = 2
 	vim.wo[winid].concealcursor = "nvic"
+	vim.wo[winid].foldmethod = "expr"
+	vim.wo[winid].foldexpr = "v:lua.acp_nvim_output_foldexpr()"
+	vim.wo[winid].foldtext = "v:lua.acp_nvim_output_foldtext()"
+	vim.wo[winid].foldlevel = 99
+	vim.wo[winid].foldcolumn = "1"
+	vim.wo[winid].statuscolumn = "%s%C "
 	vim.wo[winid].scrolloff = math.max(0, tonumber(reserved_rows) or 0)
 	vim.wo[winid].fillchars = "eob: "
 end
@@ -305,7 +349,7 @@ local function mark(bufnr, row, col, opts)
 	pcall(vim.api.nvim_buf_set_extmark, bufnr, transcript_ns, row, col, opts)
 end
 
-local function highlight_line(bufnr, row, line, highlight, sign_highlight)
+local function highlight_line(bufnr, row, line, highlight, sign_highlight, sign_icon)
 	if line == "" then
 		return
 	end
@@ -315,7 +359,7 @@ local function highlight_line(bufnr, row, line, highlight, sign_highlight)
 		priority = 80,
 	}
 	if sign_highlight then
-		opts.sign_text = "▎"
+		opts.sign_text = sign_icon or icons.get("info")
 		opts.sign_hl_group = sign_highlight
 	end
 	mark(bufnr, row, 0, opts)
@@ -347,6 +391,25 @@ local function highlight_inline_code(bufnr, row, line)
 	end
 end
 
+local function quote_style(content)
+	if content:match("^Error:") or content:match("failed") then
+		return "AcpTranscriptError", "error"
+	elseif content:match("^Warning:") then
+		return "AcpTranscriptWarning", "warning"
+	elseif content:match("^Command") then
+		return "AcpTranscriptTool", "command"
+	elseif content:match("^Tool") then
+		return "AcpTranscriptTool", "tool"
+	elseif content:match("^File changes") or content:match("^[%a%s]+%s+`[^`]+`") then
+		return "AcpTranscriptTool", "changes"
+	elseif content:match("^Context:") then
+		return "AcpTranscriptMeta", "context"
+	elseif content:match("review mode") or content:match("context compacted") then
+		return "AcpTranscriptMeta", "note"
+	end
+	return "AcpTranscriptMeta", "info"
+end
+
 function M.refresh_transcript(bufnr, start_row)
 	if not valid_buf(bufnr) then
 		return
@@ -358,30 +421,23 @@ function M.refresh_transcript(bufnr, start_row)
 		local row = start_row + offset - 1
 		local heading = line:match("^(#+%s+)")
 		if line:match("^##%s+You") then
-			highlight_line(bufnr, row, line, "AcpUserHeader", "AcpUserHeader")
+			highlight_line(bufnr, row, line, "AcpUserHeader", "AcpUserHeader", icons.get("user"))
 			conceal_prefix(bufnr, row, heading)
 		elseif line:match("^##%s+Codex") or line == "# Codex" then
-			highlight_line(bufnr, row, line, "AcpAgentHeader", "AcpAgentHeader")
+			highlight_line(bufnr, row, line, "AcpAgentHeader", "AcpAgentHeader", icons.get("agent"))
 			conceal_prefix(bufnr, row, heading)
 		elseif line:match("^###%s+") then
-			highlight_line(bufnr, row, line, "AcpSectionHeader", "AcpSectionHeader")
+			highlight_line(bufnr, row, line, "AcpSectionHeader", "AcpSectionHeader", icons.get("section"))
 			conceal_prefix(bufnr, row, heading)
 		elseif line:match("^```") then
-			highlight_line(bufnr, row, line, "AcpCodeFence", "AcpCodeFence")
+			highlight_line(bufnr, row, line, "AcpCodeFence", "AcpCodeFence", icons.get("code"))
 		elseif line:match("^Working directory:") then
 			highlight_line(bufnr, row, line, "AcpTranscriptMeta")
 		elseif line:match("^>%s*") then
 			local prefix = line:match("^(>%s*)")
 			local content = line:sub(#prefix + 1)
-			local highlight = "AcpTranscriptMeta"
-			if content:match("^Error:") or content:match("failed") then
-				highlight = "AcpTranscriptError"
-			elseif content:match("^Warning:") then
-				highlight = "AcpTranscriptWarning"
-			elseif content:match("^Command") or content:match("^Tool") or content:match("^File changes") then
-				highlight = "AcpTranscriptTool"
-			end
-			highlight_line(bufnr, row, line, highlight, highlight)
+			local highlight, icon = quote_style(content)
+			highlight_line(bufnr, row, line, highlight, highlight, icons.get(icon))
 			conceal_prefix(bufnr, row, prefix)
 		end
 		if not line:match("^```") then
