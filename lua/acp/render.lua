@@ -35,6 +35,16 @@ local function change_label(change)
 	return status_label(kind.type)
 end
 
+local function failed_status(status)
+	local text = status_label(status)
+	for _, value in ipairs({ "failed", "error", "cancelled", "canceled", "declined", "rejected", "interrupted" }) do
+		if text == value then
+			return true
+		end
+	end
+	return false
+end
+
 function M.item_status(item)
 	if type(item) ~= "table" then
 		return "working"
@@ -59,11 +69,14 @@ end
 
 local function file_change_lines(item)
 	local lines = {}
+	local status = status_label(item.status)
+	local failed = failed_status(item.status)
 	for _, change in ipairs(item.changes or {}) do
-		table.insert(lines, ("> %s `%s`"):format(change_label(change), change.path or "file"))
+		local detail = ("%s `%s`"):format(change_label(change), change.path or "file")
+		table.insert(lines, failed and ("> File changes: %s · %s"):format(status, detail) or ("> " .. detail))
 	end
 	if #lines == 0 then
-		table.insert(lines, ("> File changes: %s"):format(status_label(item.status)))
+		table.insert(lines, ("> File changes: %s"):format(status))
 	end
 	return lines
 end

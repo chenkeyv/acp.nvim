@@ -27,6 +27,11 @@ local defaults = {
 		input_padding = 2,
 		sessions_width = 30,
 	},
+	performance = {
+		stream_interval_ms = 25,
+		semantic_debounce_ms = 200,
+		cursor_interval_ms = 16,
+	},
 }
 
 local config = vim.deepcopy(defaults)
@@ -44,6 +49,7 @@ local compact_thread
 local show_status
 local drain_queue
 local position_prompt
+local flush_output_text
 
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -107,6 +113,11 @@ local function fresh_state(cwd)
 		prompt_spacer_rows = 0,
 		prompt_chrome_key = nil,
 		prompt_layout_pending = false,
+		pending_output_text = nil,
+		output_text_scheduled = false,
+		output_text_generation = 0,
+		cursor_update_pending = false,
+		output_winbar = nil,
 		tokens = nil,
 	}
 end
@@ -204,18 +215,38 @@ local function follow_output(was_at_bottom)
 	pcall(vim.api.nvim_win_set_cursor, state.output_win, { output_content_line_count(), 0 })
 end
 
-local function refresh_output_view(start_row)
+local function performance_delay(name, fallback)
+	local performance = type(config.performance) == "table" and config.performance or {}
+	return math.max(0, tonumber(performance[name]) or fallback)
+end
+
+local function refresh_output_view(start_row, deferred)
 	if not state or not valid_buf(state.output_buf) then
 		return
 	end
 	view.refresh_transcript(state.output_buf, start_row)
-	output_ui.refresh(state)
+	if deferred then
+		output_ui.schedule_refresh(state, performance_delay("semantic_debounce_ms", 200))
+	else
+		output_ui.flush_refresh(state)
+	end
+end
+
+local function cancel_output_text()
+	if not state then
+		return
+	end
+	state.pending_output_text = nil
+	state.output_text_scheduled = false
+	state.output_text_generation = (state.output_text_generation or 0) + 1
 end
 
 local function set_output(lines)
 	if not state or not valid_buf(state.output_buf) then
 		return
 	end
+	cancel_output_text()
+	output_ui.pause_language_injection(state)
 	with_modifiable(state.output_buf, function()
 		state.prompt_spacer_rows = 0
 		vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, lines)
@@ -229,23 +260,26 @@ local function append_lines(lines)
 	if not state or not valid_buf(state.output_buf) or type(lines) ~= "table" or #lines == 0 then
 		return
 	end
+	if flush_output_text then
+		flush_output_text()
+	end
 	local follow = at_output_bottom()
 	local start_row
 	local values = {}
 	for _, line in ipairs(lines) do
 		table.insert(values, tostring(line or ""))
 	end
+	output_ui.pause_language_injection(state)
 	with_modifiable(state.output_buf, function()
-		strip_prompt_space()
-		start_row = vim.api.nvim_buf_line_count(state.output_buf)
-		vim.api.nvim_buf_set_lines(state.output_buf, -1, -1, false, values)
-		restore_prompt_space()
+		local count = vim.api.nvim_buf_line_count(state.output_buf)
+		start_row = math.max(0, count - math.max(0, tonumber(state.prompt_spacer_rows) or 0))
+		vim.api.nvim_buf_set_lines(state.output_buf, start_row, start_row, false, values)
 	end)
-	refresh_output_view(start_row)
+	refresh_output_view(start_row, true)
 	follow_output(follow)
 end
 
-local function append_text(text)
+local function apply_output_text(text)
 	if not state or not valid_buf(state.output_buf) or not text or text == "" then
 		return
 	end
@@ -253,16 +287,51 @@ local function append_text(text)
 	local parts = vim.split(text, "\n", { plain = true })
 	local start_row
 	with_modifiable(state.output_buf, function()
-		strip_prompt_space()
 		local count = vim.api.nvim_buf_line_count(state.output_buf)
-		start_row = math.max(0, count - 1)
-		local last = vim.api.nvim_buf_get_lines(state.output_buf, count - 1, count, false)[1] or ""
+		local spacer_rows = math.max(0, tonumber(state.prompt_spacer_rows) or 0)
+		local content_count = math.max(1, count - spacer_rows)
+		start_row = content_count - 1
+		local last = vim.api.nvim_buf_get_lines(state.output_buf, start_row, start_row + 1, false)[1] or ""
 		parts[1] = last .. parts[1]
-		vim.api.nvim_buf_set_lines(state.output_buf, count - 1, count, false, parts)
-		restore_prompt_space()
+		vim.api.nvim_buf_set_lines(state.output_buf, start_row, start_row + 1, false, parts)
 	end)
-	refresh_output_view(start_row)
+	refresh_output_view(start_row, true)
 	follow_output(follow)
+end
+
+flush_output_text = function()
+	if not state then
+		return
+	end
+	local text = state.pending_output_text
+	state.pending_output_text = nil
+	state.output_text_scheduled = false
+	state.output_text_generation = (state.output_text_generation or 0) + 1
+	if text and text ~= "" then
+		apply_output_text(text)
+	end
+end
+
+local function append_text(text)
+	if not state or not valid_buf(state.output_buf) or not text or text == "" then
+		return
+	end
+	output_ui.pause_language_injection(state)
+	state.pending_output_text = (state.pending_output_text or "") .. text
+	if state.output_text_scheduled then
+		return
+	end
+	state.output_text_scheduled = true
+	state.output_text_generation = (state.output_text_generation or 0) + 1
+	local generation = state.output_text_generation
+	local scheduled_state = state
+	vim.defer_fn(function()
+		if state ~= scheduled_state or scheduled_state.output_text_generation ~= generation then
+			return
+		end
+		scheduled_state.output_text_scheduled = false
+		flush_output_text()
+	end, performance_delay("stream_interval_ms", 25))
 end
 
 local function input_text()
@@ -340,13 +409,22 @@ local function render_sessions()
 	set_sessions(lines)
 end
 
+local function update_output_winbar()
+	if not state or not valid_win(state.output_win) then
+		return
+	end
+	local winbar = view.chat_winbar(state)
+	if state.output_winbar ~= winbar or vim.wo[state.output_win].winbar ~= winbar then
+		vim.wo[state.output_win].winbar = winbar
+		state.output_winbar = winbar
+	end
+end
+
 local function update_chrome()
 	if not state then
 		return
 	end
-	if valid_win(state.output_win) then
-		vim.wo[state.output_win].winbar = view.chat_winbar(state)
-	end
+	update_output_winbar()
 	if valid_win(state.input_win) and position_prompt then
 		position_prompt()
 	end
@@ -358,6 +436,9 @@ end
 
 local function set_status(status)
 	if not state then
+		return
+	end
+	if state.status == status then
 		return
 	end
 	state.status = status
@@ -393,6 +474,7 @@ function M.close()
 	if not state then
 		return
 	end
+	flush_output_text()
 	output_ui.close(state)
 	local current_win = vim.api.nvim_get_current_win()
 	local current_tab = vim.api.nvim_get_current_tabpage()
@@ -1582,6 +1664,7 @@ function M._handle_notification(method, params)
 	elseif method == "item/commandExecution/outputDelta" then
 		set_status("running command")
 	elseif method == "item/completed" then
+		flush_output_text()
 		local item = params.item or {}
 		if item.id then
 			state.items[item.id] = item
@@ -1627,6 +1710,7 @@ function M._handle_notification(method, params)
 		append_lines({ "", "> Conversation context compacted.", "" })
 		set_status("ready")
 	elseif method == "turn/completed" then
+		flush_output_text()
 		local turn = params.turn or {}
 		state.busy = false
 		state.turn_id = nil
@@ -1634,6 +1718,7 @@ function M._handle_notification(method, params)
 			append_lines({ "", ("> Error: %s"):format(turn.error.message or "Turn failed"), "" })
 		end
 		set_status(turn.status or "completed")
+		output_ui.schedule_refresh(state, performance_delay("semantic_debounce_ms", 200))
 		refresh_threads()
 		drain_queue()
 	elseif method == "thread/name/updated" or method == "thread/archived" or method == "thread/unarchived" then
@@ -1728,6 +1813,31 @@ local function schedule_prompt_position()
 	end)
 end
 
+local function defer_semantic_refresh()
+	if state and state.output_refresh_pending and not state.busy then
+		output_ui.schedule_refresh(state, performance_delay("semantic_debounce_ms", 200))
+	end
+end
+
+local function schedule_output_cursor_update()
+	if not state or state.cursor_update_pending or not valid_win(state.output_win) then
+		return
+	end
+	defer_semantic_refresh()
+	local request_state = state
+	state.cursor_update_pending = true
+	vim.defer_fn(function()
+		if state ~= request_state then
+			return
+		end
+		state.cursor_update_pending = false
+		if valid_win(state.output_win) and valid_buf(state.output_buf) then
+			output_ui.cursor_moved(state)
+			update_output_winbar()
+		end
+	end, performance_delay("cursor_interval_ms", 16))
+end
+
 local function register_commands()
 	local function output_action(callback)
 		return function()
@@ -1816,8 +1926,23 @@ local function register_autocmds()
 		group = group,
 		callback = function(event)
 			if state and event.buf == state.output_buf then
-				output_ui.cursor_moved(state)
-				update_chrome()
+				schedule_output_cursor_update()
+			end
+		end,
+	})
+	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+		group = group,
+		callback = function(event)
+			if state and event.buf == state.input_buf then
+				defer_semantic_refresh()
+			end
+		end,
+	})
+	vim.api.nvim_create_autocmd("WinScrolled", {
+		group = group,
+		callback = function(event)
+			if state and tonumber(event.match) == state.output_win then
+				defer_semantic_refresh()
 			end
 		end,
 	})
@@ -1875,6 +2000,10 @@ function M.get_config()
 end
 
 function M._export_runtime()
+	if state then
+		flush_output_text()
+		output_ui.flush_refresh(state)
+	end
 	return {
 		setup_opts = vim.deepcopy(setup_opts),
 		config = vim.deepcopy(config),

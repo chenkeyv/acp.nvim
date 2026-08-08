@@ -423,7 +423,13 @@ function M.line_style(line)
 	end
 	local quote = line:match("^>%s*(.*)")
 	if quote then
-		if quote:match("^Error:") or quote:match("failed") then
+		local exit_code = tonumber(quote:match("^Command.-%(exit%s+([+-]?%d+)%)"))
+		if quote:match("^Error:")
+			or quote:match("failed")
+			or quote:match("cancelled")
+			or quote:match("canceled")
+			or (exit_code ~= nil and exit_code ~= 0)
+		then
 			return { line_hl_group = "AcpError", sign_text = icons.error }
 		elseif quote:match("^Warning:") then
 			return { line_hl_group = "AcpWarning", sign_text = icons.warning }
@@ -501,6 +507,69 @@ function M.line_style(line)
 			sign_text = icons.error,
 		}
 	end
+end
+
+local file_activity_verbs = {
+	add = true,
+	create = true,
+	delete = true,
+	["move to"] = true,
+	rename = true,
+	update = true,
+	write = true,
+}
+
+local failed_activity_statuses = {
+	canceled = true,
+	cancelled = true,
+	declined = true,
+	error = true,
+	failed = true,
+	interrupted = true,
+	rejected = true,
+}
+
+local successful_activity_statuses = {
+	completed = true,
+	done = true,
+	succeeded = true,
+	success = true,
+}
+
+local function activity_header(content)
+	local text = tostring(content or ""):lower()
+	local status = text:match("^command%s+([%a]+)")
+	if status then
+		return "command", status, tonumber(text:match("^command.-%(exit%s+([+-]?%d+)%)%s*:"))
+	end
+	status = text:match("^tool%s+([%a]+)")
+	if status then
+		return "tool", status
+	end
+	status = text:match("^file changes%s*:%s*([%a]+)")
+	if status then
+		return "file", status
+	end
+end
+
+local function unsuccessful_activity(content)
+	local _, status, exit_code = activity_header(content)
+	return failed_activity_statuses[status] == true or (exit_code ~= nil and exit_code ~= 0)
+end
+
+function M.activity_kind(line)
+	local content = tostring(line or ""):match("^>%s*(.*)")
+	if not content then
+		return nil
+	end
+	local kind, status, exit_code = activity_header(content)
+	if kind then
+		return successful_activity_statuses[status] and (exit_code == nil or exit_code == 0) and kind or nil
+	end
+
+	local verb = clean(content:match("^([%a%s]+)%s+`[^`]+`"))
+	verb = verb and verb:lower() or nil
+	return verb and file_activity_verbs[verb] and "file" or nil
 end
 
 function M.is_section(line)
@@ -625,6 +694,101 @@ local function section_icon(kind)
 	return icons.section
 end
 
+local function plural(count, label)
+	return ("%d %s%s"):format(count, label, count == 1 and "" or "s")
+end
+
+function M.activity_summary(group)
+	local counts = (group and group.counts) or {}
+	local parts = {}
+	for _, entry in ipairs({
+		{ "command", "command" },
+		{ "tool", "tool" },
+		{ "file", "file" },
+	}) do
+		local count = tonumber(counts[entry[1]]) or 0
+		if count > 0 then
+			table.insert(parts, plural(count, entry[2]))
+		end
+	end
+	local count = tonumber(group and group.count) or 0
+	local detail = #parts > 0 and table.concat(parts, " · ") or plural(count, "item")
+	return ("%d completed · %s"):format(count, detail)
+end
+
+local function activity_group(lines, line1, line2)
+	local counts = { command = 0, tool = 0, file = 0 }
+	for index = line1, line2 do
+		local kind = M.activity_kind(lines[index])
+		if kind then
+			counts[kind] = counts[kind] + 1
+		end
+	end
+	local group = {
+		kind = "activity",
+		line = line1,
+		line2 = line2,
+		col = 1,
+		count = line2 - line1 + 1,
+		counts = counts,
+		total_lines = #lines,
+	}
+	group.label = M.activity_summary(group)
+	return group
+end
+
+function M.activity_groups(lines)
+	lines = lines or {}
+	local groups = {}
+	local index = 1
+	while index <= #lines do
+		if not M.activity_kind(lines[index]) then
+			index = index + 1
+		else
+			local line1 = index
+			while index <= #lines and M.activity_kind(lines[index]) do
+				index = index + 1
+			end
+			local line2 = index - 1
+			if line2 > line1 then
+				table.insert(groups, activity_group(lines, line1, line2))
+			end
+		end
+	end
+	return groups
+end
+
+function M.activity_group_at(lines, lnum, groups)
+	lines = lines or {}
+	local line = math.max(1, math.min(tonumber(lnum) or 1, #lines))
+	if groups then
+		for _, group in ipairs(groups) do
+			if line >= group.line and line <= group.line2 then
+				return group
+			end
+		end
+		return nil
+	end
+	if not M.activity_kind(lines[line]) then
+		return nil
+	end
+
+	local line1 = line
+	local line2 = line
+	while line1 > 1 and M.activity_kind(lines[line1 - 1]) do
+		line1 = line1 - 1
+	end
+	while line2 < #lines and M.activity_kind(lines[line2 + 1]) do
+		line2 = line2 + 1
+	end
+	return line2 > line1 and activity_group(lines, line1, line2) or nil
+end
+
+function M.activity_fold_text(group)
+	local text = ("%s ACTIVITY  %s  <Enter>/K details"):format(icons.command, M.activity_summary(group))
+	return #text > 120 and (text:sub(1, 117) .. "...") or text
+end
+
 local function preview_after(lines, index)
 	for next_index = index + 1, #lines do
 		local line = clean(lines[next_index])
@@ -637,14 +801,29 @@ end
 function M.sections(lines)
 	local sections = {}
 	local total = #(lines or {})
+	local section_rows = {}
+	local previews = {}
+	local preview
+	for index = total, 1, -1 do
+		local line = lines[index]
+		section_rows[index] = M.is_section(line) and true or false
+		if section_rows[index] then
+			previews[index] = preview
+		else
+			local text = clean(line)
+			if text then
+				preview = text:sub(1, 96)
+			end
+		end
+	end
 	for index, line in ipairs(lines or {}) do
-		if M.is_section(line) then
+		if section_rows[index] then
 			local kind, title = section_label(line)
 			table.insert(sections, {
 				line = index,
 				kind = kind,
 				title = clean(title) or kind,
-				preview = preview_after(lines, index),
+				preview = previews[index],
 				total_lines = total,
 			})
 		end
@@ -872,13 +1051,15 @@ end
 
 local map_kind_priority = {
 	section = 1,
-	problem = 2,
-	code = 3,
-	reference = 4,
+	activity = 2,
+	problem = 3,
+	code = 4,
+	reference = 5,
 }
 
 local map_kind_tokens = {
 	section = icons.section,
+	activity = icons.command,
 	problem = icons.error,
 	code = icons.code,
 	reference = icons.reference,
@@ -890,7 +1071,7 @@ function M.output_map_entries(lines, opts)
 	local entries = {}
 	local total = #lines
 
-	for _, section in ipairs(M.sections(lines)) do
+	for _, section in ipairs(opts.sections or M.sections(lines)) do
 		table.insert(entries, {
 			kind = "section",
 			line = section.line,
@@ -900,7 +1081,7 @@ function M.output_map_entries(lines, opts)
 		})
 	end
 
-	for _, item in ipairs(M.output_items(lines, opts)) do
+	for _, item in ipairs(opts.items or M.output_items(lines, opts)) do
 		table.insert(entries, {
 			kind = item.kind or "item",
 			line = item.line or 1,
@@ -928,6 +1109,7 @@ function M.output_map_summary(entries)
 	local counts = {
 		total = 0,
 		section = 0,
+		activity = 0,
 		problem = 0,
 		code = 0,
 		reference = 0,
@@ -939,10 +1121,11 @@ function M.output_map_summary(entries)
 			counts[kind] = counts[kind] + 1
 		end
 	end
-	return ("%s Entries: %d | sections %d | problems %d | code %d | refs %d"):format(
+	return ("%s Entries: %d | sections %d | activity %d | problems %d | code %d | refs %d"):format(
 		icons.map,
 		counts.total,
 		counts.section,
+		counts.activity,
 		counts.problem,
 		counts.code,
 		counts.reference
@@ -1032,6 +1215,20 @@ function M.output_map_preview(lines, entry)
 	end
 
 	lines = lines or {}
+	if entry.kind == "activity" then
+		local line1 = math.max(1, tonumber(entry.line) or 1)
+		local line2 = math.min(#lines, math.max(line1, tonumber(entry.line2) or line1))
+		local preview = {}
+		for index = line1, line2 do
+			table.insert(preview, lines[index] or "")
+		end
+		return {
+			lines = preview,
+			filetype = "acp",
+			title = (" %s Activity · %d completed "):format(icons.command, #preview),
+			cursor_line = 1,
+		}
+	end
 	if entry.kind == "code" then
 		local block = M.code_block_at(lines, entry.line)
 		if block then
@@ -1562,7 +1759,11 @@ function M.problem_diagnostics(lines)
 		elseif line:match("^>%s*Warning:") then
 			severity = vim.diagnostic.severity.WARN
 			message = clean(line:gsub("^>%s*Warning:%s*", "")) or "Codex warning"
-		elseif line:match("^>%s*Command%s+failed") or line:match("^>%s*Tool%s+failed") then
+		elseif line:match("^>%s*Command%s+failed")
+			or line:match("^>%s*Tool%s+failed")
+			or line:match("^>%s*File changes%s+failed")
+			or unsuccessful_activity(line:match("^>%s*(.*)"))
+		then
 			severity = vim.diagnostic.severity.ERROR
 			message = clean(line:gsub("^>%s*", "")) or "Codex tool failed"
 		elseif line:match("^Status:%s+error") then
@@ -1609,7 +1810,19 @@ function M.current_output_item(lines, lnum, col, opts)
 	local target
 
 	local reference = M.file_reference_at(lines, line_number, col, { cwd = opts.cwd })
-	if reference then
+	local cursor_col = (tonumber(col) or 0) + 1
+	local exact_reference = reference
+		and cursor_col >= (reference.source_col or 1)
+		and cursor_col <= (reference.source_end_col or reference.source_col or 1) + 1
+	local activity = M.activity_group_at(lines, line_number, opts.activities)
+	if activity and opts.prefer_activity then
+		target = {
+			kind = "activity",
+			line = activity.line,
+			line2 = activity.line2,
+			col = 1,
+		}
+	elseif exact_reference then
 		target = {
 			kind = "reference",
 			line = reference.source_line or line_number,
@@ -1630,6 +1843,19 @@ function M.current_output_item(lines, lnum, col, opts)
 				line = line_number,
 				col = 1,
 			}
+		elseif activity then
+			target = {
+				kind = "activity",
+				line = activity.line,
+				line2 = activity.line2,
+				col = 1,
+			}
+		elseif reference then
+			target = {
+				kind = "reference",
+				line = reference.source_line or line_number,
+				col = reference.source_col or 1,
+			}
 		end
 	end
 
@@ -1640,15 +1866,11 @@ function M.current_output_item(lines, lnum, col, opts)
 	local items = M.output_items(lines, opts)
 	for index, item in ipairs(items) do
 		if item.kind == target.kind and item.line == target.line and item.col == target.col then
-			return {
+			return vim.tbl_extend("force", {}, item, {
 				index = index,
 				total = #items,
-				kind = item.kind,
-				line = item.line,
 				line2 = target.line2 or item.line,
-				col = item.col,
-				label = item.label,
-			}
+			})
 		end
 	end
 	return nil
@@ -1662,9 +1884,14 @@ function M.output_items(lines, opts)
 		problem = 1,
 		reference = 2,
 		code = 3,
+		activity = 4,
 	}
+	local diagnostics = opts.diagnostics or M.problem_diagnostics(lines)
+	local references = opts.references or M.file_references(lines, { cwd = opts.cwd })
+	local blocks = opts.blocks or M.code_blocks(lines)
+	local activities = opts.activities or M.activity_groups(lines)
 
-	for _, item in ipairs(M.problem_diagnostics(lines)) do
+	for _, item in ipairs(diagnostics) do
 		table.insert(items, {
 			kind = "problem",
 			line = (item.lnum or 0) + 1,
@@ -1673,16 +1900,17 @@ function M.output_items(lines, opts)
 			total_lines = #lines,
 		})
 	end
-	for _, reference in ipairs(M.file_references(lines, { cwd = opts.cwd })) do
+	for _, reference in ipairs(references) do
 		table.insert(items, {
 			kind = "reference",
 			line = reference.source_line or 1,
 			col = reference.source_col or 1,
+			end_col = reference.source_end_col or reference.source_col or 1,
 			label = ("%s:%d:%d"):format(reference.display_path or reference.path or "?", reference.line or 1, reference.column or 1),
 			total_lines = #lines,
 		})
 	end
-	for _, block in ipairs(M.code_blocks(lines)) do
+	for _, block in ipairs(blocks) do
 		table.insert(items, {
 			kind = "code",
 			line = block.start_line or 1,
@@ -1691,6 +1919,9 @@ function M.output_items(lines, opts)
 			label = ("%s code block"):format(block.language or "text"),
 			total_lines = #lines,
 		})
+	end
+	for _, activity in ipairs(activities) do
+		table.insert(items, vim.tbl_extend("force", {}, activity, { total_lines = #lines }))
 	end
 
 	table.sort(items, function(left, right)
@@ -1706,6 +1937,9 @@ function M.output_items(lines, opts)
 end
 
 local function output_item_icon(kind)
+	if kind == "activity" then
+		return icons.command
+	end
 	if kind == "problem" then
 		return icons.error
 	end
@@ -1910,6 +2144,9 @@ function M.skyline_text(lines, opts)
 end
 
 local function output_item_hl(kind)
+	if kind == "activity" then
+		return "AcpOutputActivityTerminal"
+	end
 	if kind == "problem" then
 		return "AcpBadgeError"
 	end
@@ -2168,9 +2405,28 @@ function M.fold_level(lines, lnum)
 	return "0"
 end
 
+function M.fold_expr(line, lnum, previous_line, next_line)
+	local activity = M.activity_kind(line)
+	local previous_activity = M.activity_kind(previous_line)
+	if activity and (previous_activity or M.activity_kind(next_line)) then
+		return previous_activity and "2" or ">2"
+	end
+	if M.is_section(line) then
+		return ">1"
+	end
+	if previous_activity then
+		return "1"
+	end
+	return (tonumber(lnum) or 1) <= 1 and "0" or "="
+end
+
 function M.fold_text(lines, foldstart, foldend)
 	lines = lines or {}
 	local line = lines[foldstart] or ""
+	local activity = M.activity_group_at(lines, foldstart)
+	if activity and activity.line == foldstart and activity.line2 == (tonumber(foldend) or foldstart) then
+		return M.activity_fold_text(activity)
+	end
 	local kind, title = section_label(line)
 	title = clean(title) or kind
 	local count = math.max(1, (tonumber(foldend) or foldstart) - foldstart + 1)

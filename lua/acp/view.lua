@@ -95,6 +95,22 @@ local function current_section(state)
 		return nil
 	end
 	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
+	local sections = state.output_cache and state.output_cache.sections
+	if sections and #sections > 0 then
+		local low = 1
+		local high = #sections
+		local current
+		while low <= high do
+			local middle = math.floor((low + high) / 2)
+			if (sections[middle].line or 1) <= cursor[1] then
+				current = sections[middle]
+				low = middle + 1
+			else
+				high = middle - 1
+			end
+		end
+		return current
+	end
 	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 	return output.current_section(lines, cursor[1])
 end
@@ -338,7 +354,8 @@ function M.configure_output_window(winid, reserved_rows)
 	vim.wo[winid].foldmethod = "expr"
 	vim.wo[winid].foldexpr = "v:lua.acp_nvim_output_foldexpr()"
 	vim.wo[winid].foldtext = "v:lua.acp_nvim_output_foldtext()"
-	vim.wo[winid].foldlevel = 99
+	-- Keep transcript sections open while completed activity groups start collapsed.
+	vim.wo[winid].foldlevel = 1
 	vim.wo[winid].foldcolumn = "1"
 	vim.wo[winid].statuscolumn = "%s%C "
 	vim.wo[winid].scrolloff = math.max(0, tonumber(reserved_rows) or 0)
@@ -392,7 +409,13 @@ local function highlight_inline_code(bufnr, row, line)
 end
 
 local function quote_style(content)
-	if content:match("^Error:") or content:match("failed") then
+	local exit_code = tonumber(content:match("^Command.-%(exit%s+([+-]?%d+)%)"))
+	if content:match("^Error:")
+		or content:match("failed")
+		or content:match("cancelled")
+		or content:match("canceled")
+		or (exit_code ~= nil and exit_code ~= 0)
+	then
 		return "AcpTranscriptError", "error"
 	elseif content:match("^Warning:") then
 		return "AcpTranscriptWarning", "warning"

@@ -306,6 +306,13 @@ test("thread renderer reconstructs history and diffs", function()
 	ok(not text:find("Working directory:", 1, true), "working-directory metadata belongs in window chrome")
 	eq(render.thread_diff(thread), "--- a\n+++ b")
 	contains(render.thread_label(thread), "Fix the parser")
+	local failed_change = render.completed_item({
+		type = "fileChange",
+		status = "failed",
+		changes = { { path = "lua/acp/ui.lua", kind = { type = "update", move_path = vim.NIL } } },
+	})[1]
+	contains(failed_change, "File changes: failed")
+	eq(output.activity_kind(failed_change), nil)
 end)
 
 test("chat view keeps the prompt inset and styles transcript roles", function()
@@ -404,6 +411,9 @@ test("custom output model restores sections, items, folds, references, and probl
 	eq(output.next_section(lines, 1, 1), 3)
 	eq(output.fold_level(lines, 1), ">1")
 	eq(output.fold_level(lines, 2), "1")
+	eq(output.fold_expr("preamble", 1), "0")
+	eq(output.fold_expr("preamble", 2), "=")
+	eq(output.fold_expr("## Codex", 3), ">1")
 	contains(output.fold_text(lines, 1, 2), "USER")
 
 	local blocks = output.code_blocks(lines)
@@ -422,7 +432,8 @@ test("custom output model restores sections, items, folds, references, and probl
 	eq(diagnostics[2].severity, vim.diagnostic.severity.ERROR)
 
 	local items = output.output_items(lines, { cwd = vim.fn.getcwd() })
-	eq(#items, 4)
+	eq(#items, 5)
+	eq(items[1].kind, "activity")
 	eq(output.transcript_stats(lines, { cwd = vim.fn.getcwd() }), {
 		sections = 7,
 		code_blocks = 1,
@@ -430,6 +441,49 @@ test("custom output model restores sections, items, folds, references, and probl
 		changes = 0,
 	})
 	ok(#output.output_map_entries(lines, { cwd = vim.fn.getcwd() }) > #sections)
+end)
+
+test("completed activity groups collapse together while failures stay visible", function()
+	local lines = {
+		"## Codex",
+		"> Command completed (exit 0): `rg error lua/acp`",
+		"> Tool completed: `mcp/read`",
+		"> update `lua/acp/output.lua`",
+		"> Command failed (exit 1): `nvim --headless`",
+		"> Warning: inspect the failure",
+	}
+
+	local groups = output.activity_groups(lines)
+	eq(#groups, 1)
+	eq(groups[1].line, 2)
+	eq(groups[1].line2, 4)
+	eq(groups[1].counts, { command = 1, tool = 1, file = 1 })
+	contains(groups[1].label, "3 completed")
+	eq(output.activity_kind(lines[5]), nil)
+	eq(output.activity_kind("> Command running: `sleep 1`"), nil)
+	eq(output.fold_expr(lines[2], 2, lines[1], lines[3]), ">2")
+	eq(output.fold_expr(lines[3], 3, lines[2], lines[4]), "2")
+	eq(output.fold_expr(lines[4], 4, lines[3], lines[5]), "2")
+	eq(output.fold_expr(lines[5], 5, lines[4], lines[6]), ">1")
+	contains(output.fold_text({ lines[2], lines[3], lines[4] }, 1, 3), "ACTIVITY")
+
+	local item = output.current_output_item(lines, 3, 0, { cwd = vim.fn.getcwd() })
+	eq(item.kind, "activity")
+	eq(item.line, 2)
+	eq(item.line2, 4)
+	eq(output.current_output_item(lines, 4, 10, { cwd = vim.fn.getcwd() }).kind, "reference")
+	eq(output.current_output_item(lines, 4, 10, {
+		cwd = vim.fn.getcwd(),
+		prefer_activity = true,
+	}).kind, "activity")
+	local preview = output.output_map_preview(lines, item)
+	eq(preview.lines, { lines[2], lines[3], lines[4] })
+	contains(preview.title, "3 completed")
+
+	local diagnostics = output.problem_diagnostics(lines)
+	eq(#diagnostics, 2)
+	eq(diagnostics[1].severity, vim.diagnostic.severity.ERROR)
+	eq(diagnostics[2].severity, vim.diagnostic.severity.WARN)
 end)
 
 test("output UI restores semantic visuals and section drafting", function()
@@ -462,6 +516,7 @@ test("output UI restores semantic visuals and section drafting", function()
 	}
 
 	output_ui.refresh(state)
+	eq(state.output_cache.changedtick, vim.api.nvim_buf_get_changedtick(output_buf))
 	local visual_marks = vim.api.nvim_buf_get_extmarks(output_buf, output_ui.namespaces.visual, 0, -1, {
 		details = true,
 	})
@@ -678,6 +733,7 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.bo[state.input_buf].filetype, "acp-prompt")
 		eq(vim.wo[state.output_win].foldmethod, "expr")
 		eq(vim.wo[state.output_win].foldexpr, "v:lua.acp_nvim_output_foldexpr()")
+		eq(vim.wo[state.output_win].foldlevel, 1)
 		eq(vim.wo[state.output_win].foldcolumn, "1")
 		local output_keymaps = {}
 		for _, keymap in ipairs(vim.api.nvim_buf_get_keymap(state.output_buf, "n")) do
@@ -904,6 +960,7 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			itemId = "message-1",
 			delta = "Implemented.",
 		})
+		local buffered_tick = vim.api.nvim_buf_get_changedtick(state.output_buf)
 		local detail_lines = {}
 		for index = 1, 40 do
 			table.insert(detail_lines, ("Detail line %d"):format(index))
@@ -914,6 +971,15 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			itemId = "message-1",
 			delta = "\n" .. table.concat(detail_lines, "\n"),
 		})
+		eq(vim.api.nvim_buf_get_changedtick(state.output_buf), buffered_tick)
+		ok(vim.wait(250, function()
+			local text = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+			return text:find("Detail line 40", 1, true) ~= nil
+		end, 5), "expected batched output to flush promptly")
+		ok(
+			state.output_cache.changedtick ~= vim.api.nvim_buf_get_changedtick(state.output_buf),
+			"full semantic parsing should stay paused during an active turn"
+		)
 		local content_line = vim.api.nvim_buf_line_count(state.output_buf) - state.prompt_spacer_rows
 		vim.cmd("redraw")
 		local last_position = vim.fn.screenpos(state.output_win, content_line, 1)
@@ -939,6 +1005,9 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			threadId = "thread-1",
 			turn = { id = "turn-1", status = "completed" },
 		})
+		ok(vim.wait(350, function()
+			return state.output_cache.changedtick == vim.api.nvim_buf_get_changedtick(state.output_buf)
+		end, 5), "expected semantic output metadata to refresh after the turn")
 
 		local output = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
 		contains(output, "Simplify this plugin")
@@ -1144,6 +1213,10 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 			itemId = "message-after-reload",
 			delta = "Still connected.",
 		})
+		ok(vim.wait(250, function()
+			return table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), "\n")
+				:find("Still connected.", 1, true) ~= nil
+		end, 5), "expected output from the reloaded client to flush promptly")
 		local output = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), "\n")
 		contains(output, "Still connected.")
 		live_client:handle_message({ id = 0, result = { preserved = true } })

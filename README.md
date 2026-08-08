@@ -71,6 +71,11 @@ require("acp").setup({
 		input_padding = 2,
 		sessions_width = 30,
 	},
+	performance = {
+		stream_interval_ms = 25,
+		semantic_debounce_ms = 200,
+		cursor_interval_ms = 16,
+	},
 })
 ```
 
@@ -87,6 +92,16 @@ options independent and lets `FileType acp` customizations target only chats.
 Transcript signs reuse the earlier semantic Nerd Font icons for people, tools,
 changes, code, and diagnostics. Set `vim.g.have_nerd_font = false` to use
 compact text fallbacks instead.
+
+Large transcripts keep fold evaluation constant-time and reuse cached output
+metadata while scrolling. During a response, streamed deltas are coalesced at
+`stream_interval_ms`, while full reference, code-block, and diagnostic parsing
+pauses until the active turn ends and typing or scrolling has been idle for
+`semantic_debounce_ms`. Cursor-only updates are capped by `cursor_interval_ms`;
+these defaults favor responsive prompt editing and scrolling while keeping the
+transcript visibly live. Consecutive completed commands, tools, and file changes
+form a level-two activity fold that starts collapsed; warning and failure rows
+remain expanded in the transcript.
 
 The sessions split is scoped to the current working directory, like
 `codex resume` without `--all`. It includes the CLI and VS Code interactive
@@ -148,9 +163,10 @@ Codex tab keymaps:
 - `n`, `t`, `d`, `m`, `r`, and `s` select new chat, sessions, diff, model,
   reasoning, and stop from output
 - `]]` / `[[` move between transcript sections; `]o` / `[o` move between
-  references, code blocks, and problems
-- `<Enter>` opens the item under the cursor, `K` previews it, `gf` opens a
-  local file reference, and `?` opens context-aware output actions
+  grouped activity, references, code blocks, and problems
+- `<Enter>` opens the item under the cursor and `K` previews it; on a collapsed
+  activity group either key shows every command/tool row in a floating detail
+  window. `gf` opens a local file reference and `?` opens context-aware actions
 - `za`, `zM`, and `zR` toggle, close, and open the native transcript folds
 - `<leader>ax`, `<leader>am`, `<leader>aO`, and `<leader>av` open transcript
   search, the persistent output map, unified items, and the section outline

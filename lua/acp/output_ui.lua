@@ -7,6 +7,7 @@ local visual_ns = vim.api.nvim_create_namespace("acp.nvim.output.visual")
 local current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current")
 local diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
 local pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
+local fold_cache = {}
 
 M.namespaces = {
 	visual = visual_ns,
@@ -39,6 +40,46 @@ local function output_cursor(state)
 		return { 1, 0 }
 	end
 	return vim.api.nvim_win_get_cursor(state.output_win)
+end
+
+local function cache_is_current(state)
+	local cache = state and state.output_cache
+	return cache
+		and valid_buf(state.output_buf)
+		and cache.bufnr == state.output_buf
+		and cache.changedtick == vim.api.nvim_buf_get_changedtick(state.output_buf)
+end
+
+local function cached_item_at(state, line, col, prefer_activity)
+	local cache = state and state.output_cache
+	if not cache then
+		return nil
+	end
+	line = tonumber(line) or 1
+	col = (tonumber(col) or 0) + 1
+	local total = #(cache.items or {})
+	local index = cache.item_index or {}
+	local references = (index.references or {})[line] or {}
+	local function result(entry)
+		return entry and vim.tbl_extend("force", {}, entry.item, { index = entry.index, total = total }) or nil
+	end
+	if prefer_activity then
+		local activity = result((index.activity or {})[line])
+		if activity then
+			return activity
+		end
+	end
+
+	for _, entry in ipairs(references) do
+		local item = entry.item
+		if col >= (item.col or 1) and col <= (item.end_col or item.col or 1) + 1 then
+			return result(entry)
+		end
+	end
+	return result((index.activity or {})[line])
+		or result(references[1])
+		or result((index.code or {})[line])
+		or result((index.problem or {})[line])
 end
 
 local function jump_output(state, line, col)
@@ -79,6 +120,7 @@ local function item_label(item)
 		item.kind == "problem" and icons.error
 			or item.kind == "reference" and icons.reference
 			or item.kind == "code" and icons.code
+			or item.kind == "activity" and icons.command
 			or icons.section,
 		item.line or 1,
 		(item.kind or "item"):upper(),
@@ -87,6 +129,11 @@ local function item_label(item)
 end
 
 local function reference_at_item(state, item)
+	for _, reference in ipairs((state.output_cache and state.output_cache.references) or {}) do
+		if reference.source_line == item.line and reference.source_col == item.col then
+			return reference
+		end
+	end
 	return output.file_reference_at(
 		transcript_lines(state),
 		item.line or output_cursor(state)[1],
@@ -96,6 +143,11 @@ local function reference_at_item(state, item)
 end
 
 local function block_at_item(state, item)
+	for _, block in ipairs((state.output_cache and state.output_cache.blocks) or {}) do
+		if block.start_line == item.line then
+			return block
+		end
+	end
 	return output.code_block_at(transcript_lines(state), item.line or output_cursor(state)[1])
 end
 
@@ -342,7 +394,20 @@ end
 
 function M.current_item(state)
 	local cursor = output_cursor(state)
-	return output.current_output_item(transcript_lines(state), cursor[1], cursor[2], { cwd = state.cwd })
+	local prefer_activity = false
+	if valid_win(state and state.output_win) then
+		local ok, fold_start = pcall(vim.api.nvim_win_call, state.output_win, function()
+			return vim.fn.foldclosed(cursor[1])
+		end)
+		prefer_activity = ok and fold_start ~= -1
+	end
+	if cache_is_current(state) then
+		return cached_item_at(state, cursor[1], cursor[2], prefer_activity)
+	end
+	return output.current_output_item(transcript_lines(state), cursor[1], cursor[2], {
+		cwd = state.cwd,
+		prefer_activity = prefer_activity,
+	})
 end
 
 function M.open_current(state)
@@ -531,16 +596,25 @@ local function map_entry(state)
 	return state.output_map_rows and state.output_map_rows[row] or nil
 end
 
-function M.refresh_map(state)
-	if not state or not valid_buf(state.output_map_buf) then
+function M.refresh_map(state, force)
+	if not state or not valid_buf(state.output_map_buf) or (not force and not valid_win(state.output_map_win)) then
 		return
 	end
-	local lines = transcript_lines(state)
 	local cursor = output_cursor(state)
-	local entries = output.output_map_entries(lines, { cwd = state.cwd })
+	local cache = state.output_cache
+	local entries
+	local total_lines
+	if cache then
+		entries = cache.entries or {}
+		total_lines = cache.total_lines or 0
+	else
+		local lines = transcript_lines(state)
+		entries = output.output_map_entries(lines, { cwd = state.cwd })
+		total_lines = #lines
+	end
 	local map_lines, rows = output.output_map_lines(entries, {
 		current_line = cursor[1],
-		total_lines = #lines,
+		total_lines = total_lines,
 		bar_width = 8,
 	})
 	state.output_map_rows = rows
@@ -586,7 +660,10 @@ function M.open_map(state)
 			set_quickfix(output.output_map_quickfix_items(entries, state.output_buf), "Codex output map")
 		end, vim.tbl_extend("force", opts, { desc = "Send Codex output map to quickfix" }))
 	end
-	M.refresh_map(state)
+	if not cache_is_current(state) then
+		M.flush_refresh(state)
+	end
+	M.refresh_map(state, true)
 	if valid_win(state.output_map_win) then
 		vim.api.nvim_set_current_win(state.output_map_win)
 		return true
@@ -659,6 +736,77 @@ function M.help(state)
 	return M.actions(state)
 end
 
+local function stop_refresh_timer(state, close)
+	local timer = state and state.output_refresh_timer
+	if not timer then
+		return
+	end
+	pcall(timer.stop, timer)
+	if close then
+		local closing = false
+		pcall(function()
+			closing = timer:is_closing()
+		end)
+		if not closing then
+			pcall(timer.close, timer)
+		end
+		state.output_refresh_timer = nil
+	end
+end
+
+function M.pause_language_injection(state)
+	if not state or not valid_buf(state.output_buf) or not state.output_language_injection then
+		return
+	end
+	if vim.treesitter and vim.treesitter.stop then
+		pcall(vim.treesitter.stop, state.output_buf)
+	end
+	state.output_language_injection = false
+	state.output_language_injection_tried = false
+	vim.b[state.output_buf].acp_language_injection = "paused"
+end
+
+function M.schedule_refresh(state, delay_ms)
+	if not state or not valid_buf(state.output_buf) then
+		return
+	end
+	local uv = vim.uv or vim.loop
+	if not uv or not uv.new_timer then
+		vim.schedule(function()
+			if not state.busy then
+				M.refresh(state)
+			end
+		end)
+		return
+	end
+	local timer = state.output_refresh_timer
+	if not timer then
+		timer = uv.new_timer()
+		state.output_refresh_timer = timer
+	end
+	state.output_refresh_pending = true
+	pcall(timer.stop, timer)
+	timer:start(math.max(1, tonumber(delay_ms) or 200), 0, vim.schedule_wrap(function()
+		if state.output_refresh_timer ~= timer or not state.output_refresh_pending then
+			return
+		end
+		if state.busy then
+			return
+		end
+		state.output_refresh_pending = false
+		M.refresh(state)
+	end))
+end
+
+function M.flush_refresh(state)
+	if not state or not valid_buf(state.output_buf) then
+		return
+	end
+	stop_refresh_timer(state, false)
+	state.output_refresh_pending = false
+	M.refresh(state)
+end
+
 local function refresh_current(state)
 	if not state or not valid_buf(state.output_buf) then
 		return
@@ -667,11 +815,12 @@ local function refresh_current(state)
 	if not valid_win(state.output_win) then
 		return
 	end
-	local lines = transcript_lines(state)
 	local cursor = output_cursor(state)
-	local item = output.current_output_item(lines, cursor[1], cursor[2], { cwd = state.cwd })
+	local item = cached_item_at(state, cursor[1], cursor[2])
 	if item then
-		for line = item.line or cursor[1], item.line2 or item.line or cursor[1] do
+		local line1 = item.kind == "activity" and cursor[1] or item.line or cursor[1]
+		local line2 = item.kind == "activity" and line1 or item.line2 or item.line or cursor[1]
+		for line = line1, line2 do
 			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, current_ns, line - 1, 0, {
 				line_hl_group = "AcpCurrentItem",
 				priority = 20,
@@ -680,10 +829,31 @@ local function refresh_current(state)
 	end
 end
 
+local function build_item_index(items)
+	local index = { references = {}, activity = {}, code = {}, problem = {} }
+	for item_index, item in ipairs(items or {}) do
+		local entry = { item = item, index = item_index }
+		if item.kind == "reference" then
+			local line = item.line or 1
+			index.references[line] = index.references[line] or {}
+			table.insert(index.references[line], entry)
+		elseif item.kind == "activity" or item.kind == "code" then
+			for line = item.line or 1, item.line2 or item.line or 1 do
+				index[item.kind][line] = entry
+			end
+		elseif item.kind == "problem" then
+			index.problem[item.line or 1] = entry
+		end
+	end
+	return index
+end
+
 function M.refresh(state)
 	if not state or not valid_buf(state.output_buf) then
 		return
 	end
+	stop_refresh_timer(state, false)
+	state.output_refresh_pending = false
 	local bufnr = state.output_buf
 	local lines = transcript_lines(state)
 	vim.b[bufnr].acp_cwd = state.cwd
@@ -699,6 +869,36 @@ function M.refresh(state)
 	vim.api.nvim_buf_clear_namespace(bufnr, visual_ns, 0, -1)
 
 	local references = output.file_references(lines, { cwd = state.cwd })
+	local blocks = output.code_blocks(lines)
+	local diagnostics = output.problem_diagnostics(lines)
+	local sections = output.sections(lines)
+	local activities = output.activity_groups(lines)
+	local items = output.output_items(lines, {
+		cwd = state.cwd,
+		references = references,
+		blocks = blocks,
+		diagnostics = diagnostics,
+		activities = activities,
+	})
+	local changedtick = vim.api.nvim_buf_get_changedtick(bufnr)
+	local activities_by_start = {}
+	for _, activity in ipairs(activities) do
+		activities_by_start[activity.line] = activity
+	end
+	state.output_cache = {
+		bufnr = bufnr,
+		changedtick = changedtick,
+		total_lines = #lines,
+		references = references,
+		blocks = blocks,
+		diagnostics = diagnostics,
+		sections = sections,
+		activities = activities,
+		items = items,
+		item_index = build_item_index(items),
+		entries = output.output_map_entries(lines, { sections = sections, items = items }),
+	}
+	fold_cache[bufnr] = { changedtick = changedtick, activities_by_start = activities_by_start }
 	for _, reference in ipairs(references) do
 		local row = (reference.source_line or 1) - 1
 		pcall(vim.api.nvim_buf_set_extmark, bufnr, visual_ns, row, math.max(0, (reference.source_col or 1) - 1), {
@@ -708,7 +908,7 @@ function M.refresh(state)
 		})
 	end
 
-	for _, block in ipairs(output.code_blocks(lines)) do
+	for _, block in ipairs(blocks) do
 		local fence = lines[block.start_line] or ""
 		pcall(vim.api.nvim_buf_set_extmark, bufnr, visual_ns, block.start_line - 1, 0, {
 			end_col = #fence,
@@ -727,7 +927,7 @@ function M.refresh(state)
 		end
 	end
 
-	vim.diagnostic.set(diagnostic_ns, bufnr, output.problem_diagnostics(lines))
+	vim.diagnostic.set(diagnostic_ns, bufnr, diagnostics)
 	refresh_current(state)
 	M.refresh_map(state)
 end
@@ -741,12 +941,19 @@ function M.close(state)
 	if not state then
 		return
 	end
+	stop_refresh_timer(state, true)
+	state.output_refresh_pending = false
+	M.pause_language_injection(state)
 	close_map(state)
 	if valid_buf(state.output_map_buf) then
 		vim.api.nvim_buf_delete(state.output_map_buf, { force = true })
 	end
 	state.output_map_buf = nil
 	state.output_map_rows = nil
+	if state.output_buf then
+		fold_cache[state.output_buf] = nil
+	end
+	state.output_cache = nil
 	if valid_buf(state.output_buf) then
 		vim.api.nvim_buf_clear_namespace(state.output_buf, visual_ns, 0, -1)
 		vim.api.nvim_buf_clear_namespace(state.output_buf, current_ns, 0, -1)
@@ -763,13 +970,24 @@ vim.diagnostic.config({
 }, diagnostic_ns)
 
 _G.acp_nvim_output_foldexpr = function()
-	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, 0, -1, false)
-	return ok and output.fold_level(lines, vim.v.lnum) or "0"
+	local lnum = vim.v.lnum
+	local first = math.max(0, lnum - 2)
+	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, first, lnum + 1, false)
+	local current = lnum - first
+	return ok and output.fold_expr(lines[current], lnum, lines[current - 1], lines[current + 1]) or "0"
 end
 
 _G.acp_nvim_output_foldtext = function()
-	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, 0, -1, false)
-	return ok and output.fold_text(lines, vim.v.foldstart, vim.v.foldend) or ""
+	local bufnr = vim.api.nvim_get_current_buf()
+	local cached = fold_cache[bufnr]
+	if cached and cached.changedtick == vim.api.nvim_buf_get_changedtick(bufnr) then
+		local activity = cached.activities_by_start[vim.v.foldstart]
+		if activity and activity.line2 == vim.v.foldend then
+			return output.activity_fold_text(activity)
+		end
+	end
+	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, vim.v.foldstart - 1, vim.v.foldend, false)
+	return ok and output.fold_text(lines, 1, #lines) or ""
 end
 
 return M
