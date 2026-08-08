@@ -19,6 +19,17 @@ local prompt_border = {
 	{ "│", "AcpPromptBorder" },
 }
 
+local instruction_border = {
+	{ "╭", "AcpInstructionBorder" },
+	{ "─", "AcpInstructionBorder" },
+	{ "╮", "AcpInstructionBorder" },
+	{ "│", "AcpInstructionBorder" },
+	{ "┤", "AcpInstructionBorder" },
+	{ "─", "AcpInstructionBorder" },
+	{ "├", "AcpInstructionBorder" },
+	{ "│", "AcpInstructionBorder" },
+}
+
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
 end
@@ -70,6 +81,9 @@ function M.define_highlights()
 		AcpPromptTitleContext = { fg = "#2ac3de", bold = true },
 		AcpPromptKey = { fg = "#e0af68", bold = true },
 		AcpPromptHint = { link = "Comment" },
+		AcpInstructionFloat = { link = "NormalFloat" },
+		AcpInstructionBorder = { fg = "#e0af68" },
+		AcpInstructionTitle = { fg = "#e0af68", bold = true },
 		AcpChatTitle = { fg = "#7aa2f7", bold = true },
 		AcpChatMeta = { link = "Comment" },
 		AcpChatSeparator = { link = "Comment" },
@@ -211,7 +225,21 @@ function M.prompt_title(state)
 			"AcpPromptTitleContext"
 		)
 	end
-	local queued = #(state.queue or {})
+	local queued = 0
+	local steering = 0
+	for _, instruction in ipairs(state.pending_instructions or {}) do
+		if instruction.kind == "steer" then
+			steering = steering + 1
+		elseif instruction.kind == "queued" then
+			queued = queued + 1
+		end
+	end
+	if queued == 0 and #(state.pending_instructions or {}) == 0 then
+		queued = #(state.queue or {})
+	end
+	if steering > 0 then
+		add_title_chunk(chunks, ("%d steer"):format(steering), "AcpChatStatusActive")
+	end
 	if queued > 0 then
 		add_title_chunk(chunks, ("%d queued"):format(queued), "AcpChatStatusActive")
 	end
@@ -236,6 +264,94 @@ end
 
 function M.prompt_key(state)
 	return flatten(M.prompt_title(state)) .. "\0" .. flatten(M.prompt_footer())
+end
+
+local function one_line(value)
+	return vim.trim(tostring(value or ""):gsub("%s+", " "))
+end
+
+local function truncate_display(value, width)
+	value = tostring(value or "")
+	width = math.max(1, math.floor(tonumber(width) or 1))
+	if vim.fn.strdisplaywidth(value) <= width then
+		return value
+	end
+	local suffix = "…"
+	local target = math.max(0, width - vim.fn.strdisplaywidth(suffix))
+	local low = 0
+	local high = vim.fn.strchars(value)
+	while low < high do
+		local middle = math.ceil((low + high) / 2)
+		if vim.fn.strdisplaywidth(vim.fn.strcharpart(value, 0, middle)) <= target then
+			low = middle
+		else
+			high = middle - 1
+		end
+	end
+	return vim.fn.strcharpart(value, 0, low) .. suffix
+end
+
+local function instruction_counts(instructions)
+	local counts = { queued = 0, steer = 0 }
+	for _, instruction in ipairs(instructions or {}) do
+		if counts[instruction.kind] ~= nil then
+			counts[instruction.kind] = counts[instruction.kind] + 1
+		end
+	end
+	return counts
+end
+
+function M.instruction_block(state, width, max_height)
+	local instructions = state and state.pending_instructions or {}
+	if type(instructions) ~= "table" or #instructions == 0 then
+		return nil
+	end
+	width = math.max(1, math.floor(tonumber(width) or 1))
+	max_height = math.max(1, math.floor(tonumber(max_height) or #instructions))
+	local lines = {}
+	local visible = math.min(#instructions, max_height)
+	if #instructions > max_height then
+		visible = math.max(0, max_height - 1)
+	end
+	for index = 1, visible do
+		local instruction = instructions[index]
+		local steering = instruction.kind == "steer"
+		local icon = icons.get(steering and "send" or "history")
+		local label = steering and "STEER" or "QUEUED"
+		table.insert(lines, truncate_display(("%s %-6s %s"):format(icon, label, one_line(instruction.text)), width))
+	end
+	if #instructions > visible then
+		local remaining = #instructions - visible
+		table.insert(
+			lines,
+			truncate_display(
+				("%s +%d more instruction%s"):format(icons.get("history"), remaining, remaining == 1 and "" or "s"),
+				width
+			)
+		)
+	end
+	local counts = instruction_counts(instructions)
+	local title = { { " Instructions ", "AcpInstructionTitle" } }
+	if counts.steer > 0 then
+		table.insert(title, { (" %d steer "):format(counts.steer), "AcpChatStatusActive" })
+	end
+	if counts.queued > 0 then
+		table.insert(title, { (" %d queued "):format(counts.queued), "AcpChatStatusActive" })
+	end
+	return {
+		lines = lines,
+		title = title,
+		key = table.concat(
+			vim.tbl_map(function(instruction)
+				return table.concat({
+					tostring(instruction.id or ""),
+					tostring(instruction.kind or ""),
+					tostring(instruction.text or ""),
+				}, "\0")
+			end, instructions),
+			"\1"
+		),
+	}
 end
 
 function M.prompt_geometry(bounds, opts)
@@ -284,12 +400,13 @@ local function output_bounds(winid)
 end
 
 function M.prompt_config(output_win, state, opts)
+	opts = opts or {}
 	local bounds = output_bounds(output_win)
 	if not bounds then
 		return nil
 	end
 	local geometry = M.prompt_geometry(bounds, opts)
-	return {
+	local prompt = {
 		relative = "editor",
 		row = geometry.row,
 		col = geometry.col,
@@ -302,9 +419,40 @@ function M.prompt_config(output_win, state, opts)
 		footer = M.prompt_footer(),
 		footer_pos = "right",
 		zindex = 50,
-	},
-		geometry.reserved_rows,
-		M.prompt_key(state)
+	}
+	local reserved_rows = geometry.reserved_rows
+	local instruction
+	local instruction_config
+	local available_instruction_height = math.max(0, math.floor(geometry.row - bounds.row - 1))
+	local requested_instruction_height = math.max(1, math.floor(tonumber(opts.instruction_height) or 4))
+	local instruction_height = math.min(available_instruction_height, requested_instruction_height)
+	if instruction_height > 0 then
+		instruction = M.instruction_block(state, geometry.width, instruction_height)
+	end
+	if instruction then
+		local height = #instruction.lines
+		local attached_rows = height + 1
+		instruction_config = {
+			relative = "editor",
+			row = geometry.row - attached_rows,
+			col = geometry.col,
+			width = geometry.width,
+			height = height,
+			style = "minimal",
+			border = vim.deepcopy(instruction_border),
+			title = instruction.title,
+			title_pos = "left",
+			focusable = false,
+			zindex = 51,
+		}
+		reserved_rows = math.min(bounds.height - 1, reserved_rows + attached_rows)
+	end
+	return prompt,
+		reserved_rows,
+		M.prompt_key(state),
+		instruction_config,
+		instruction and instruction.lines or nil,
+		instruction and instruction.key or nil
 end
 
 local function numeric(value)
@@ -347,6 +495,22 @@ function M.configure_prompt_window(winid)
 	vim.wo[winid].winbar = ""
 	vim.wo[winid].fillchars = "eob: "
 	vim.wo[winid].winhighlight = "NormalFloat:AcpPromptFloat,FloatBorder:AcpPromptBorder,FloatTitle:AcpPromptTitle"
+end
+
+function M.configure_instruction_window(winid)
+	if not valid_win(winid) then
+		return
+	end
+	vim.wo[winid].number = false
+	vim.wo[winid].relativenumber = false
+	vim.wo[winid].signcolumn = "no"
+	vim.wo[winid].foldcolumn = "0"
+	vim.wo[winid].wrap = false
+	vim.wo[winid].cursorline = false
+	vim.wo[winid].winbar = ""
+	vim.wo[winid].fillchars = "eob: "
+	vim.wo[winid].winhighlight =
+		"NormalFloat:AcpInstructionFloat,FloatBorder:AcpInstructionBorder,FloatTitle:AcpInstructionTitle"
 end
 
 function M.configure_output_window(winid, reserved_rows)

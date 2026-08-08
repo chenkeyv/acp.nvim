@@ -1,6 +1,7 @@
 local Codex = require("acp.codex").Client
 local blocks = require("acp.blocks")
 local context = require("acp.context")
+local instructions = require("acp.instructions")
 local output_ui = require("acp.output_ui")
 local reloader = require("acp.reload")
 local render = require("acp.render")
@@ -26,6 +27,7 @@ local defaults = {
 	window = {
 		input_height = 6,
 		input_padding = 2,
+		instruction_height = 4,
 		sessions_width = 30,
 	},
 	performance = {
@@ -99,6 +101,8 @@ local function fresh_state(cwd)
 		status = "new chat",
 		contexts = {},
 		queue = {},
+		pending_instructions = {},
+		instruction_sequence = 0,
 		diff = "",
 		streamed_items = {},
 		items = {},
@@ -136,7 +140,7 @@ local function apply_state_defaults(value)
 			value[key] = default
 		end
 	end
-	return value
+	return instructions.normalize(value)
 end
 
 local function with_modifiable(bufnr, callback)
@@ -470,6 +474,40 @@ local function set_status(status)
 	update_chrome()
 end
 
+local function add_pending_instruction(kind, envelope)
+	local instruction = instructions.add(state, kind, envelope)
+	update_chrome()
+	return instruction
+end
+
+local function remove_pending_instruction(id, refresh)
+	if not state or not present(id) then
+		return false
+	end
+	local changed = instructions.remove(state, id)
+	if changed and refresh ~= false then
+		update_chrome()
+	end
+	return changed
+end
+
+local function clear_pending_instructions(kind, refresh)
+	if not state then
+		return false
+	end
+	local changed = instructions.clear(state, kind)
+	if changed and refresh ~= false then
+		update_chrome()
+	end
+	return changed
+end
+
+local function consume_steering_instructions()
+	if instructions.consume_steers(state) then
+		update_chrome()
+	end
+end
+
 local function remember_source(bufnr, winid)
 	if valid_buf(bufnr) and vim.bo[bufnr].buftype == "" then
 		state.source_buf = bufnr
@@ -505,6 +543,7 @@ function M.close()
 	local current_tab = vim.api.nvim_get_current_tabpage()
 	local chat_tab = valid_tab(state.tabpage) and state.tabpage or nil
 	local return_win = chat_tab == current_tab and state.origin_win or current_win
+	instructions.close_window(state)
 	if not close_tab(chat_tab, return_win) then
 		close_window(state.input_win)
 		close_window(state.sessions_win)
@@ -519,6 +558,7 @@ function M.close()
 		end
 	end
 	state.input_win = nil
+	state.instruction_win = nil
 	state.sessions_win = nil
 	state.output_win = nil
 	state.tabpage = nil
@@ -609,8 +649,12 @@ local function prompt_config()
 	return view.prompt_config(state.output_win, state, config.window)
 end
 
+local function sync_instruction_window(desired, lines, chrome_key)
+	instructions.sync_window(state, state.output_win, desired, lines, chrome_key)
+end
+
 local function open_prompt_window()
-	local desired, reserved_rows, chrome_key = prompt_config()
+	local desired, reserved_rows, chrome_key, instruction, instruction_lines, instruction_key = prompt_config()
 	if not desired then
 		return false
 	end
@@ -618,6 +662,7 @@ local function open_prompt_window()
 	set_prompt_reserved_rows(reserved_rows)
 	state.prompt_chrome_key = chrome_key
 	view.configure_prompt_window(state.input_win)
+	sync_instruction_window(instruction, instruction_lines, instruction_key)
 	view.configure_output_window(state.output_win, reserved_rows)
 	return true
 end
@@ -631,7 +676,7 @@ position_prompt = function()
 	then
 		return false
 	end
-	local desired, reserved_rows, chrome_key = prompt_config()
+	local desired, reserved_rows, chrome_key, instruction, instruction_lines, instruction_key = prompt_config()
 	if not desired then
 		return false
 	end
@@ -641,6 +686,7 @@ position_prompt = function()
 		state.prompt_chrome_key = chrome_key
 	end
 	view.configure_prompt_window(state.input_win)
+	sync_instruction_window(instruction, instruction_lines, instruction_key)
 	view.configure_output_window(state.output_win, reserved_rows)
 	if state.prompt_reserved_rows ~= reserved_rows then
 		set_prompt_reserved_rows(reserved_rows)
@@ -679,6 +725,7 @@ local function open_layout()
 
 	local previous_output = state.output_win
 	local previous_input = state.input_win
+	local previous_instruction = state.instruction_win
 	local previous_sessions = state.sessions_win
 	local tabpage = valid_tab(state.tabpage) and state.tabpage or nil
 	if not tabpage then
@@ -700,7 +747,7 @@ local function open_layout()
 	if not output_win then
 		error("Codex tab has no normal window for the chat buffer")
 	end
-	for _, winid in ipairs({ previous_output, previous_input, previous_sessions }) do
+	for _, winid in pairs({ previous_output, previous_input, previous_instruction, previous_sessions }) do
 		if valid_win(winid) and winid ~= output_win then
 			close_window(winid)
 		end
@@ -709,6 +756,7 @@ local function open_layout()
 	state.tabpage = tabpage
 	state.output_win = output_win
 	state.input_win = nil
+	state.instruction_win = nil
 	state.sessions_win = nil
 	vim.api.nvim_set_current_win(state.output_win)
 	vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
@@ -849,11 +897,13 @@ local function apply_thread_response(result)
 	state.plan_block_id = nil
 	state.contexts = {}
 	state.queue = {}
+	state.pending_instructions = {}
 	local turn = active_turn(thread)
 	state.turn_id = turn and turn.id or nil
 	state.busy = turn ~= nil
 	set_chat(blocks.from_thread(thread))
 	set_status(state.busy and "running" or "ready")
+	update_chrome()
 	local found = false
 	local current_thread = thread
 	for index, listed in ipairs(state.threads or {}) do
@@ -944,6 +994,7 @@ local function append_user(envelope, suffix)
 end
 
 local function start_envelope(envelope)
+	remove_pending_instruction(envelope._acp_instruction_id, false)
 	state.busy = true
 	state.agent_item = nil
 	state.agent_block_id = nil
@@ -975,16 +1026,21 @@ local function dispatch_prompt(envelope, follow_up)
 		end
 		if state.busy then
 			if (follow_up or config.follow_up) == "steer" and state.turn_id then
+				local instruction = add_pending_instruction("steer", envelope)
 				append_user(envelope, " (steer)")
 				set_status("steering")
 				client:steer_turn(state.thread_id, state.turn_id, envelope.payload, function(_, err)
 					if err then
+						remove_pending_instruction(instruction.id, false)
 						append_notice("error", ("Steer failed: %s"):format(err))
+					else
+						instructions.accept(state, instruction.id)
 					end
 					set_status(err and "running" or "steered")
 				end)
 			else
 				table.insert(state.queue, envelope)
+				add_pending_instruction("queued", envelope)
 				append_notice("notice", ("Queued follow-up %d."):format(#state.queue))
 				set_status("running")
 			end
@@ -1234,9 +1290,11 @@ function M.new_chat(opts)
 			sessions_buf = state.sessions_buf,
 			output_buf = state.output_buf,
 			input_buf = state.input_buf,
+			instruction_buf = state.instruction_buf,
 			sessions_win = state.sessions_win,
 			output_win = state.output_win,
 			input_win = state.input_win,
+			instruction_win = state.instruction_win,
 			tabpage = state.tabpage,
 			origin_win = state.origin_win,
 			origin_tab = state.origin_tab,
@@ -1716,20 +1774,24 @@ function M._handle_notification(method, params)
 			state.items[item.id] = item
 		end
 		if item.type == "agentMessage" then
+			consume_steering_instructions()
 			ensure_agent_item(item.id)
 		end
 		set_status(render.item_status(item))
 	elseif method == "item/agentMessage/delta" then
+		consume_steering_instructions()
 		local block_id = ensure_agent_item(params.itemId)
 		state.streamed_items[params.itemId] = true
 		append_text(block_id, params.delta or "")
 		set_status("responding")
 	elseif method == "item/plan/delta" then
+		consume_steering_instructions()
 		local block_id = ensure_plan_item(params.itemId)
 		state.streamed_items[params.itemId] = true
 		append_text(block_id, params.delta or "")
 		set_status("planning")
 	elseif method == "item/reasoning/summaryTextDelta" or method == "item/reasoning/textDelta" then
+		consume_steering_instructions()
 		set_status("thinking")
 	elseif method == "item/commandExecution/outputDelta" then
 		set_status("running command")
@@ -1779,6 +1841,7 @@ function M._handle_notification(method, params)
 		set_status("ready")
 	elseif method == "turn/completed" then
 		flush_output_text()
+		local instructions_changed = clear_pending_instructions("steer", false)
 		local turn = params.turn or {}
 		state.busy = false
 		state.turn_id = nil
@@ -1786,6 +1849,9 @@ function M._handle_notification(method, params)
 			append_notice("error", turn.error.message or "Turn failed")
 		end
 		set_status(turn.status or "completed")
+		if instructions_changed then
+			update_chrome()
+		end
 		output_ui.schedule_refresh(state, performance_delay("semantic_debounce_ms", 200))
 		refresh_threads()
 		drain_queue()
@@ -2156,10 +2222,10 @@ function M._reset()
 		client:stop()
 	end
 	if state then
-		local buffers = { state.sessions_buf, state.input_buf, state.output_buf }
+		local buffers = { state.sessions_buf, state.input_buf, state.instruction_buf, state.output_buf }
 		M.close()
 		blocks.unbind(state.output_buf)
-		for _, bufnr in ipairs(buffers) do
+		for _, bufnr in pairs(buffers) do
 			if valid_buf(bufnr) then
 				pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
 			end

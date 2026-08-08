@@ -69,6 +69,7 @@ require("acp").setup({
 	window = {
 		input_height = 6,
 		input_padding = 2,
+		instruction_height = 4,
 		sessions_width = 30,
 	},
 	performance = {
@@ -84,7 +85,11 @@ command. A command table is used exactly as supplied.
 
 The prompt floats over reserved blank rows at the bottom of the chat, so it
 does not cover the latest response. `input_height` includes the frame and
-`input_padding` controls its inset from the chat text area.
+`input_padding` controls its inset from the chat text area. While a turn is
+active, steer and queued follow-ups appear as literal text in a read-only block
+attached above the prompt. `instruction_height` caps its visible rows; queued
+entries disappear when their turn starts, while steer entries disappear when
+the continuation begins producing output.
 
 The chat transcript uses the custom `acp` filetype rather than Markdown, while
 the editable prompt uses `acp-prompt`. This keeps their styling and filetype

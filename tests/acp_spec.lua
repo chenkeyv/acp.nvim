@@ -556,6 +556,27 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 			reserved_rows = 8,
 		}
 	)
+	local instruction_block = view.instruction_block({
+		pending_instructions = {
+			{ id = "steer-1", kind = "steer", text = "Keep the public API unchanged" },
+			{ id = "queue-1", kind = "queued", text = "Run the tests afterward" },
+		},
+	}, 52, 4)
+	eq(#instruction_block.lines, 2)
+	contains(instruction_block.lines[1], icons.get("send") .. " STEER")
+	contains(instruction_block.lines[1], "Keep the public API unchanged")
+	contains(instruction_block.lines[2], icons.get("history") .. " QUEUED")
+	contains(chunks_text(instruction_block.title), "1 steer")
+	contains(chunks_text(instruction_block.title), "1 queued")
+	local clipped_instructions = view.instruction_block({
+		pending_instructions = {
+			{ id = "queue-1", kind = "queued", text = "first" },
+			{ id = "queue-2", kind = "queued", text = "second" },
+			{ id = "queue-3", kind = "queued", text = "third" },
+		},
+	}, 28, 2)
+	eq(#clipped_instructions.lines, 2)
+	contains(clipped_instructions.lines[2], "+2 more instructions")
 
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	local direct_lines = {
@@ -614,6 +635,8 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	vim.g.have_nerd_font = false
 	eq(icons.get("user"), "U")
 	eq(icons.get("code"), "{}")
+	eq(icons.get("send"), ">")
+	eq(icons.get("history"), "+")
 	eq(transcript.header("user"), "U You")
 	eq(transcript.line("warning", "Warning: check"), "! Warning: check")
 	vim.g.have_nerd_font = previous_have_nerd_font
@@ -1424,7 +1447,7 @@ test("control-s steers the active turn instead of queueing", function()
 
 	function fake:steer_turn(thread_id, turn_id, payload, callback)
 		table.insert(self.steers, { thread_id = thread_id, turn_id = turn_id, payload = payload })
-		callback({})
+		self.steer_callback = callback
 	end
 
 	function fake:list_threads(_, callback)
@@ -1464,6 +1487,27 @@ test("control-s steers the active turn instead of queueing", function()
 		eq(fake.steers[1].turn_id, "turn-steer")
 		eq(fake.steers[1].payload.input[1].text, "Keep the public API unchanged")
 		eq(#state.queue, 0)
+		eq(#state.pending_instructions, 1)
+		eq(state.pending_instructions[1].kind, "steer")
+		ok(vim.api.nvim_win_is_valid(state.instruction_win))
+		eq(vim.api.nvim_get_current_win(), state.input_win)
+		local prompt_config = vim.api.nvim_win_get_config(state.input_win)
+		local instruction_config = vim.api.nvim_win_get_config(state.instruction_win)
+		eq(instruction_config.relative, "editor")
+		eq(instruction_config.focusable, false)
+		eq(instruction_config.col, prompt_config.col)
+		eq(instruction_config.width, prompt_config.width)
+		eq(instruction_config.row + instruction_config.height + 1, prompt_config.row)
+		local instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
+		contains(instruction_text, "STEER")
+		contains(instruction_text, "Keep the public API unchanged")
+		fake.handlers.on_notification("item/reasoning/textDelta", {
+			threadId = "thread-steer",
+			turnId = "turn-steer",
+			delta = "Still finishing the previous thought.",
+		})
+		eq(#state.pending_instructions, 1)
+		fake.steer_callback({})
 		contains(
 			table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n"),
 			transcript.header("user", " (steer)")
@@ -1475,6 +1519,8 @@ test("control-s steers the active turn instead of queueing", function()
 			itemId = "shared-message",
 			delta = "After steering.",
 		})
+		eq(#state.pending_instructions, 0)
+		ok(not state.instruction_win or not vim.api.nvim_win_is_valid(state.instruction_win))
 		ok(
 			vim.wait(250, function()
 				local continuation = state.chat.by_id["shared-message:agent:2"]
@@ -1493,6 +1539,23 @@ test("control-s steers the active turn instead of queueing", function()
 		ui.send()
 		eq(#fake.steers, 1)
 		eq(#state.queue, 1)
+		eq(#state.pending_instructions, 1)
+		eq(state.pending_instructions[1].kind, "queued")
+		ok(vim.api.nvim_win_is_valid(state.instruction_win))
+		instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
+		contains(instruction_text, "QUEUED")
+		contains(instruction_text, "Run the tests afterward")
+
+		fake.handlers.on_notification("turn/completed", {
+			threadId = "thread-steer",
+			turn = { id = "turn-steer", status = "completed" },
+		})
+		ok(vim.wait(100, function()
+			return #fake.turns == 2
+		end))
+		eq(fake.turns[2].payload.input[1].text, "Run the tests afterward")
+		eq(#state.pending_instructions, 0)
+		ok(not state.instruction_win or not vim.api.nvim_win_is_valid(state.instruction_win))
 	end)
 	ui._reset()
 	if not passed then
@@ -1557,6 +1620,19 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 	state.turn_id = "turn-hot-reload"
 	state.busy = true
 	state.status = "responding"
+	state.instruction_sequence = 1
+	state.queue = {
+		{
+			_acp_instruction_id = "instruction:1",
+			text = "Preserve this queued instruction",
+			payload = { input = { { type = "text", text = "Preserve this queued instruction" } } },
+		},
+	}
+	state.pending_instructions = {
+		{ id = "instruction:1", kind = "queued", text = "Preserve this queued instruction" },
+	}
+	ui.open()
+	ok(vim.api.nvim_win_is_valid(state.instruction_win))
 	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "preserve this draft" })
 	live_client.on_notification("item/agentMessage/delta", {
 		threadId = "thread-hot-reload",
@@ -1589,6 +1665,8 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 	local output_buf = state.output_buf
 	local input_buf = state.input_buf
 	local input_win = state.input_win
+	local instruction_buf = state.instruction_buf
+	local instruction_win = state.instruction_win
 	local chat = state.chat
 	local process_client = ui._client()
 	local reload = require("acp.reload")
@@ -1650,6 +1728,13 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 		eq(state.output_buf, output_buf)
 		eq(state.input_buf, input_buf)
 		eq(state.input_win, input_win)
+		eq(state.instruction_buf, instruction_buf)
+		eq(state.instruction_win, instruction_win)
+		ok(vim.api.nvim_win_is_valid(state.instruction_win))
+		contains(
+			table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n"),
+			"Preserve this queued instruction"
+		)
 		eq(vim.bo[state.output_buf].filetype, "acp")
 		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
 		eq(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), { "preserve this draft" })
