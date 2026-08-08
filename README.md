@@ -89,19 +89,31 @@ does not cover the latest response. `input_height` includes the frame and
 The chat transcript uses the custom `acp` filetype rather than Markdown, while
 the editable prompt uses `acp-prompt`. This keeps their styling and filetype
 options independent and lets `FileType acp` customizations target only chats.
-Transcript signs reuse the earlier semantic Nerd Font icons for people, tools,
-changes, code, and diagnostics. Set `vim.g.have_nerd_font = false` to use
-compact text fallbacks instead.
+Semantic icons for people, tools, changes, warnings, and errors are written
+directly into the transcript text. The chat therefore needs no sign column or
+icon-bearing extmarks; set `vim.g.have_nerd_font = false` to write compact text
+fallbacks instead.
 
-Large transcripts keep fold evaluation constant-time and reuse cached output
-metadata while scrolling. During a response, streamed deltas are coalesced at
-`stream_interval_ms`, while full reference, code-block, and diagnostic parsing
-pauses until the active turn ends and typing or scrolling has been idle for
-`semantic_debounce_ms`. Cursor-only updates are capped by `cursor_interval_ms`;
-these defaults favor responsive prompt editing and scrolling while keeping the
-transcript visibly live. Consecutive completed commands, tools, and file changes
-form a level-two activity fold that starts collapsed; warning and failure rows
-remain expanded in the transcript.
+The visible chat remains one native buffer, backed by ordered logical blocks
+for user prompts, agent responses, plans, completed activity, notices, warnings,
+and errors. Fenced code is indexed as a child of its owning prompt or response.
+This keeps the restrained Codex CLI-like flow and whitespace while giving
+navigation, previews, folds, hot reload, and future presentation rules stable
+semantic boundaries instead of rediscovering roles from rendered text.
+
+Large transcripts use indexed block lookup and cache references, code blocks,
+and diagnostics per logical block, plus one model-wide semantic snapshot for
+each transcript revision. During a response, streamed deltas are
+coalesced at `stream_interval_ms`; each flush replaces only the active block's
+tail and refreshes decorations only through that block. Unchanged history is
+not reparsed, full language injection remains paused until the turn ends, and
+typing or scrolling can defer the final semantic refresh by
+`semantic_debounce_ms`. Cursor-only updates are capped by `cursor_interval_ms`.
+The chat window disables editor indent guides and wrapped-line indentation, and
+the output and sessions buffers keep no undo history. Consecutive completed
+commands, tools, and file changes share a level-two activity block that starts
+collapsed and opens in a focused detail float with `<Enter>` or `K`; warnings
+and failures remain expanded in the transcript.
 
 The sessions split is scoped to the current working directory, like
 `codex resume` without `--all`. It includes the CLI and VS Code interactive

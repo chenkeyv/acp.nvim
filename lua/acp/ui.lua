@@ -1,4 +1,5 @@
 local Codex = require("acp.codex").Client
+local blocks = require("acp.blocks")
 local context = require("acp.context")
 local output_ui = require("acp.output_ui")
 local reloader = require("acp.reload")
@@ -102,7 +103,9 @@ local function fresh_state(cwd)
 		streamed_items = {},
 		items = {},
 		agent_item = nil,
+		agent_block_id = nil,
 		plan_item = nil,
+		plan_block_id = nil,
 		models = nil,
 		threads = nil,
 		threads_error = nil,
@@ -116,8 +119,10 @@ local function fresh_state(cwd)
 		pending_output_text = nil,
 		output_text_scheduled = false,
 		output_text_generation = 0,
+		pending_output_block_id = nil,
 		cursor_update_pending = false,
 		output_winbar = nil,
+		chat = blocks.new(),
 		tokens = nil,
 	}
 end
@@ -220,11 +225,11 @@ local function performance_delay(name, fallback)
 	return math.max(0, tonumber(performance[name]) or fallback)
 end
 
-local function refresh_output_view(start_row, deferred)
+local function refresh_output_view(start_row, deferred, end_row)
 	if not state or not valid_buf(state.output_buf) then
 		return
 	end
-	view.refresh_transcript(state.output_buf, start_row)
+	view.refresh_transcript(state.output_buf, start_row, state.chat, end_row)
 	if deferred then
 		output_ui.schedule_refresh(state, performance_delay("semantic_debounce_ms", 200))
 	else
@@ -237,13 +242,21 @@ local function cancel_output_text()
 		return
 	end
 	state.pending_output_text = nil
+	state.pending_output_block_id = nil
 	state.output_text_scheduled = false
 	state.output_text_generation = (state.output_text_generation or 0) + 1
 end
 
-local function set_output(lines)
+local function set_output(lines, opts)
 	if not state or not valid_buf(state.output_buf) then
 		return
+	end
+	opts = opts or {}
+	local saved_view
+	if opts.preserve_view and valid_win(state.output_win) then
+		saved_view = vim.api.nvim_win_call(state.output_win, function()
+			return vim.fn.winsaveview()
+		end)
 	end
 	cancel_output_text()
 	output_ui.pause_language_injection(state)
@@ -253,49 +266,39 @@ local function set_output(lines)
 		restore_prompt_space()
 	end)
 	refresh_output_view(0)
-	follow_output(true)
+	if saved_view and valid_win(state.output_win) then
+		vim.api.nvim_win_call(state.output_win, function()
+			vim.fn.winrestview(saved_view)
+		end)
+	else
+		follow_output(true)
+	end
 end
 
-local function append_lines(lines)
-	if not state or not valid_buf(state.output_buf) or type(lines) ~= "table" or #lines == 0 then
+local function set_chat(model)
+	if not state then
 		return
 	end
-	if flush_output_text then
-		flush_output_text()
+	state.chat = blocks.adopt(model)
+	if valid_buf(state.output_buf) then
+		blocks.bind(state.output_buf, state.chat)
+		set_output(state.chat:render_lines())
+	end
+end
+
+local function apply_chat_operation(operation)
+	if not state or not valid_buf(state.output_buf) or type(operation) ~= "table" then
+		return
 	end
 	local follow = at_output_bottom()
-	local start_row
-	local values = {}
-	for _, line in ipairs(lines) do
-		table.insert(values, tostring(line or ""))
-	end
+	local start_row = math.max(0, tonumber(operation.start_row) or 0)
+	local end_row = math.max(start_row, tonumber(operation.end_row) or start_row)
 	output_ui.pause_language_injection(state)
 	with_modifiable(state.output_buf, function()
-		local count = vim.api.nvim_buf_line_count(state.output_buf)
-		start_row = math.max(0, count - math.max(0, tonumber(state.prompt_spacer_rows) or 0))
-		vim.api.nvim_buf_set_lines(state.output_buf, start_row, start_row, false, values)
+		vim.api.nvim_buf_set_lines(state.output_buf, start_row, end_row, false, operation.lines or {})
 	end)
-	refresh_output_view(start_row, true)
-	follow_output(follow)
-end
-
-local function apply_output_text(text)
-	if not state or not valid_buf(state.output_buf) or not text or text == "" then
-		return
-	end
-	local follow = at_output_bottom()
-	local parts = vim.split(text, "\n", { plain = true })
-	local start_row
-	with_modifiable(state.output_buf, function()
-		local count = vim.api.nvim_buf_line_count(state.output_buf)
-		local spacer_rows = math.max(0, tonumber(state.prompt_spacer_rows) or 0)
-		local content_count = math.max(1, count - spacer_rows)
-		start_row = content_count - 1
-		local last = vim.api.nvim_buf_get_lines(state.output_buf, start_row, start_row + 1, false)[1] or ""
-		parts[1] = last .. parts[1]
-		vim.api.nvim_buf_set_lines(state.output_buf, start_row, start_row + 1, false, parts)
-	end)
-	refresh_output_view(start_row, true)
+	local refresh_end = operation.block and operation.block.line2 + 1 or nil
+	refresh_output_view(start_row, true, refresh_end)
 	follow_output(follow)
 end
 
@@ -304,20 +307,26 @@ flush_output_text = function()
 		return
 	end
 	local text = state.pending_output_text
+	local block_id = state.pending_output_block_id
 	state.pending_output_text = nil
+	state.pending_output_block_id = nil
 	state.output_text_scheduled = false
 	state.output_text_generation = (state.output_text_generation or 0) + 1
-	if text and text ~= "" then
-		apply_output_text(text)
+	if text and text ~= "" and state.chat then
+		apply_chat_operation(state.chat:append_text(block_id, text))
 	end
 end
 
-local function append_text(text)
+local function append_text(block_id, text)
 	if not state or not valid_buf(state.output_buf) or not text or text == "" then
 		return
 	end
+	if state.pending_output_block_id and state.pending_output_block_id ~= block_id then
+		flush_output_text()
+	end
 	output_ui.pause_language_injection(state)
 	state.pending_output_text = (state.pending_output_text or "") .. text
+	state.pending_output_block_id = block_id
 	if state.output_text_scheduled then
 		return
 	end
@@ -332,6 +341,22 @@ local function append_text(text)
 		scheduled_state.output_text_scheduled = false
 		flush_output_text()
 	end, performance_delay("stream_interval_ms", 25))
+end
+
+local function append_chat_block(callback)
+	if not state or not state.chat then
+		return nil
+	end
+	flush_output_text()
+	local operation, block = callback(state.chat)
+	apply_chat_operation(operation)
+	return block
+end
+
+local function append_notice(kind, message, opts)
+	return append_chat_block(function(chat)
+		return chat:add_notice(kind, message, opts)
+	end)
 end
 
 local function input_text()
@@ -513,6 +538,7 @@ local function create_buffers()
 		vim.bo[state.sessions_buf].buftype = "nofile"
 		vim.bo[state.sessions_buf].bufhidden = "hide"
 		vim.bo[state.sessions_buf].swapfile = false
+		vim.bo[state.sessions_buf].undolevels = -1
 		vim.bo[state.sessions_buf].filetype = "acp-sessions"
 		vim.bo[state.sessions_buf].modifiable = false
 		render_sessions()
@@ -524,10 +550,14 @@ local function create_buffers()
 		vim.bo[state.output_buf].buftype = "nofile"
 		vim.bo[state.output_buf].bufhidden = "hide"
 		vim.bo[state.output_buf].swapfile = false
+		vim.bo[state.output_buf].undolevels = -1
 		vim.bo[state.output_buf].filetype = "acp"
 		vim.bo[state.output_buf].modifiable = false
-		set_output(render.thread({ turns = {} }, state.cwd))
+		set_chat(state.chat or blocks.new())
 	end
+	-- Chat transcripts are presentation surfaces, so editor-wide indent guide
+	-- plugins should leave their literal whitespace alone.
+	vim.b[state.output_buf].indent_guide = false
 	if vim.bo[state.output_buf].filetype ~= "acp" then
 		vim.bo[state.output_buf].filetype = "acp"
 	end
@@ -619,9 +649,7 @@ position_prompt = function()
 end
 
 local function normal_window_in_tab(winid, tabpage)
-	return valid_win(winid)
-		and vim.api.nvim_win_get_tabpage(winid) == tabpage
-		and not view.is_floating(winid)
+	return valid_win(winid) and vim.api.nvim_win_get_tabpage(winid) == tabpage and not view.is_floating(winid)
 end
 
 local function open_layout()
@@ -738,12 +766,52 @@ local function add_context_from_source(range, file_only)
 	return true
 end
 
+local function stream_block_id(kind, item_id)
+	local base = tostring(item_id or kind)
+	if not state.chat.by_id[base] then
+		return base
+	end
+	local index = 2
+	while state.chat.by_id[("%s:%s:%d"):format(base, kind, index)] do
+		index = index + 1
+	end
+	return ("%s:%s:%d"):format(base, kind, index)
+end
+
+local function active_stream_block(block_id, kind)
+	if block_id == nil then
+		return nil
+	end
+	local block = state.chat.by_id[block_id]
+	if block and block.kind == kind and state.chat.blocks[#state.chat.blocks] == block then
+		return block
+	end
+end
+
 local function ensure_agent_item(item_id)
-	if state.agent_item == item_id then
-		return
+	local block = state.agent_item == item_id and active_stream_block(state.agent_block_id, "agent")
+	if block then
+		return block.id
 	end
 	state.agent_item = item_id
-	append_lines({ "", "## Codex", "" })
+	state.agent_block_id = stream_block_id("agent", item_id)
+	block = append_chat_block(function(chat)
+		return chat:ensure_agent(state.agent_block_id)
+	end)
+	return block and block.id or state.agent_block_id
+end
+
+local function ensure_plan_item(item_id)
+	local block = state.plan_item == item_id and active_stream_block(state.plan_block_id, "plan")
+	if block then
+		return block.id
+	end
+	state.plan_item = item_id
+	state.plan_block_id = stream_block_id("plan", item_id)
+	block = append_chat_block(function(chat)
+		return chat:ensure_plan(state.plan_block_id)
+	end)
+	return block and block.id or state.plan_block_id
 end
 
 local function active_turn(thread)
@@ -776,13 +844,15 @@ local function apply_thread_response(result)
 		end
 	end
 	state.agent_item = nil
+	state.agent_block_id = nil
 	state.plan_item = nil
+	state.plan_block_id = nil
 	state.contexts = {}
 	state.queue = {}
 	local turn = active_turn(thread)
 	state.turn_id = turn and turn.id or nil
 	state.busy = turn ~= nil
-	set_output(render.thread(thread, state.cwd))
+	set_chat(blocks.from_thread(thread))
 	set_status(state.busy and "running" or "ready")
 	local found = false
 	local current_thread = thread
@@ -833,7 +903,7 @@ local function ensure_thread(callback)
 		if err or not apply_thread_response(result) then
 			local message = err or "Codex did not create a thread"
 			set_status("error")
-			append_lines({ "", ("> Error: %s"):format(message), "" })
+			append_notice("error", message)
 			flush_thread_waiters(false, message)
 			return
 		end
@@ -865,17 +935,20 @@ local function prepared_prompt(text)
 end
 
 local function append_user(envelope, suffix)
-	append_lines({ "", ("## You%s"):format(suffix or ""), "" })
-	append_lines(vim.split(envelope.text, "\n", { plain = true }))
-	if #envelope.labels > 0 then
-		append_lines({ "", ("> Context: %s"):format(table.concat(envelope.labels, ", ")) })
-	end
+	append_chat_block(function(chat)
+		return chat:add_user(envelope.text, envelope.labels, {
+			suffix = suffix,
+			steer = suffix ~= nil,
+		})
+	end)
 end
 
 local function start_envelope(envelope)
 	state.busy = true
 	state.agent_item = nil
+	state.agent_block_id = nil
 	state.plan_item = nil
+	state.plan_block_id = nil
 	state.streamed_items = {}
 	state.items = {}
 	append_user(envelope)
@@ -885,7 +958,7 @@ local function start_envelope(envelope)
 			state.busy = false
 			state.turn_id = nil
 			set_status("error")
-			append_lines({ "", ("> Error: %s"):format(err or "Codex did not start the turn"), "" })
+			append_notice("error", err or "Codex did not start the turn")
 			drain_queue()
 			return
 		end
@@ -906,13 +979,13 @@ local function dispatch_prompt(envelope, follow_up)
 				set_status("steering")
 				client:steer_turn(state.thread_id, state.turn_id, envelope.payload, function(_, err)
 					if err then
-						append_lines({ "", ("> Steer failed: %s"):format(err), "" })
+						append_notice("error", ("Steer failed: %s"):format(err))
 					end
 					set_status(err and "running" or "steered")
 				end)
 			else
 				table.insert(state.queue, envelope)
-				append_lines({ "", ("> Queued follow-up %d."):format(#state.queue), "" })
+				append_notice("notice", ("Queued follow-up %d."):format(#state.queue))
 				set_status("running")
 			end
 			update_chrome()
@@ -994,12 +1067,7 @@ end
 
 local function set_buffer_keymaps()
 	local opts = { buffer = state.input_buf, silent = true }
-	vim.keymap.set(
-		{ "n", "i" },
-		"<C-s>",
-		M.steer,
-		vim.tbl_extend("force", opts, { desc = "Steer active Codex turn" })
-	)
+	vim.keymap.set({ "n", "i" }, "<C-s>", M.steer, vim.tbl_extend("force", opts, { desc = "Steer active Codex turn" }))
 	vim.keymap.set({ "n", "i" }, "<C-CR>", M.send, vim.tbl_extend("force", opts, { desc = "Send Codex prompt" }))
 	vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "Close Codex tab" }))
 
@@ -1080,10 +1148,15 @@ local function set_buffer_keymaps()
 	vim.keymap.set("n", "<leader>ae", function()
 		output_ui.open_problems(state)
 	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex output problems" }))
-	vim.keymap.set("n", "<leader>az", "za", vim.tbl_extend("force", output_opts, {
-		desc = "Toggle Codex output fold",
-		remap = false,
-	}))
+	vim.keymap.set(
+		"n",
+		"<leader>az",
+		"za",
+		vim.tbl_extend("force", output_opts, {
+			desc = "Toggle Codex output fold",
+			remap = false,
+		})
+	)
 
 	if valid_buf(state.sessions_buf) then
 		local sessions_opts = { buffer = state.sessions_buf, silent = true }
@@ -1182,7 +1255,7 @@ function M.new_chat(opts)
 		end)
 	end
 	if valid_buf(state.output_buf) then
-		set_output(render.thread({ turns = {} }, state.cwd))
+		set_chat(blocks.new())
 	end
 	if valid_buf(state.input_buf) then
 		set_input("")
@@ -1647,17 +1720,14 @@ function M._handle_notification(method, params)
 		end
 		set_status(render.item_status(item))
 	elseif method == "item/agentMessage/delta" then
-		ensure_agent_item(params.itemId)
+		local block_id = ensure_agent_item(params.itemId)
 		state.streamed_items[params.itemId] = true
-		append_text(params.delta or "")
+		append_text(block_id, params.delta or "")
 		set_status("responding")
 	elseif method == "item/plan/delta" then
-		if state.plan_item ~= params.itemId then
-			state.plan_item = params.itemId
-			append_lines({ "", "### Plan", "" })
-		end
+		local block_id = ensure_plan_item(params.itemId)
 		state.streamed_items[params.itemId] = true
-		append_text(params.delta or "")
+		append_text(block_id, params.delta or "")
 		set_status("planning")
 	elseif method == "item/reasoning/summaryTextDelta" or method == "item/reasoning/textDelta" then
 		set_status("thinking")
@@ -1671,11 +1741,13 @@ function M._handle_notification(method, params)
 		end
 		if item.type == "agentMessage" then
 			if not state.streamed_items[item.id] and item.text and item.text ~= "" then
-				ensure_agent_item(item.id)
-				append_text(item.text)
+				local block_id = ensure_agent_item(item.id)
+				append_text(block_id, item.text)
 			end
 		elseif not state.streamed_items[item.id] then
-			append_lines(render.completed_item(item))
+			append_chat_block(function(chat)
+				return chat:add_item(item)
+			end)
 		end
 		set_status("working")
 	elseif method == "turn/diff/updated" then
@@ -1693,21 +1765,17 @@ function M._handle_notification(method, params)
 		update_chrome()
 	elseif method == "model/rerouted" then
 		state.model = params.toModel or state.model
-		append_lines({
-			"",
-			("> Model changed from `%s` to `%s`."):format(params.fromModel or "unknown", state.model),
-			"",
-		})
+		append_notice("notice", ("Model changed from `%s` to `%s`."):format(params.fromModel or "unknown", state.model))
 		update_chrome()
 	elseif method == "error" then
 		local message = params.error and params.error.message or "Codex error"
-		append_lines({ "", ("> Error: %s"):format(message), "" })
+		append_notice("error", message)
 		set_status(params.willRetry and "retrying" or "error")
 	elseif method == "warning" or method == "configWarning" then
 		local message = params.message or params.warning or "Codex warning"
-		append_lines({ "", ("> Warning: %s"):format(message), "" })
+		append_notice("warning", message)
 	elseif method == "thread/compacted" then
-		append_lines({ "", "> Conversation context compacted.", "" })
+		append_notice("notice", "Conversation context compacted.")
 		set_status("ready")
 	elseif method == "turn/completed" then
 		flush_output_text()
@@ -1715,7 +1783,7 @@ function M._handle_notification(method, params)
 		state.busy = false
 		state.turn_id = nil
 		if turn.status == "failed" and turn.error then
-			append_lines({ "", ("> Error: %s"):format(turn.error.message or "Turn failed"), "" })
+			append_notice("error", turn.error.message or "Turn failed")
 		end
 		set_status(turn.status or "completed")
 		output_ui.schedule_refresh(state, performance_delay("semantic_debounce_ms", 200))
@@ -1732,7 +1800,7 @@ local function handle_stderr(data)
 		return
 	end
 	if state and valid_buf(state.output_buf) then
-		append_lines({ "", ("> Server: %s"):format(text:gsub("\n", " ")), "" })
+		append_notice("warning", ("Server: %s"):format(text:gsub("\n", " ")))
 	else
 		notify(text, vim.log.levels.WARN)
 	end
@@ -1758,7 +1826,7 @@ local function client_handlers()
 				state.busy = false
 				state.turn_id = nil
 				set_status("disconnected")
-				append_lines({ "", ("> %s"):format(message), "" })
+				append_notice("warning", message)
 			end
 		end,
 	}
@@ -1885,12 +1953,18 @@ local function register_commands()
 	create_command("AcpOutputInspect", output_action(output_ui.inspect))
 	create_command("AcpOutputActions", output_action(output_ui.actions))
 	create_command("AcpOutputHelp", output_action(output_ui.help))
-	create_command("AcpOutputNextItem", output_action(function(value)
-		output_ui.jump_item(value, 1)
-	end))
-	create_command("AcpOutputPrevItem", output_action(function(value)
-		output_ui.jump_item(value, -1)
-	end))
+	create_command(
+		"AcpOutputNextItem",
+		output_action(function(value)
+			output_ui.jump_item(value, 1)
+		end)
+	)
+	create_command(
+		"AcpOutputPrevItem",
+		output_action(function(value)
+			output_ui.jump_item(value, -1)
+		end)
+	)
 	create_command("AcpCodeBlocks", output_action(output_ui.open_code_blocks))
 	create_command("AcpCodeBlocksQuickfix", output_action(output_ui.code_blocks_quickfix))
 	create_command("AcpCodeBlockDraft", output_action(output_ui.draft_code_block))
@@ -2023,7 +2097,32 @@ function M._adopt_runtime(runtime)
 	else
 		config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), runtime.config or {})
 	end
-	state = apply_state_defaults(runtime.state)
+	local previous_state = runtime.state
+	local had_chat = type(previous_state) == "table" and type(previous_state.chat) == "table"
+	state = apply_state_defaults(previous_state)
+	if state then
+		if had_chat then
+			state.chat = blocks.adopt(state.chat)
+		elseif valid_buf(state.output_buf) then
+			local count = vim.api.nvim_buf_line_count(state.output_buf)
+			local content_count = math.max(1, count - math.max(0, tonumber(state.prompt_spacer_rows) or 0))
+			state.chat = blocks.from_lines(vim.api.nvim_buf_get_lines(state.output_buf, 0, content_count, false))
+		else
+			state.chat = blocks.new()
+		end
+		if valid_buf(state.output_buf) then
+			blocks.bind(state.output_buf, state.chat)
+			local content_count = math.max(
+				1,
+				vim.api.nvim_buf_line_count(state.output_buf) - math.max(0, tonumber(state.prompt_spacer_rows) or 0)
+			)
+			local current = vim.api.nvim_buf_get_lines(state.output_buf, 0, content_count, false)
+			local expected = state.chat:render_lines()
+			if not vim.deep_equal(current, expected) then
+				set_output(expected, { preserve_view = true })
+			end
+		end
+	end
 	client = runtime.client
 	client_managed = runtime.client_managed == true
 	if client_managed and client then
@@ -2059,6 +2158,7 @@ function M._reset()
 	if state then
 		local buffers = { state.sessions_buf, state.input_buf, state.output_buf }
 		M.close()
+		blocks.unbind(state.output_buf)
 		for _, bufnr in ipairs(buffers) do
 			if valid_buf(bufnr) then
 				pcall(vim.api.nvim_buf_delete, bufnr, { force = true })

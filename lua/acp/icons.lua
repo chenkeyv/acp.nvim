@@ -91,4 +91,16 @@ function M.get(name)
 	return values[name] or text[name] or "·"
 end
 
+function M.variants(name)
+	local values = {}
+	local seen = {}
+	for _, glyph in ipairs({ nerd[name], text[name] }) do
+		if glyph and glyph ~= "" and not seen[glyph] then
+			seen[glyph] = true
+			table.insert(values, glyph)
+		end
+	end
+	return values
+end
+
 return M

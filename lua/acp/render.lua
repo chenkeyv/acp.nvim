@@ -1,3 +1,5 @@
+local transcript = require("acp.transcript")
+
 local M = {}
 
 local function present(value)
@@ -45,6 +47,14 @@ local function failed_status(status)
 	return false
 end
 
+function M.header(kind, suffix)
+	return transcript.header(kind, suffix)
+end
+
+function M.transcript_line(kind, content)
+	return transcript.line(kind, content)
+end
+
 function M.item_status(item)
 	if type(item) ~= "table" then
 		return "working"
@@ -73,10 +83,11 @@ local function file_change_lines(item)
 	local failed = failed_status(item.status)
 	for _, change in ipairs(item.changes or {}) do
 		local detail = ("%s `%s`"):format(change_label(change), change.path or "file")
-		table.insert(lines, failed and ("> File changes: %s · %s"):format(status, detail) or ("> " .. detail))
+		local content = failed and ("File changes: %s · %s"):format(status, detail) or detail
+		table.insert(lines, transcript.line(failed and "error" or "changes", content))
 	end
 	if #lines == 0 then
-		table.insert(lines, ("> File changes: %s"):format(status))
+		table.insert(lines, transcript.line(failed and "error" or "changes", ("File changes: %s"):format(status)))
 	end
 	return lines
 end
@@ -87,23 +98,31 @@ function M.completed_item(item)
 	end
 	if item.type == "commandExecution" then
 		local suffix = present(item.exitCode) and (" (exit %s)"):format(item.exitCode) or ""
-		return { ("> Command %s%s: `%s`"):format(status_label(item.status), suffix, clean(item.command)) }
+		local content = ("Command %s%s: `%s`"):format(status_label(item.status), suffix, clean(item.command))
+		local failed = failed_status(item.status) or (present(item.exitCode) and tonumber(item.exitCode) ~= 0)
+		return { transcript.line(failed and "error" or "command", content) }
 	elseif item.type == "fileChange" then
 		return file_change_lines(item)
 	elseif item.type == "mcpToolCall" then
+		local content = ("Tool %s: `%s/%s`"):format(
+			status_label(item.status),
+			item.server or "mcp",
+			item.tool or "tool"
+		)
 		return {
-			("> Tool %s: `%s/%s`"):format(status_label(item.status), item.server or "mcp", item.tool or "tool"),
+			transcript.line(failed_status(item.status) and "error" or "tool", content),
 		}
 	elseif item.type == "dynamicToolCall" then
-		return { ("> Tool %s: `%s`"):format(status_label(item.status), item.tool or "tool") }
+		local content = ("Tool %s: `%s`"):format(status_label(item.status), item.tool or "tool")
+		return { transcript.line(failed_status(item.status) and "error" or "tool", content) }
 	elseif item.type == "plan" and item.text and item.text ~= "" then
-		return { "", "### Plan", "", item.text }
+		return { "", transcript.header("plan"), "", item.text }
 	elseif item.type == "enteredReviewMode" then
-		return { "> Entered review mode." }
+		return { transcript.line("note", "Entered review mode.") }
 	elseif item.type == "exitedReviewMode" and item.review and item.review ~= "" then
-		return { "", "### Review", "", item.review }
+		return { "", transcript.header("review"), "", item.review }
 	elseif item.type == "contextCompaction" then
-		return { "> Conversation context compacted." }
+		return { transcript.line("note", "Conversation context compacted.") }
 	end
 	return {}
 end
@@ -118,11 +137,11 @@ local function user_message(item)
 			table.insert(mentions, content.path or content.name)
 		end
 	end
-	local lines = { "", "## You", "" }
+	local lines = { "", transcript.header("user"), "" }
 	append(lines, vim.split(table.concat(text, "\n\n"), "\n", { plain = true }))
 	if #mentions > 0 then
 		table.insert(lines, "")
-		table.insert(lines, ("> Context: %s"):format(table.concat(mentions, ", ")))
+		table.insert(lines, transcript.line("context", ("Context: %s"):format(table.concat(mentions, ", "))))
 	end
 	return lines
 end
@@ -134,7 +153,7 @@ function M.thread(thread, _)
 			if item.type == "userMessage" then
 				append(lines, user_message(item))
 			elseif item.type == "agentMessage" and item.text and item.text ~= "" then
-				append(lines, { "", "## Codex", "" })
+				append(lines, { "", transcript.header("agent"), "" })
 				append(lines, vim.split(item.text, "\n", { plain = true }))
 			else
 				append(lines, M.completed_item(item))

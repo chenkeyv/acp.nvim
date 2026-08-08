@@ -1,4 +1,5 @@
 local icons = require("acp.icons")
+local transcript = require("acp.transcript")
 
 local M = {}
 
@@ -54,10 +55,7 @@ end
 
 function M.is_agent_header(line)
 	line = tostring(line or "")
-	return line == "Agent"
-		or line == "# Codex"
-		or line:match("^Agent:%s+") ~= nil
-		or line:match("^##%s+Codex") ~= nil
+	return transcript.header_kind(line) == "agent"
 end
 
 function M.agent_status_line(status)
@@ -373,7 +371,11 @@ function M.activity_lens_chunks(line, frame)
 	elseif line:match("^Terminal:") then
 		label = (" %s TERMINAL "):format(icons.terminal)
 		title = clean(line:gsub("^Terminal:%s*", "")) or "terminal"
-		hint = ui_hints({ { icons.terminal, "streaming output" }, { icons.inspect, "K inspect" }, { icons.error, "<leader>ae problems" } })
+		hint = ui_hints({
+			{ icons.terminal, "streaming output" },
+			{ icons.inspect, "K inspect" },
+			{ icons.error, "<leader>ae problems" },
+		})
 		hl = "AcpOutputActivityTerminal"
 	elseif line:match("^Terminal output truncated") then
 		label = (" %s TERMINAL WARN "):format(icons.warning)
@@ -406,46 +408,36 @@ function M.activity_lens_chunks(line, frame)
 end
 
 function M.line_style(line)
-	if line == "You" or tostring(line or ""):match("^##%s+You") then
-		return {
-			line_hl_group = "AcpUserHeader",
-			sign_text = icons.user,
-		}
+	line = tostring(line or "")
+	local header_kind = transcript.header_kind(line)
+	if header_kind == "user" then
+		return { line_hl_group = "AcpUserHeader" }
+	elseif header_kind == "agent" then
+		return { line_hl_group = "AcpAgentHeader" }
+	elseif header_kind == "plan" or header_kind == "review" then
+		return { line_hl_group = "AcpSectionHeader" }
 	end
-	if M.is_agent_header(line) then
-		return {
-			line_hl_group = "AcpAgentHeader",
-			sign_text = icons.agent,
-		}
-	end
-	if line:match("^###%s+") then
-		return { line_hl_group = "AcpSectionHeader", sign_text = icons.section }
-	end
+	local content, kind = transcript.parse(line)
 	local quote = line:match("^>%s*(.*)")
 	if quote then
-		local exit_code = tonumber(quote:match("^Command.-%(exit%s+([+-]?%d+)%)"))
-		if quote:match("^Error:")
-			or quote:match("failed")
-			or quote:match("cancelled")
-			or quote:match("canceled")
-			or (exit_code ~= nil and exit_code ~= 0)
-		then
-			return { line_hl_group = "AcpError", sign_text = icons.error }
-		elseif quote:match("^Warning:") then
-			return { line_hl_group = "AcpWarning", sign_text = icons.warning }
-		elseif quote:match("^Command") then
-			return { line_hl_group = "AcpTerminal", sign_text = icons.command }
-		elseif quote:match("^Tool") then
-			return { line_hl_group = "AcpTool", sign_text = icons.tool }
-		elseif quote:match("^Context:") then
-			return { line_hl_group = "AcpOutputMeta", sign_text = icons.context }
-		elseif quote:match("^[%a%s]+%s+`[^`]+`") then
-			return { line_hl_group = "AcpFile", sign_text = icons.changes }
-		end
-		return { line_hl_group = "AcpOutputMeta", sign_text = icons.info }
+		content = quote
+		kind = transcript.activity_kind(content)
+	end
+	if kind == "error" then
+		return { line_hl_group = "AcpError" }
+	elseif kind == "warning" then
+		return { line_hl_group = "AcpWarning" }
+	elseif kind == "command" then
+		return { line_hl_group = "AcpTerminal" }
+	elseif kind == "tool" then
+		return { line_hl_group = "AcpTool" }
+	elseif kind == "changes" then
+		return { line_hl_group = "AcpFile" }
+	elseif kind == "context" or kind == "note" or kind == "info" then
+		return { line_hl_group = "AcpOutputMeta" }
 	end
 	if line:match("^ACP:") then
-		return { line_hl_group = "AcpOutputHeader", sign_text = icons.session }
+		return { line_hl_group = "AcpOutputHeader" }
 	end
 	if line:match("^Session:") or line:match("^Model:") or line:match("^Source:") or line:match("^Transcript:") then
 		return { line_hl_group = "AcpOutputMeta" }
@@ -454,58 +446,31 @@ function M.line_style(line)
 		return { line_hl_group = "AcpOutputKey" }
 	end
 	if line:match("^Status:%s+error") then
-		return {
-			line_hl_group = "AcpStatusError",
-			sign_text = icons.error,
-		}
+		return { line_hl_group = "AcpStatusError" }
 	end
 	if line:match("^Status:%s+stopped") or line:match("^Status:%s+restored") then
-		return {
-			line_hl_group = "AcpStatusDone",
-			sign_text = icons.idle,
-		}
+		return { line_hl_group = "AcpStatusDone" }
 	end
 	if line:match("^Status:") then
-		return {
-			line_hl_group = "AcpStatus",
-			sign_text = icons.status,
-		}
+		return { line_hl_group = "AcpStatus" }
 	end
 	if line:match("^Tool") then
-		return {
-			line_hl_group = "AcpTool",
-			sign_text = icons.tool,
-		}
+		return { line_hl_group = "AcpTool" }
 	end
 	if line:match("^Terminal:") then
-		return {
-			line_hl_group = "AcpTerminal",
-			sign_text = icons.terminal,
-		}
+		return { line_hl_group = "AcpTerminal" }
 	end
 	if line:match("^Terminal output truncated") then
-		return {
-			line_hl_group = "AcpWarning",
-			sign_text = icons.warning,
-		}
+		return { line_hl_group = "AcpWarning" }
 	end
 	if line:match("^Wrote ") then
-		return {
-			line_hl_group = "AcpFile",
-			sign_text = icons.file,
-		}
+		return { line_hl_group = "AcpFile" }
 	end
 	if line:match("^Thought:") then
-		return {
-			line_hl_group = "AcpThought",
-			sign_text = icons.note,
-		}
+		return { line_hl_group = "AcpThought" }
 	end
 	if line:match("^stderr:") then
-		return {
-			line_hl_group = "AcpError",
-			sign_text = icons.error,
-		}
+		return { line_hl_group = "AcpError" }
 	end
 end
 
@@ -558,7 +523,11 @@ local function unsuccessful_activity(content)
 end
 
 function M.activity_kind(line)
-	local content = tostring(line or ""):match("^>%s*(.*)")
+	line = tostring(line or "")
+	local direct, direct_kind = transcript.parse(line)
+	local content = line:match("^>%s*(.*)")
+		or (direct_kind == "command" or direct_kind == "tool" or direct_kind == "changes" or direct_kind == "error")
+			and direct
 	if not content then
 		return nil
 	end
@@ -574,7 +543,9 @@ end
 
 function M.is_section(line)
 	line = tostring(line or "")
-	return line == "You"
+	local _, direct_kind = transcript.parse(line)
+	return direct_kind ~= nil
+		or line == "You"
 		or line:match("^##%s+You")
 		or M.is_agent_header(line)
 		or line:match("^###%s+")
@@ -590,11 +561,32 @@ function M.is_section(line)
 end
 
 local function section_label(line)
-	if line == "You" or line:match("^##%s+You") then
+	local direct, direct_kind = transcript.parse(line)
+	local header_kind = transcript.header_kind(line)
+	if header_kind == "user" then
 		return "USER", "Prompt"
 	end
-	if M.is_agent_header(line) then
+	if header_kind == "agent" then
 		return "AGENT", "Response"
+	end
+	if header_kind == "plan" or header_kind == "review" then
+		local title = header_kind:gsub("^%l", string.upper)
+		return header_kind:upper(), title
+	end
+	if direct_kind == "error" then
+		return "ERROR", direct:gsub("^Error:%s*", "")
+	elseif direct_kind == "warning" then
+		return "WARNING", direct:gsub("^Warning:%s*", "")
+	elseif direct_kind == "command" then
+		return "COMMAND", direct
+	elseif direct_kind == "tool" then
+		return "TOOL", direct
+	elseif direct_kind == "context" then
+		return "CONTEXT", direct:gsub("^Context:%s*", "")
+	elseif direct_kind == "changes" then
+		return "FILE", direct
+	elseif direct_kind == "note" or direct_kind == "info" then
+		return "NOTE", direct
 	end
 	local heading = line:match("^###%s+(.+)")
 	if heading then
@@ -934,18 +926,20 @@ local function section_summary_label(body)
 
 	local code_count = #M.code_blocks(body)
 	if code_count > 0 then
-		return ("%dL | %d code"):format(line_count, code_count), {
-			lines = line_count,
-			words = word_count,
-			code_blocks = code_count,
-		}
+		return ("%dL | %d code"):format(line_count, code_count),
+			{
+				lines = line_count,
+				words = word_count,
+				code_blocks = code_count,
+			}
 	end
 
-	return ("%dL | %dw"):format(line_count, word_count), {
-		lines = line_count,
-		words = word_count,
-		code_blocks = 0,
-	}
+	return ("%dL | %dw"):format(line_count, word_count),
+		{
+			lines = line_count,
+			words = word_count,
+			code_blocks = 0,
+		}
 end
 
 function M.section_summaries(lines)
@@ -1069,7 +1063,7 @@ function M.output_map_entries(lines, opts)
 	opts = opts or {}
 	lines = lines or {}
 	local entries = {}
-	local total = #lines
+	local total = tonumber(opts.total_lines) or #lines
 
 	for _, section in ipairs(opts.sections or M.sections(lines)) do
 		table.insert(entries, {
@@ -1152,15 +1146,18 @@ function M.output_map_lines(entries, opts)
 		local progress = position_percent(line1, total) or "   ?"
 		local bar = progress_bar(line1, total, opts.bar_width or 10)
 		local token = map_kind_tokens[entry.kind] or icons.map
-		table.insert(lines, ("%s %s  %4d  %s  %s  %-9s  %s"):format(
-			marker,
-			bar,
-			line1,
-			progress,
-			token,
-			(entry.kind or "item"):upper(),
-			label
-		))
+		table.insert(
+			lines,
+			("%s %s  %4d  %s  %s  %-9s  %s"):format(
+				marker,
+				bar,
+				line1,
+				progress,
+				token,
+				(entry.kind or "item"):upper(),
+				label
+			)
+		)
 		line_entries[#lines] = entry
 	end
 
@@ -1704,7 +1701,11 @@ function M.file_reference_lines(references)
 	local line_references = {}
 
 	for _, reference in ipairs(references or {}) do
-		local location = ("%s:%d:%d"):format(reference.display_path or reference.path or "?", reference.line or 1, reference.column or 1)
+		local location = ("%s:%d:%d"):format(
+			reference.display_path or reference.path or "?",
+			reference.line or 1,
+			reference.column or 1
+		)
 		table.insert(lines, ("%4d  %s"):format(reference.source_line or 1, location))
 		line_references[#lines] = reference
 		if reference.source_text then
@@ -1752,20 +1753,23 @@ function M.problem_diagnostics(lines)
 	for index, line in ipairs(lines or {}) do
 		local severity
 		local message
+		local direct, direct_kind = transcript.parse(line)
+		local content = line:match("^>%s*(.*)") or direct_kind and direct or ""
 
-		if line:match("^>%s*Error:") then
+		if direct_kind == "error" or line:match("^>%s*Error:") then
 			severity = vim.diagnostic.severity.ERROR
-			message = clean(line:gsub("^>%s*Error:%s*", "")) or "Codex error"
-		elseif line:match("^>%s*Warning:") then
+			message = clean(content:gsub("^Error:%s*", "")) or "Codex error"
+		elseif direct_kind == "warning" or line:match("^>%s*Warning:") then
 			severity = vim.diagnostic.severity.WARN
-			message = clean(line:gsub("^>%s*Warning:%s*", "")) or "Codex warning"
-		elseif line:match("^>%s*Command%s+failed")
-			or line:match("^>%s*Tool%s+failed")
-			or line:match("^>%s*File changes%s+failed")
-			or unsuccessful_activity(line:match("^>%s*(.*)"))
+			message = clean(content:gsub("^Warning:%s*", "")) or "Codex warning"
+		elseif
+			content:match("^Command%s+failed")
+			or content:match("^Tool%s+failed")
+			or content:match("^File changes%s+failed")
+			or unsuccessful_activity(content)
 		then
 			severity = vim.diagnostic.severity.ERROR
-			message = clean(line:gsub("^>%s*", "")) or "Codex tool failed"
+			message = clean(content) or "Codex tool failed"
 		elseif line:match("^Status:%s+error") then
 			severity = vim.diagnostic.severity.ERROR
 			message = clean(line:gsub("^Status:%s*", "")) or "ACP status error"
@@ -1879,6 +1883,7 @@ end
 function M.output_items(lines, opts)
 	opts = opts or {}
 	lines = lines or {}
+	local total_lines = tonumber(opts.total_lines) or #lines
 	local items = {}
 	local order = {
 		problem = 1,
@@ -1897,7 +1902,7 @@ function M.output_items(lines, opts)
 			line = (item.lnum or 0) + 1,
 			col = (item.col or 0) + 1,
 			label = item.message,
-			total_lines = #lines,
+			total_lines = total_lines,
 		})
 	end
 	for _, reference in ipairs(references) do
@@ -1906,8 +1911,12 @@ function M.output_items(lines, opts)
 			line = reference.source_line or 1,
 			col = reference.source_col or 1,
 			end_col = reference.source_end_col or reference.source_col or 1,
-			label = ("%s:%d:%d"):format(reference.display_path or reference.path or "?", reference.line or 1, reference.column or 1),
-			total_lines = #lines,
+			label = ("%s:%d:%d"):format(
+				reference.display_path or reference.path or "?",
+				reference.line or 1,
+				reference.column or 1
+			),
+			total_lines = total_lines,
 		})
 	end
 	for _, block in ipairs(blocks) do
@@ -1917,11 +1926,11 @@ function M.output_items(lines, opts)
 			line2 = block.end_line or block.start_line or 1,
 			col = 1,
 			label = ("%s code block"):format(block.language or "text"),
-			total_lines = #lines,
+			total_lines = total_lines,
 		})
 	end
 	for _, activity in ipairs(activities) do
-		table.insert(items, vim.tbl_extend("force", {}, activity, { total_lines = #lines }))
+		table.insert(items, vim.tbl_extend("force", {}, activity, { total_lines = total_lines }))
 	end
 
 	table.sort(items, function(left, right)
@@ -2116,7 +2125,10 @@ function M.skyline_chunks(lines, opts)
 	local injection = opts.language_injection and "Tree-sitter" or "fence"
 	return {
 		{ (" %s FLOW "):format(icons.map), "AcpOutputSkyline" },
-		{ M.skyline(lines, { width = opts.width or 24, current_line = opts.current_line, cwd = opts.cwd }), "AcpOutputRail" },
+		{
+			M.skyline(lines, { width = opts.width or 24, current_line = opts.current_line, cwd = opts.cwd }),
+			"AcpOutputRail",
+		},
 		{ (" %s "):format(M.animation_frame(opts.frame)), "AcpOutputSpark" },
 		{
 			("%s %d sections  %s %d code  %s %d refs  %s %d changes  "):format(
@@ -2200,10 +2212,10 @@ function M.cursor_ribbon_chunks(lines, lnum, col, opts)
 		table.insert(chunks, { (item_kind or "item"):upper(), output_item_hl(item_kind) })
 		table.insert(chunks, { item_label and (" " .. item_label) or "", "AcpOutputHint" })
 	else
-		table.insert(
-			chunks,
-			{ " | " .. ui_hints({ { icons.section, "[[/]] sections" }, { icons.jump, "]o/[o items" } }), "AcpOutputHint" }
-		)
+		table.insert(chunks, {
+			" | " .. ui_hints({ { icons.section, "[[/]] sections" }, { icons.jump, "]o/[o items" } }),
+			"AcpOutputHint",
+		})
 	end
 
 	return chunks

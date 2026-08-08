@@ -1,5 +1,6 @@
 local icons = require("acp.icons")
 local output = require("acp.output")
+local transcript = require("acp.transcript")
 
 local M = {}
 
@@ -79,7 +80,7 @@ function M.define_highlights()
 		AcpAgentHeader = { fg = "#7dcfff", bold = true },
 		AcpSectionHeader = { fg = "#bb9af7", bold = true },
 		AcpTranscriptMeta = { link = "Comment" },
-		AcpTranscriptTool = { fg = "#e0af68" },
+		AcpTranscriptTool = { fg = "#737aa2" },
 		AcpTranscriptError = { link = "DiagnosticError" },
 		AcpTranscriptWarning = { link = "DiagnosticWarn" },
 		AcpCodeFence = { fg = "#e0af68", bold = true },
@@ -95,6 +96,12 @@ local function current_section(state)
 		return nil
 	end
 	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
+	if state.chat and state.chat.section_at then
+		local section = state.chat:section_at(cursor[1])
+		if section then
+			return section
+		end
+	end
 	local sections = state.output_cache and state.output_cache.sections
 	if sections and #sections > 0 then
 		local low = 1
@@ -151,10 +158,7 @@ function M.chat_winbar(state)
 			title = title:sub(1, 29) .. "..."
 		end
 		table.insert(chunks, separator())
-		table.insert(
-			chunks,
-			statusline_chunk(("%s %s"):format(icons.get("section"), title), "AcpChatMeta")
-		)
+		table.insert(chunks, statusline_chunk(("%s %s"):format(icons.get("section"), title), "AcpChatMeta"))
 	end
 	if state.tokens then
 		local used = format_count(state.tokens.totalTokens or 0)
@@ -298,7 +302,9 @@ function M.prompt_config(output_win, state, opts)
 		footer = M.prompt_footer(),
 		footer_pos = "right",
 		zindex = 50,
-	}, geometry.reserved_rows, M.prompt_key(state)
+	},
+		geometry.reserved_rows,
+		M.prompt_key(state)
 end
 
 local function numeric(value)
@@ -340,15 +346,16 @@ function M.configure_prompt_window(winid)
 	vim.wo[winid].cursorline = false
 	vim.wo[winid].winbar = ""
 	vim.wo[winid].fillchars = "eob: "
-	vim.wo[winid].winhighlight =
-		"NormalFloat:AcpPromptFloat,FloatBorder:AcpPromptBorder,FloatTitle:AcpPromptTitle"
+	vim.wo[winid].winhighlight = "NormalFloat:AcpPromptFloat,FloatBorder:AcpPromptBorder,FloatTitle:AcpPromptTitle"
 end
 
 function M.configure_output_window(winid, reserved_rows)
 	if not valid_win(winid) then
 		return
 	end
-	vim.wo[winid].signcolumn = "yes:1"
+	vim.wo[winid].signcolumn = "no"
+	vim.wo[winid].breakindent = false
+	vim.wo[winid].showbreak = ""
 	vim.wo[winid].conceallevel = 2
 	vim.wo[winid].concealcursor = "nvic"
 	vim.wo[winid].foldmethod = "expr"
@@ -357,7 +364,7 @@ function M.configure_output_window(winid, reserved_rows)
 	-- Keep transcript sections open while completed activity groups start collapsed.
 	vim.wo[winid].foldlevel = 1
 	vim.wo[winid].foldcolumn = "1"
-	vim.wo[winid].statuscolumn = "%s%C "
+	vim.wo[winid].statuscolumn = "%C "
 	vim.wo[winid].scrolloff = math.max(0, tonumber(reserved_rows) or 0)
 	vim.wo[winid].fillchars = "eob: "
 end
@@ -366,7 +373,7 @@ local function mark(bufnr, row, col, opts)
 	pcall(vim.api.nvim_buf_set_extmark, bufnr, transcript_ns, row, col, opts)
 end
 
-local function highlight_line(bufnr, row, line, highlight, sign_highlight, sign_icon)
+local function highlight_line(bufnr, row, line, highlight)
 	if line == "" then
 		return
 	end
@@ -375,21 +382,7 @@ local function highlight_line(bufnr, row, line, highlight, sign_highlight, sign_
 		hl_group = highlight,
 		priority = 80,
 	}
-	if sign_highlight then
-		opts.sign_text = sign_icon or icons.get("info")
-		opts.sign_hl_group = sign_highlight
-	end
 	mark(bufnr, row, 0, opts)
-end
-
-local function conceal_prefix(bufnr, row, prefix)
-	if prefix and prefix ~= "" then
-		mark(bufnr, row, 0, {
-			end_col = #prefix,
-			conceal = "",
-			priority = 90,
-		})
-	end
 end
 
 local function highlight_inline_code(bufnr, row, line)
@@ -409,59 +402,75 @@ local function highlight_inline_code(bufnr, row, line)
 end
 
 local function quote_style(content)
-	local exit_code = tonumber(content:match("^Command.-%(exit%s+([+-]?%d+)%)"))
-	if content:match("^Error:")
-		or content:match("failed")
-		or content:match("cancelled")
-		or content:match("canceled")
-		or (exit_code ~= nil and exit_code ~= 0)
-	then
-		return "AcpTranscriptError", "error"
-	elseif content:match("^Warning:") then
-		return "AcpTranscriptWarning", "warning"
-	elseif content:match("^Command") then
-		return "AcpTranscriptTool", "command"
-	elseif content:match("^Tool") then
-		return "AcpTranscriptTool", "tool"
-	elseif content:match("^File changes") or content:match("^[%a%s]+%s+`[^`]+`") then
-		return "AcpTranscriptTool", "changes"
-	elseif content:match("^Context:") then
-		return "AcpTranscriptMeta", "context"
-	elseif content:match("review mode") or content:match("context compacted") then
-		return "AcpTranscriptMeta", "note"
+	local kind = transcript.activity_kind(content)
+	if kind == "error" then
+		return "AcpTranscriptError"
+	elseif kind == "warning" then
+		return "AcpTranscriptWarning"
+	elseif kind == "command" or kind == "tool" or kind == "changes" then
+		return "AcpTranscriptTool"
 	end
-	return "AcpTranscriptMeta", "info"
+	return "AcpTranscriptMeta"
 end
 
-function M.refresh_transcript(bufnr, start_row)
+function M.refresh_transcript(bufnr, start_row, chat, end_row)
 	if not valid_buf(bufnr) then
 		return
 	end
 	start_row = math.max(0, math.floor(tonumber(start_row) or 0))
-	vim.api.nvim_buf_clear_namespace(bufnr, transcript_ns, start_row, -1)
-	local lines = vim.api.nvim_buf_get_lines(bufnr, start_row, -1, false)
+	if end_row ~= nil then
+		end_row = math.max(
+			start_row,
+			math.min(vim.api.nvim_buf_line_count(bufnr), math.floor(tonumber(end_row) or start_row))
+		)
+	else
+		end_row = -1
+	end
+	vim.api.nvim_buf_clear_namespace(bufnr, transcript_ns, start_row, end_row)
+	local lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row, false)
 	for offset, line in ipairs(lines) do
 		local row = start_row + offset - 1
-		local heading = line:match("^(#+%s+)")
-		if line:match("^##%s+You") then
-			highlight_line(bufnr, row, line, "AcpUserHeader", "AcpUserHeader", icons.get("user"))
-			conceal_prefix(bufnr, row, heading)
-		elseif line:match("^##%s+Codex") or line == "# Codex" then
-			highlight_line(bufnr, row, line, "AcpAgentHeader", "AcpAgentHeader", icons.get("agent"))
-			conceal_prefix(bufnr, row, heading)
-		elseif line:match("^###%s+") then
-			highlight_line(bufnr, row, line, "AcpSectionHeader", "AcpSectionHeader", icons.get("section"))
-			conceal_prefix(bufnr, row, heading)
+		local line_number = row + 1
+		local block = chat and chat.block_at and chat:block_at(line_number) or nil
+		local header_kind = transcript.header_kind(line)
+		local parse_legacy = not block or block.kind == "legacy"
+		if
+			(block and block.kind == "user" and line_number == block.header_line)
+			or (parse_legacy and header_kind == "user")
+		then
+			highlight_line(bufnr, row, line, "AcpUserHeader")
+		elseif
+			(block and block.kind == "agent" and line_number == block.header_line)
+			or (parse_legacy and header_kind == "agent")
+		then
+			highlight_line(bufnr, row, line, "AcpAgentHeader")
+		elseif
+			(block and (block.kind == "plan" or block.kind == "review") and line_number == block.header_line)
+			or (parse_legacy and (header_kind == "plan" or header_kind == "review"))
+		then
+			highlight_line(bufnr, row, line, "AcpSectionHeader")
 		elseif line:match("^```") then
-			highlight_line(bufnr, row, line, "AcpCodeFence", "AcpCodeFence", icons.get("code"))
+			highlight_line(bufnr, row, line, "AcpCodeFence")
 		elseif line:match("^Working directory:") then
 			highlight_line(bufnr, row, line, "AcpTranscriptMeta")
-		elseif line:match("^>%s*") then
-			local prefix = line:match("^(>%s*)")
-			local content = line:sub(#prefix + 1)
-			local highlight, icon = quote_style(content)
-			highlight_line(bufnr, row, line, highlight, highlight, icons.get(icon))
-			conceal_prefix(bufnr, row, prefix)
+		else
+			local structural = parse_legacy
+				or (
+					block
+					and (
+						block.kind == "activity"
+						or block.kind == "notice"
+						or block.kind == "warning"
+						or block.kind == "error"
+					)
+				)
+			if structural then
+				local direct, direct_kind = transcript.parse(line)
+				local content = line:match("^>%s*(.*)") or direct_kind and direct
+				if content then
+					highlight_line(bufnr, row, line, quote_style(content))
+				end
+			end
 		end
 		if not line:match("^```") then
 			highlight_inline_code(bufnr, row, line)

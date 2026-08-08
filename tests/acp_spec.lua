@@ -1,4 +1,5 @@
 local approval = require("acp.approval")
+local blocks = require("acp.blocks")
 local Client = require("acp.codex").Client
 local context = require("acp.context")
 local health = require("acp.health")
@@ -9,6 +10,7 @@ local output_ui = require("acp.output_ui")
 local permission = require("acp.permission")
 local render = require("acp.render")
 local requests = require("acp.requests")
+local transcript = require("acp.transcript")
 local ui = require("acp.ui")
 local view = require("acp.view")
 
@@ -296,12 +298,12 @@ test("thread renderer reconstructs history and diffs", function()
 		},
 	}
 	local text = table.concat(render.thread(thread, "/tmp/project"), "\n")
-	contains(text, "## You")
+	contains(text, render.header("user"))
 	contains(text, "Please fix it")
 	contains(text, "nvim --headless")
 	ok(not text:find("\27", 1, true), "ANSI escape sequences should be removed")
 	contains(text, "lua/acp/ui.lua")
-	contains(text, "## Codex")
+	contains(text, render.header("agent"))
 	contains(text, "Done.")
 	ok(not text:find("Working directory:", 1, true), "working-directory metadata belongs in window chrome")
 	eq(render.thread_diff(thread), "--- a\n+++ b")
@@ -315,71 +317,305 @@ test("thread renderer reconstructs history and diffs", function()
 	eq(output.activity_kind(failed_change), nil)
 end)
 
-test("chat view keeps the prompt inset and styles transcript roles", function()
-	eq(view.prompt_geometry({ row = 1, col = 31, width = 89, height = 30 }, {
-		input_height = 6,
-		input_padding = 2,
-	}), {
-		row = 23,
-		col = 33,
-		width = 83,
-		height = 4,
-		outer_width = 85,
-		outer_height = 6,
-		reserved_rows = 8,
+test("chat blocks preserve roles, grouped activity, code, and failures", function()
+	local chat = blocks.from_thread({
+		turns = {
+			{
+				items = {
+					{ id = "user-1", type = "userMessage", content = { { type = "text", text = "Inspect it" } } },
+					{
+						id = "command-1",
+						type = "commandExecution",
+						command = "rg blocks",
+						status = "completed",
+						exitCode = 0,
+					},
+					{
+						id = "change-1",
+						type = "fileChange",
+						status = "completed",
+						changes = { { path = "lua/acp/blocks.lua", kind = { type = "update" } } },
+					},
+					{
+						id = "agent-1",
+						type = "agentMessage",
+						text = "Implemented.\n```lua\nreturn true\n```\nDone.",
+					},
+					{
+						id = "command-2",
+						type = "commandExecution",
+						command = "false",
+						status = "completed",
+						exitCode = 1,
+					},
+				},
+			},
+		},
 	})
 
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+	eq(
+		vim.tbl_map(function(block)
+			return block.kind
+		end, chat.blocks),
+		{ "user", "activity", "agent", "error" }
+	)
+	eq(#chat.blocks[2].children, 2)
+	eq(chat.blocks[2].children[1].kind, "command")
+	eq(chat.blocks[2].children[2].kind, "file")
+	local activity = chat:activities()[1]
+	eq(activity.line, chat.blocks[2].line1)
+	eq(activity.line2, chat.blocks[2].line2)
+	eq(activity.counts, { command = 1, tool = 0, file = 1 })
+
+	local code
+	for _, child in ipairs(chat.by_id["agent-1"].children) do
+		if child.kind == "code" then
+			code = child
+		end
+	end
+	eq(code.language, "lua")
+	eq(code.text, "return true")
+	eq(chat:render_lines()[code.line1], "```lua")
+	eq(chat:render_lines()[code.line2], "```")
+	ok(code.line1 >= chat.by_id["agent-1"].line1)
+	ok(code.line2 <= chat.by_id["agent-1"].line2)
+	eq(chat:block_at(code.line1).id, "agent-1")
+	eq(chat:section_at(code.line1).kind, "AGENT")
+
+	local text = table.concat(chat:render_lines(), "\n")
+	contains(text, render.header("user"))
+	contains(text, render.header("agent"))
+	contains(text, icons.get("command") .. " Command")
+	contains(text, icons.get("changes") .. " update")
+	contains(text, icons.get("error") .. " Command")
+	contains(text, "lua/acp/blocks.lua")
+	contains(text, "Command completed (exit 1)")
+	eq(#chat:diagnostics(), 1)
+	eq(#chat:code_blocks(), 1)
+	local section_text, range = chat:section_text(code.line1)
+	contains(section_text, render.header("agent"))
+	contains(section_text, "Done.")
+	eq(range.block_id, "agent-1")
+end)
+
+test("legacy transcripts keep sections, activity, and code after block migration", function()
+	local fence = string.rep(string.char(96), 3)
+	local chat = blocks.from_lines({
 		"## You",
-		"Use `turn/steer`.",
+		"Inspect the migration.",
+		"> Command completed (exit 0): `rg blocks`",
+		"> Tool completed: `inspect`",
 		"## Codex",
-		"> Command completed: `nvim --headless`",
-		"> Tool completed: `mcp/read`",
-		"> update `lua/acp/view.lua`",
-		"> Warning: check this result",
-		"> Error: failed to apply change",
-		"### Plan",
-		"```lua",
+		"Done.",
+		fence .. "lua",
+		"return true",
+		fence,
 	})
+
+	eq(
+		vim.tbl_map(function(section)
+			return section.kind
+		end, chat:sections()),
+		{ "USER", "COMMAND", "TOOL", "AGENT" }
+	)
+	local activity = chat:activity_at(3)
+	eq(activity.line, 3)
+	eq(activity.line2, 4)
+	eq(#chat:activities(), 1)
+	eq(chat:code_block_at(8).language, "lua")
+	local text, range = chat:section_text(8)
+	contains(text, render.header("agent"))
+	eq(range.line1, 5)
+	contains(table.concat(chat:render_lines(), "\n"), icons.get("command") .. " Command")
+	ok(
+		not table.concat(chat:render_lines(), "\n"):find("## ", 1, true),
+		"legacy role headings should migrate to direct icons"
+	)
+end)
+
+test("live chat blocks emit bounded incremental buffer operations", function()
+	local chat = blocks.new()
+	local spacer_rows = 3
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "", "", "", "" })
+	local function apply(operation)
+		vim.api.nvim_buf_set_lines(bufnr, operation.start_row, operation.end_row, false, operation.lines)
+		local expected = chat:render_lines()
+		for _ = 1, spacer_rows do
+			table.insert(expected, "")
+		end
+		eq(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), expected)
+	end
+
+	local user_operation = chat:add_user("Build it", {})
+	eq(user_operation.start_row, 0)
+	eq(user_operation.end_row, 1)
+	apply(user_operation)
+
+	local agent_operation = chat:ensure_agent("agent-live")
+	eq(agent_operation.start_row, #user_operation.lines)
+	apply(agent_operation)
+	local first_delta = chat:append_text("agent-live", "One")
+	eq(first_delta.type, "replace")
+	eq(first_delta.lines, { "One" })
+	apply(first_delta)
+	local second_delta = chat:append_text("agent-live", "\nTwo")
+	eq(second_delta.lines, { "One", "Two" })
+	apply(second_delta)
+
+	local activity_operation = chat:add_item({
+		id = "command-live-1",
+		type = "commandExecution",
+		command = "true",
+		status = "completed",
+		exitCode = 0,
+	})
+	apply(activity_operation)
+	local merge_operation, activity_block = chat:add_item({
+		id = "tool-live-1",
+		type = "dynamicToolCall",
+		tool = "inspect",
+		status = "completed",
+	})
+	apply(merge_operation)
+	eq(merge_operation.type, "insert")
+	eq(#activity_block.children, 2)
+	local activity_line = activity_block.line1
+	local late_delta = chat:append_text("agent-live", "\nThree")
+	apply(late_delta)
+	eq(activity_block.line1, activity_line + 1)
+	eq(activity_block.children[1].line1, activity_block.line1)
+	eq(chat.line_count, #chat:render_lines())
+	eq(vim.api.nvim_buf_get_lines(bufnr, chat.line_count, -1, false), { "", "", "" })
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
+test("large block transcripts keep lookup and streaming edits bounded", function()
+	local thread = { turns = {} }
+	for turn = 1, 250 do
+		local response = {}
+		for line = 1, 14 do
+			response[line] = ("response %d line %d"):format(turn, line)
+		end
+		thread.turns[turn] = {
+			items = {
+				{
+					id = "user-" .. turn,
+					type = "userMessage",
+					content = { { type = "text", text = "prompt " .. turn } },
+				},
+				{
+					id = "command-" .. turn,
+					type = "commandExecution",
+					command = "true",
+					status = "completed",
+					exitCode = 0,
+				},
+				{
+					id = "agent-" .. turn,
+					type = "agentMessage",
+					text = table.concat(response, "\n"),
+				},
+			},
+		}
+	end
+
+	local started = (vim.uv or vim.loop).hrtime()
+	local chat = blocks.from_thread(thread)
+	eq(chat.line_count, 5000)
+	for line = 1, chat.line_count, 5 do
+		ok(chat:block_at(line))
+	end
+	local elapsed_ms = ((vim.uv or vim.loop).hrtime() - started) / 1000000
+	ok(elapsed_ms < 1000, ("expected 5,000-line block indexing under 1s, got %.2fms"):format(elapsed_ms))
+	local semantic = chat:semantic_data(vim.fn.getcwd())
+	ok(chat:semantic_data(vim.fn.getcwd()) == semantic, "expected model-wide semantics to reuse the current revision")
+
+	local operation = chat:append_text("agent-250", "\nfinal streamed line")
+	eq(operation.type, "replace")
+	eq(operation.start_row, 4999)
+	eq(operation.end_row, 5000)
+	eq(#operation.lines, 2)
+	eq(chat.line_count, 5001)
+	ok(chat:semantic_data(vim.fn.getcwd()) ~= semantic, "expected a streamed edit to invalidate model-wide semantics")
+end)
+
+test("chat view keeps the prompt inset and styles transcript roles", function()
+	eq(
+		view.prompt_geometry({ row = 1, col = 31, width = 89, height = 30 }, {
+			input_height = 6,
+			input_padding = 2,
+		}),
+		{
+			row = 23,
+			col = 33,
+			width = 83,
+			height = 4,
+			outer_width = 85,
+			outer_height = 6,
+			reserved_rows = 8,
+		}
+	)
+
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	local direct_lines = {
+		transcript.header("user"),
+		"Use `turn/steer`.",
+		transcript.header("agent"),
+		transcript.line("command", "Command completed: `nvim --headless`"),
+		transcript.line("tool", "Tool completed: `mcp/read`"),
+		transcript.line("changes", "update `lua/acp/view.lua`"),
+		transcript.line("warning", "Warning: check this result"),
+		transcript.line("error", "Error: failed to apply change"),
+		transcript.header("plan"),
+		"```lua",
+	}
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, direct_lines)
 	view.define_highlights()
 	view.refresh_transcript(bufnr, 0)
 	local marks = vim.api.nvim_buf_get_extmarks(bufnr, view.transcript_namespace, 0, -1, { details = true })
 	local groups = {}
-	local signs = {}
-	local concealed = false
 	for _, extmark in ipairs(marks) do
 		local details = extmark[4] or {}
 		if details.hl_group then
 			groups[details.hl_group] = true
 		end
-		if details.sign_text then
-			signs[vim.trim(details.sign_text)] = true
-		end
-		if details.conceal == "" then
-			concealed = true
-		end
+		ok(not details.sign_text, "chat icons should be buffer text, not signs")
+		ok(details.conceal == nil, "direct transcript icons should not need conceal extmarks")
 	end
 	ok(groups.AcpUserHeader)
 	ok(groups.AcpAgentHeader)
 	ok(groups.AcpTranscriptTool)
 	ok(groups.AcpCodeFence)
 	ok(groups.AcpInlineCode)
-	for _, name in ipairs({ "user", "agent", "command", "tool", "changes", "warning", "error", "section", "code" }) do
-		ok(signs[icons.get(name)], ("expected the previous %s icon in the chat sign column"):format(name))
+	for _, expected in ipairs({
+		{ 1, "user" },
+		{ 3, "agent" },
+		{ 4, "command" },
+		{ 5, "tool" },
+		{ 6, "changes" },
+		{ 7, "warning" },
+		{ 8, "error" },
+		{ 9, "section" },
+	}) do
+		contains(direct_lines[expected[1]], icons.get(expected[2]))
 	end
-	ok(concealed, "expected Markdown role prefixes to be visually concealed")
-	local evaluated = vim.api.nvim_eval_statusline(view.chat_winbar({
-		status = "running command",
-		busy = true,
-		tokens = { totalTokens = 42000, modelContextWindow = 272000 },
-	}), { maxwidth = 49 })
+	local evaluated = vim.api.nvim_eval_statusline(
+		view.chat_winbar({
+			status = "running command",
+			busy = true,
+			tokens = { totalTokens = 42000, modelContextWindow = 272000 },
+		}),
+		{ maxwidth = 49 }
+	)
 	contains(evaluated.str, icons.get("agent") .. " Codex")
 	contains(evaluated.str, "running command")
 	local previous_have_nerd_font = vim.g.have_nerd_font
 	vim.g.have_nerd_font = false
 	eq(icons.get("user"), "U")
 	eq(icons.get("code"), "{}")
+	eq(transcript.header("user"), "U You")
+	eq(transcript.line("warning", "Warning: check"), "! Warning: check")
 	vim.g.have_nerd_font = previous_have_nerd_font
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
@@ -472,10 +708,13 @@ test("completed activity groups collapse together while failures stay visible", 
 	eq(item.line, 2)
 	eq(item.line2, 4)
 	eq(output.current_output_item(lines, 4, 10, { cwd = vim.fn.getcwd() }).kind, "reference")
-	eq(output.current_output_item(lines, 4, 10, {
-		cwd = vim.fn.getcwd(),
-		prefer_activity = true,
-	}).kind, "activity")
+	eq(
+		output.current_output_item(lines, 4, 10, {
+			cwd = vim.fn.getcwd(),
+			prefer_activity = true,
+		}).kind,
+		"activity"
+	)
 	local preview = output.output_map_preview(lines, item)
 	eq(preview.lines, { lines[2], lines[3], lines[4] })
 	contains(preview.title, "3 completed")
@@ -517,6 +756,9 @@ test("output UI restores semantic visuals and section drafting", function()
 
 	output_ui.refresh(state)
 	eq(state.output_cache.changedtick, vim.api.nvim_buf_get_changedtick(output_buf))
+	local current_cache = state.output_cache
+	output_ui.refresh(state)
+	ok(state.output_cache == current_cache, "an unchanged transcript should reuse its semantic and visual cache")
 	local visual_marks = vim.api.nvim_buf_get_extmarks(output_buf, output_ui.namespaces.visual, 0, -1, {
 		details = true,
 	})
@@ -524,6 +766,7 @@ test("output UI restores semantic visuals and section drafting", function()
 	local reference_highlighted = false
 	for _, extmark in ipairs(visual_marks) do
 		local details = extmark[4] or {}
+		ok(not details.virt_text, "semantic icons and code languages should not be virtual text")
 		if details.hl_group == "AcpOutputReference" then
 			reference_highlighted = true
 		end
@@ -731,10 +974,17 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.bo[state.sessions_buf].filetype, "acp-sessions")
 		eq(vim.bo[state.output_buf].filetype, "acp")
 		eq(vim.bo[state.input_buf].filetype, "acp-prompt")
+		eq(vim.bo[state.sessions_buf].undolevels, -1)
+		eq(vim.bo[state.output_buf].undolevels, -1)
 		eq(vim.wo[state.output_win].foldmethod, "expr")
 		eq(vim.wo[state.output_win].foldexpr, "v:lua.acp_nvim_output_foldexpr()")
 		eq(vim.wo[state.output_win].foldlevel, 1)
 		eq(vim.wo[state.output_win].foldcolumn, "1")
+		eq(vim.wo[state.output_win].signcolumn, "no")
+		eq(vim.wo[state.output_win].statuscolumn, "%C ")
+		eq(vim.wo[state.output_win].breakindent, false)
+		eq(vim.wo[state.output_win].showbreak, "")
+		eq(vim.b[state.output_buf].indent_guide, false)
 		local output_keymaps = {}
 		for _, keymap in ipairs(vim.api.nvim_buf_get_keymap(state.output_buf, "n")) do
 			output_keymaps[keymap.desc] = true
@@ -804,9 +1054,12 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		local old_prompt_width = vim.api.nvim_win_get_config(state.input_win).width
 		vim.api.nvim_win_set_width(state.sessions_win, 20)
 		vim.api.nvim_exec_autocmds("WinResized", {})
-		ok(vim.wait(100, function()
-			return vim.api.nvim_win_get_config(state.input_win).width > old_prompt_width
-		end), "expected the floating prompt to follow chat-window resizing")
+		ok(
+			vim.wait(100, function()
+				return vim.api.nvim_win_get_config(state.input_win).width > old_prompt_width
+			end),
+			"expected the floating prompt to follow chat-window resizing"
+		)
 
 		local chat_windows = vim.api.nvim_tabpage_list_wins(chat_tab)
 		state.thread_id = "thread-1"
@@ -855,7 +1108,39 @@ test("sessions split lists and resumes Codex threads", function()
 	function fake:resume_thread(thread_id, opts, callback)
 		self.resumed = { thread_id = thread_id, opts = opts }
 		callback({
-			thread = { id = thread_id, cwd = opts.cwd, turns = {} },
+			thread = {
+				id = thread_id,
+				cwd = opts.cwd,
+				turns = {
+					{
+						items = {
+							{
+								id = "restored-user",
+								type = "userMessage",
+								content = { { type = "text", text = "Restore the blocks" } },
+							},
+							{
+								id = "restored-command",
+								type = "commandExecution",
+								command = "true",
+								status = "completed",
+								exitCode = 0,
+							},
+							{
+								id = "restored-tool",
+								type = "dynamicToolCall",
+								tool = "inspect",
+								status = "completed",
+							},
+							{
+								id = "restored-agent",
+								type = "agentMessage",
+								text = "Restored.\n```lua\nreturn true\n```",
+							},
+						},
+					},
+				},
+			},
 			cwd = opts.cwd,
 		})
 	end
@@ -887,6 +1172,14 @@ test("sessions split lists and resumes Codex threads", function()
 		eq(fake.resumed.thread_id, "thread-b")
 		eq(state.thread_id, "thread-b")
 		eq(vim.api.nvim_get_current_win(), state.input_win)
+		eq(
+			vim.tbl_map(function(block)
+				return block.kind
+			end, state.chat.blocks),
+			{ "user", "activity", "agent" }
+		)
+		eq(#state.chat:activities(), 1)
+		eq(state.chat:code_block_at(state.chat.by_id["restored-agent"].line2 - 1).language, "lua")
 		local lines = vim.api.nvim_buf_get_lines(state.sessions_buf, 0, -1, false)
 		eq(lines, { "* Second session", "  First session" })
 
@@ -953,6 +1246,27 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(fake.turns[1].thread_id, "thread-1")
 		eq(fake.turns[1].payload.input[1].text, "Simplify this plugin")
 		eq(state.busy, true)
+		fake.handlers.on_notification("item/completed", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			item = {
+				id = "command-1",
+				type = "commandExecution",
+				command = "rg blocks",
+				status = "completed",
+				exitCode = 0,
+			},
+		})
+		fake.handlers.on_notification("item/completed", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			item = {
+				id = "tool-1",
+				type = "dynamicToolCall",
+				tool = "inspect",
+				status = "completed",
+			},
+		})
 
 		fake.handlers.on_notification("item/agentMessage/delta", {
 			threadId = "thread-1",
@@ -972,10 +1286,13 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			delta = "\n" .. table.concat(detail_lines, "\n"),
 		})
 		eq(vim.api.nvim_buf_get_changedtick(state.output_buf), buffered_tick)
-		ok(vim.wait(250, function()
-			local text = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
-			return text:find("Detail line 40", 1, true) ~= nil
-		end, 5), "expected batched output to flush promptly")
+		ok(
+			vim.wait(250, function()
+				local text = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+				return text:find("Detail line 40", 1, true) ~= nil
+			end, 5),
+			"expected batched output to flush promptly"
+		)
 		ok(
 			state.output_cache.changedtick ~= vim.api.nvim_buf_get_changedtick(state.output_buf),
 			"full semantic parsing should stay paused during an active turn"
@@ -1005,9 +1322,12 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			threadId = "thread-1",
 			turn = { id = "turn-1", status = "completed" },
 		})
-		ok(vim.wait(350, function()
-			return state.output_cache.changedtick == vim.api.nvim_buf_get_changedtick(state.output_buf)
-		end, 5), "expected semantic output metadata to refresh after the turn")
+		ok(
+			vim.wait(350, function()
+				return state.output_cache.changedtick == vim.api.nvim_buf_get_changedtick(state.output_buf)
+			end, 5),
+			"expected semantic output metadata to refresh after the turn"
+		)
 
 		local output = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
 		contains(output, "Simplify this plugin")
@@ -1016,7 +1336,62 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(state.diff, "--- a/file\n+++ b/file")
 		eq(state.tokens.totalTokens, 42)
 		eq(state.busy, false)
+		eq(
+			vim.tbl_map(function(block)
+				return block.kind
+			end, state.chat.blocks),
+			{ "user", "activity", "agent" }
+		)
+		contains(state.chat.by_id["message-1"].text, "Detail line 40")
+		eq(state.output_cache.chat_blocks, state.chat.blocks)
+		local activity = state.chat:activities()[1]
+		eq(activity.counts, { command = 1, tool = 1, file = 0 })
+		eq(
+			vim.api.nvim_win_call(state.output_win, function()
+				return vim.fn.foldlevel(activity.line)
+			end),
+			2
+		)
+		eq(
+			vim.api.nvim_win_call(state.output_win, function()
+				return vim.fn.foldclosed(activity.line)
+			end),
+			activity.line
+		)
+		vim.api.nvim_win_set_cursor(state.output_win, { state.chat.blocks[1].header_line, 0 })
+		ok(output_ui.jump_section(state, 1))
+		eq(vim.api.nvim_win_get_cursor(state.output_win)[1], activity.line)
+		ok(output_ui.jump_section(state, 1))
+		eq(vim.api.nvim_win_get_cursor(state.output_win)[1], state.chat.by_id["message-1"].header_line)
+		vim.api.nvim_win_set_cursor(state.output_win, { activity.line, 0 })
+		eq(output_ui.current_item(state).kind, "activity")
+		ok(output_ui.yank_section(state))
+		local activity_text = vim.fn.getreg('"')
+		contains(activity_text, "rg blocks")
+		contains(activity_text, "inspect")
+		ok(not activity_text:find("Simplify this plugin", 1, true))
+		local windows_before = {}
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			windows_before[winid] = true
+		end
+		ok(output_ui.inspect(state, activity))
+		local preview_win
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			if not windows_before[winid] then
+				preview_win = winid
+				break
+			end
+		end
+		ok(preview_win and vim.api.nvim_win_is_valid(preview_win), "expected an activity detail float")
+		local preview_text =
+			table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(preview_win), 0, -1, false), "\n")
+		contains(preview_text, "rg blocks")
+		contains(preview_text, "inspect")
+		vim.api.nvim_win_close(preview_win, true)
+		eq(vim.api.nvim_buf_get_lines(state.output_buf, 0, state.chat.line_count, false), state.chat:render_lines())
+		eq(vim.api.nvim_buf_line_count(state.output_buf), state.chat.line_count + state.prompt_spacer_rows)
 		eq(ui.new_chat({ keep_layout = true }), true)
+		eq(#ui._state().chat.blocks, 0)
 		eq(fake.unsubscribed, "thread-1")
 	end)
 	ui._reset()
@@ -1066,6 +1441,18 @@ test("control-s steers the active turn instead of queueing", function()
 		ui.send()
 		eq(state.turn_id, "turn-steer")
 		eq(#fake.turns, 1)
+		fake.handlers.on_notification("item/agentMessage/delta", {
+			threadId = "thread-steer",
+			turnId = "turn-steer",
+			itemId = "shared-message",
+			delta = "Before steering.",
+		})
+		ok(
+			vim.wait(250, function()
+				return state.chat.by_id["shared-message"] ~= nil
+			end, 5),
+			"expected the initial response block to flush"
+		)
 
 		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Keep the public API unchanged" })
 		vim.api.nvim_set_current_win(state.input_win)
@@ -1077,7 +1464,30 @@ test("control-s steers the active turn instead of queueing", function()
 		eq(fake.steers[1].turn_id, "turn-steer")
 		eq(fake.steers[1].payload.input[1].text, "Keep the public API unchanged")
 		eq(#state.queue, 0)
-		contains(table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n"), "## You (steer)")
+		contains(
+			table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n"),
+			transcript.header("user", " (steer)")
+		)
+
+		fake.handlers.on_notification("item/agentMessage/delta", {
+			threadId = "thread-steer",
+			turnId = "turn-steer",
+			itemId = "shared-message",
+			delta = "After steering.",
+		})
+		ok(
+			vim.wait(250, function()
+				local continuation = state.chat.by_id["shared-message:agent:2"]
+				return continuation and continuation.text == "After steering."
+			end, 5),
+			"expected a continuation response after the steer block"
+		)
+		local ordered = table.concat(state.chat:render_lines(), "\n")
+		local before = ordered:find("Before steering.", 1, true)
+		local steer = ordered:find("Keep the public API unchanged", 1, true)
+		local after = ordered:find("After steering.", 1, true)
+		ok(before and steer and after and before < steer and steer < after, "streamed output must preserve event order")
+		eq(vim.api.nvim_buf_get_lines(state.output_buf, 0, state.chat.line_count, false), state.chat:render_lines())
 
 		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Run the tests afterward" })
 		ui.send()
@@ -1148,6 +1558,29 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 	state.busy = true
 	state.status = "responding"
 	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "preserve this draft" })
+	live_client.on_notification("item/agentMessage/delta", {
+		threadId = "thread-hot-reload",
+		turnId = "turn-hot-reload",
+		itemId = "message-before-reload",
+		delta = "Before reload.",
+	})
+	ok(
+		vim.wait(250, function()
+			return state.chat.by_id["message-before-reload"] ~= nil
+		end, 5),
+		"expected a structured block before reload"
+	)
+	local legacy_block = state.chat.by_id["message-before-reload"]
+	legacy_block.lines[legacy_block.header_offset] = "## Codex"
+	vim.bo[state.output_buf].modifiable = true
+	vim.api.nvim_buf_set_lines(
+		state.output_buf,
+		legacy_block.header_line - 1,
+		legacy_block.header_line,
+		false,
+		{ "## Codex" }
+	)
+	vim.bo[state.output_buf].modifiable = false
 	vim.bo[state.output_buf].filetype = "markdown"
 
 	local tabpage = state.tabpage
@@ -1156,6 +1589,7 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 	local output_buf = state.output_buf
 	local input_buf = state.input_buf
 	local input_win = state.input_win
+	local chat = state.chat
 	local process_client = ui._client()
 	local reload = require("acp.reload")
 	local current_ui = ui
@@ -1187,6 +1621,19 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 		current_ui = new_ui
 		ok(new_ui ~= ui, "expected a newly loaded UI module")
 		ok(new_ui._state() == state, "expected the same state table")
+		ok(state.chat == chat, "expected the same chat model table")
+		ok(getmetatable(state.chat) == require("acp.blocks").Model, "expected methods from the reloaded block model")
+		ok(require("acp.blocks").for_buffer(output_buf) == state.chat, "expected the output buffer to rebind")
+		contains(state.chat.by_id["message-before-reload"].text, "Before reload.")
+		eq(
+			vim.api.nvim_buf_get_lines(
+				output_buf,
+				state.chat.by_id["message-before-reload"].header_line - 1,
+				state.chat.by_id["message-before-reload"].header_line,
+				false
+			)[1],
+			render.header("agent")
+		)
 		ok(new_ui._client() == process_client, "expected the same app-server client")
 		ok(live_client.handle == process_handle, "expected the same process handle")
 		ok(live_client.pending == pending_requests, "expected the same pending request table")
@@ -1213,11 +1660,22 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 			itemId = "message-after-reload",
 			delta = "Still connected.",
 		})
-		ok(vim.wait(250, function()
-			return table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), "\n")
-				:find("Still connected.", 1, true) ~= nil
-		end, 5), "expected output from the reloaded client to flush promptly")
+		ok(
+			vim.wait(250, function()
+				return table
+					.concat(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), "\n")
+					:find("Still connected.", 1, true) ~= nil
+			end, 5),
+			"expected output from the reloaded client to flush promptly"
+		)
 		local output = table.concat(vim.api.nvim_buf_get_lines(output_buf, 0, -1, false), "\n")
+		eq(
+			vim.tbl_map(function(block)
+				return block.kind
+			end, state.chat.blocks),
+			{ "agent", "agent" }
+		)
+		eq(vim.api.nvim_buf_get_lines(output_buf, 0, state.chat.line_count, false), state.chat:render_lines())
 		contains(output, "Still connected.")
 		live_client:handle_message({ id = 0, result = { preserved = true } })
 		eq(pending_result, { result = { preserved = true }, err = nil })
