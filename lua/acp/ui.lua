@@ -1,106 +1,40 @@
-local Connection = require("acp.connection").Connection
-local actions = require("acp.actions")
-local changes = require("acp.changes")
-local code_actions = require("acp.code_actions")
-local acp_commands = require("acp.commands")
-local acp_config = require("acp.config")
+local Codex = require("acp.codex").Client
 local context = require("acp.context")
-local diagnostics = require("acp.diagnostics")
-local health = require("acp.health")
-local hover = require("acp.hover")
-local history = require("acp.history")
-local icons = require("acp.icons")
-local metadata = require("acp.metadata")
-local output = require("acp.output")
-local picker = require("acp.picker")
-local prompt_view = require("acp.prompt_view")
-local references = require("acp.references")
-local session_view = require("acp.session_view")
-local source_view = require("acp.source_view")
-local symbols = require("acp.symbols")
-local treesitter = require("acp.treesitter")
+local render = require("acp.render")
+local requests = require("acp.requests")
 
 local M = {}
 
 local defaults = {
-	default_adapter = "codex",
-	default_mode = "tab",
-	layout = {
-		width_ratio = 0.88,
-		height_ratio = 0.86,
-		input_height = 7,
-		input_padding = 2,
-		session_panel_width = 28,
-	},
-	adapters = {
-		codex = {
-			command = { "codex-acp" },
-			codex_command = { "codex" },
-			auth_method = "chatgpt",
-			metadata = "codex",
-			timeout_ms = 60000,
-			model = nil,
-			context_window = nil,
-		},
-		claude_code = {
-			command = { "claude-agent-acp" },
-			timeout_ms = 60000,
-			model = nil,
-			context_window = nil,
-		},
+	command = { "codex", "app-server" },
+	timeout_ms = 30000,
+	model = nil,
+	reasoning_effort = nil,
+	personality = nil,
+	service_tier = nil,
+	approval_policy = nil,
+	sandbox = nil,
+	auto_context = true,
+	follow_up = "queue",
+	review_delivery = "inline",
+	thread_sources = { "appServer", "vscode" },
+	max_threads = 100,
+	window = {
+		input_height = 6,
 	},
 }
 
 local config = vim.deepcopy(defaults)
-local states = {}
-local sessions = {}
-local source_links = {}
-local next_session_id = 1
-local session_panel_lines = {}
-local output_ns = vim.api.nvim_create_namespace("acp.nvim.output")
-local output_current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_section")
-local output_item_ns = vim.api.nvim_create_namespace("acp.nvim.output.current_item")
-local output_hint_ns = vim.api.nvim_create_namespace("acp.nvim.output.hints")
-local output_pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
-local output_map_ns = vim.api.nvim_create_namespace("acp.nvim.output.map")
-local output_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
-local prompt_ns = vim.api.nvim_create_namespace("acp.nvim.prompt")
-local session_panel_ns = vim.api.nvim_create_namespace("acp.nvim.sessions")
-local source_ns = vim.api.nvim_create_namespace("acp.nvim.source")
-local output_map_lines = {}
-local prompt_frame = {
-	size = 2,
-	border = {
-		{ "╭", "AcpPromptBorder" },
-		{ "─", "AcpPromptBorder" },
-		{ "╮", "AcpPromptBorder" },
-		{ "│", "AcpPromptBorder" },
-		{ "╯", "AcpPromptBorder" },
-		{ "─", "AcpPromptBorder" },
-		{ "╰", "AcpPromptBorder" },
-		{ "│", "AcpPromptBorder" },
-	},
-}
+local client
+local state
 
-function prompt_frame.padding()
-	return math.max(0, tonumber(config.layout.input_padding) or 0)
-end
-
-function prompt_frame.copy_border()
-	return vim.deepcopy(prompt_frame.border)
-end
-
-function prompt_frame.content_width(outer_width)
-	return math.max(20, outer_width - prompt_frame.size)
-end
-
-function prompt_frame.content_height(outer_height)
-	return math.max(3, outer_height - prompt_frame.size)
-end
-
-local function notify(message, level)
-	vim.notify(message, level or vim.log.levels.INFO, { title = icons.title("ACP") })
-end
+local select_model
+local select_reasoning
+local open_threads
+local start_review
+local compact_thread
+local show_status
+local drain_queue
 
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -110,8704 +44,1314 @@ local function valid_win(winid)
 	return winid and vim.api.nvim_win_is_valid(winid)
 end
 
-local set_buf_options
-local refresh_output_chrome
-local append_input_text
-
-local function define_highlights()
-	output.define_highlights()
-	prompt_view.define_highlights()
-	session_view.define_highlights()
-	source_view.define_highlights()
-	pcall(vim.diagnostic.config, {
-		virtual_text = false,
-		signs = true,
-		underline = true,
-		severity_sort = true,
-	}, output_diagnostic_ns)
+local function valid_tab(tabpage)
+	return tabpage and vim.api.nvim_tabpage_is_valid(tabpage)
 end
 
-local function refresh_output_diagnostics(state, lines)
-	if not valid_buf(state.output_buf) then
-		return
-	end
-
-	lines = lines or vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	vim.diagnostic.set(output_diagnostic_ns, state.output_buf, output.problem_diagnostics(lines))
+local function present(value)
+	return value ~= nil and value ~= vim.NIL
 end
 
-local function refresh_output_highlights(state)
-	if not valid_buf(state.output_buf) then
-		return
-	end
+local function notify(message, level)
+	vim.notify(message, level or vim.log.levels.INFO, { title = "Codex" })
+end
 
-	vim.api.nvim_buf_clear_namespace(state.output_buf, output_ns, 0, -1)
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local icons = require("acp.icons")
-	vim.b[state.output_buf].acp_injected_languages = output.injected_languages(lines)
-	vim.b[state.output_buf].acp_language_injections = output.injection_ranges(lines)
-	refresh_output_diagnostics(state, lines)
-	for index, line in ipairs(lines) do
-		local style = output.line_style(line)
-		if style then
-			local opts = {
-				priority = 80,
-			}
-			if style.line_hl_group then
-				opts.line_hl_group = style.line_hl_group
-			end
-			if style.sign_text then
-				opts.sign_text = style.sign_text
-				opts.sign_hl_group = style.sign_hl_group or style.line_hl_group or style.badge_hl or "AcpBadge"
-			end
-			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, index - 1, 0, opts)
+local function escaped_winbar(text)
+	return tostring(text or ""):gsub("%%", "%%%%")
+end
+
+local function current_cwd()
+	if type(config.cwd) == "function" then
+		local ok, value = pcall(config.cwd)
+		if ok and type(value) == "string" and value ~= "" then
+			return vim.fs.normalize(value)
 		end
+	elseif type(config.cwd) == "string" and config.cwd ~= "" then
+		return vim.fs.normalize(config.cwd)
 	end
-
-	for _, block in ipairs(output.code_blocks(lines)) do
-		for _, line_number in ipairs({ block.start_line, block.end_line }) do
-			local line = lines[line_number]
-			if line then
-				local opts = {
-					end_col = #line,
-					hl_group = "AcpCodeFence",
-					priority = 70,
-					sign_text = icons.code,
-					sign_hl_group = "AcpCodeBlockSign",
-				}
-				if line_number == block.start_line then
-					local prefix = state.output_language_injection and " inject:" or " lang:"
-					opts.virt_text = {
-						{
-							("%s%s %s %s "):format(prefix, block.language, icons.arrow_right, block.filetype or "text"),
-							"AcpInjectedLanguage",
-						},
-					}
-					opts.virt_text_pos = "right_align"
-					opts.virt_lines = {
-						output.code_block_lens(block, state.output_language_injection, state.output_animation_frame),
-					}
-					opts.virt_lines_above = true
-				end
-				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, line_number - 1, 0, opts)
-			end
-		end
-		local body_start = block.start_line + 1
-		local body_end = block.closed and (block.end_line - 1) or block.end_line
-		for line_number = body_start, body_end do
-			local line = lines[line_number]
-			if line then
-				local opts = {
-					line_hl_group = "AcpInjectedCode",
-					priority = 8,
-				}
-				if line_number == body_start then
-					opts.virt_text = output.injection_badge_chunks(block, state.output_language_injection, state.output_animation_frame)
-					opts.virt_text_pos = "right_align"
-				end
-				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, line_number - 1, 0, opts)
-			end
-		end
-	end
-
-	local reference_counts = {}
-	local reference_badges = {}
-	local references = output.file_references(lines, { cwd = state.cwd })
-	for _, reference in ipairs(references) do
-		if reference.source_line and reference.source_col and reference.source_end_col then
-			reference_counts[reference.source_line] = (reference_counts[reference.source_line] or 0) + 1
-		end
-	end
-	for _, reference in ipairs(references) do
-		if reference.source_line and reference.source_col and reference.source_end_col then
-			local row = reference.source_line - 1
-			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, row, reference.source_col - 1, {
-				end_col = reference.source_end_col,
-				hl_group = "AcpOutputReference",
-				priority = 82,
-			})
-			if not reference_badges[reference.source_line] then
-				reference_badges[reference.source_line] = true
-				pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_ns, row, 0, {
-					virt_text = { { output.reference_badge(reference_counts[reference.source_line]), "AcpOutputReferenceBadge" } },
-					virt_text_pos = "right_align",
-					sign_text = icons.reference,
-					sign_hl_group = "AcpOutputReferenceBadge",
-					priority = 83,
-				})
-			end
-		end
-	end
-
+	return vim.fs.normalize(vim.fn.getcwd())
 end
 
-local function refresh_current_output_section(state)
-	if not valid_buf(state.output_buf) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(state.output_buf, output_current_ns, 0, -1)
-end
-
-local function refresh_current_output_item(state)
-	if not valid_buf(state.output_buf) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(state.output_buf, output_item_ns, 0, -1)
-	if not valid_win(state.output_win) or vim.api.nvim_win_get_buf(state.output_win) ~= state.output_buf then
-		return
-	end
-
-	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local item = output.current_output_item(lines, cursor[1], cursor[2], { cwd = state.cwd })
-	if not item then
-		return
-	end
-
-	local line_count = #lines
-	local line1 = math.max(1, math.min(item.line or cursor[1], line_count))
-	local line2 = math.max(line1, math.min(item.line2 or item.line or cursor[1], line_count))
-	for line = line1, line2 do
-		pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_item_ns, line - 1, 0, {
-			line_hl_group = "AcpCurrentItem",
-			priority = 20,
-		})
-	end
-end
-
-local function refresh_output_cursor_hint(state)
-	if not valid_buf(state.output_buf) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(state.output_buf, output_hint_ns, 0, -1)
-end
-
-local function set_output_map_lines(bufnr, lines)
-	if not valid_buf(bufnr) then
-		return
-	end
-
-	vim.bo[bufnr].modifiable = true
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-end
-
-local function output_map_config(state, line_count)
-	if not valid_win(state.output_win) then
-		return nil
-	end
-
-	local output_width = vim.api.nvim_win_get_width(state.output_win)
-	local output_height = vim.api.nvim_win_get_height(state.output_win)
-	local available_width = math.max(12, output_width - 2)
-	local width = math.min(available_width, math.max(34, math.min(64, math.floor(output_width * 0.48))))
-	local max_height = math.max(3, output_height - 2)
-	local height = math.max(3, math.min(max_height, math.max(6, line_count or 0)))
+local function fresh_state(cwd)
 	return {
-		relative = "win",
-		win = state.output_win,
-		anchor = "NE",
-		row = 0,
-		col = output_width,
-		width = width,
-		height = height,
-		style = "minimal",
-		border = "rounded",
-		title = (" %s ACP output map "):format(icons.map),
-		title_pos = "left",
-		zindex = 60,
+		cwd = cwd or current_cwd(),
+		model = config.model,
+		effort = config.reasoning_effort,
+		personality = config.personality,
+		service_tier = config.service_tier,
+		thread_id = nil,
+		turn_id = nil,
+		busy = false,
+		starting = false,
+		start_waiters = {},
+		status = "new chat",
+		contexts = {},
+		queue = {},
+		diff = "",
+		streamed_items = {},
+		items = {},
+		agent_item = nil,
+		plan_item = nil,
+		models = nil,
+		threads = nil,
+		tokens = nil,
 	}
 end
 
-local function output_map_highlight(entry)
-	if not entry then
-		return "AcpOutputMeta"
-	end
-	if entry.kind == "problem" then
-		return "AcpStatusError"
-	end
-	if entry.kind == "code" then
-		return "AcpCodeFence"
-	end
-	if entry.kind == "reference" then
-		return "AcpOutputReferenceBadge"
-	end
-	return "AcpOutputMeta"
-end
-
-local function refresh_output_map_highlights(state)
-	if not valid_buf(state.output_map_buf) then
+local function with_modifiable(bufnr, callback)
+	if not valid_buf(bufnr) then
 		return
 	end
-
-	vim.api.nvim_buf_clear_namespace(state.output_map_buf, output_map_ns, 0, -1)
-	local entries = output_map_lines[state.output_map_buf] or {}
-	local lines = vim.api.nvim_buf_get_lines(state.output_map_buf, 0, -1, false)
-	for index, line in ipairs(lines) do
-		local entry = entries[index]
-		local opts = { priority = 80 }
-		if index == 1 then
-			opts.line_hl_group = "AcpOutputHeader"
-		elseif index == 2 and line:match("^Entries:") then
-			opts.line_hl_group = "AcpOutputMeta"
-		elseif entry then
-			opts.line_hl_group = output_map_highlight(entry)
-			if line:find(icons.location, 1, true) == 1 then
-				opts.virt_text = { { (" %s CURRENT "):format(icons.location), "AcpOutputTimeline" } }
-				opts.virt_text_pos = "right_align"
-			end
-		elseif line:match("^Press ") then
-			opts.line_hl_group = "AcpOutputHint"
-		end
-		pcall(vim.api.nvim_buf_set_extmark, state.output_map_buf, output_map_ns, index - 1, 0, opts)
+	local modifiable = vim.bo[bufnr].modifiable
+	vim.bo[bufnr].modifiable = true
+	local ok, err = pcall(callback)
+	vim.bo[bufnr].modifiable = modifiable
+	if not ok then
+		error(err)
 	end
 end
 
-local function refresh_output_map(state)
-	if not (state and valid_buf(state.output_map_buf)) then
+local function at_output_bottom()
+	if not state or not valid_win(state.output_win) or not valid_buf(state.output_buf) then
+		return false
+	end
+	local cursor = vim.api.nvim_win_get_cursor(state.output_win)[1]
+	return cursor >= vim.api.nvim_buf_line_count(state.output_buf) - 2
+end
+
+local function follow_output(was_at_bottom)
+	if not was_at_bottom or not valid_win(state.output_win) or not valid_buf(state.output_buf) then
 		return
 	end
-
-	local output_lines = valid_buf(state.output_buf) and vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false) or {}
-	local current_line
-	if valid_win(state.output_win) and vim.api.nvim_win_get_buf(state.output_win) == state.output_buf then
-		current_line = vim.api.nvim_win_get_cursor(state.output_win)[1]
-	end
-	local entries = output.output_map_entries(output_lines, { cwd = state.cwd })
-	local lines, line_entries = output.output_map_lines(entries, {
-		current_line = current_line,
-		total_lines = #output_lines,
-	})
-	output_map_lines[state.output_map_buf] = line_entries
-	set_output_map_lines(state.output_map_buf, lines)
-	refresh_output_map_highlights(state)
-	if valid_win(state.output_map_win) then
-		local map_config = output_map_config(state, #lines)
-		if map_config then
-			pcall(vim.api.nvim_win_set_config, state.output_map_win, map_config)
-		end
-	end
+	pcall(vim.api.nvim_win_set_cursor, state.output_win, { vim.api.nvim_buf_line_count(state.output_buf), 0 })
 end
 
-local function close_output_map(state)
+local function set_output(lines)
+	if not state or not valid_buf(state.output_buf) then
+		return
+	end
+	with_modifiable(state.output_buf, function()
+		vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, lines)
+	end)
+	follow_output(true)
+end
+
+local function append_lines(lines)
+	if not state or not valid_buf(state.output_buf) or type(lines) ~= "table" or #lines == 0 then
+		return
+	end
+	local follow = at_output_bottom()
+	local values = {}
+	for _, line in ipairs(lines) do
+		table.insert(values, tostring(line or ""))
+	end
+	with_modifiable(state.output_buf, function()
+		vim.api.nvim_buf_set_lines(state.output_buf, -1, -1, false, values)
+	end)
+	follow_output(follow)
+end
+
+local function append_text(text)
+	if not state or not valid_buf(state.output_buf) or not text or text == "" then
+		return
+	end
+	local follow = at_output_bottom()
+	local parts = vim.split(text, "\n", { plain = true })
+	with_modifiable(state.output_buf, function()
+		local count = vim.api.nvim_buf_line_count(state.output_buf)
+		local last = vim.api.nvim_buf_get_lines(state.output_buf, count - 1, count, false)[1] or ""
+		parts[1] = last .. parts[1]
+		vim.api.nvim_buf_set_lines(state.output_buf, count - 1, count, false, parts)
+	end)
+	follow_output(follow)
+end
+
+local function input_text()
+	if not state or not valid_buf(state.input_buf) then
+		return ""
+	end
+	return table.concat(vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false), "\n")
+end
+
+local function set_input(text)
+	if not state or not valid_buf(state.input_buf) then
+		return
+	end
+	local lines = vim.split(text or "", "\n", { plain = true })
+	vim.bo[state.input_buf].modifiable = true
+	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, lines)
+	vim.bo[state.input_buf].modifiable = true
+end
+
+local function update_chrome()
 	if not state then
 		return
 	end
-
-	local bufnr = state.output_map_buf
-	if valid_win(state.output_map_win) then
-		pcall(vim.api.nvim_win_close, state.output_map_win, true)
+	local model = state.model or "default model"
+	local effort = state.effort and (" · " .. state.effort) or ""
+	local usage = ""
+	if state.tokens then
+		local total = state.tokens.totalTokens or 0
+		local window = state.tokens.modelContextWindow
+		usage = window and (" · %d/%d tokens"):format(total, window) or (" · %d tokens"):format(total)
 	end
-	if valid_buf(bufnr) then
-		states[bufnr] = nil
-		output_map_lines[bufnr] = nil
-		pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+	if valid_win(state.output_win) then
+		vim.wo[state.output_win].winbar =
+			escaped_winbar((" Codex · %s%s · %s%s "):format(model, effort, state.status or "idle", usage))
 	end
-	state.output_map_win = nil
-	state.output_map_buf = nil
+	if valid_win(state.input_win) then
+		local context_count = #(state.contexts or {})
+		local queued = #state.queue > 0 and (" · %d queued"):format(#state.queue) or ""
+		vim.wo[state.input_win].winbar = escaped_winbar(
+			(" Prompt · %d context%s%s · <C-s> send "):format(context_count, context_count == 1 and "" or "s", queued)
+		)
+	end
 end
 
-local function jump_output_map_entry(state)
-	if not state or not valid_buf(state.output_map_buf) then
-		return false
-	end
-
-	local row = vim.api.nvim_win_get_cursor(0)[1]
-	local entry = output_map_lines[state.output_map_buf] and output_map_lines[state.output_map_buf][row]
-	if not entry then
-		return false
-	end
-
-	local winid = valid_win(state.output_win) and state.output_win or vim.fn.bufwinid(state.output_buf)
-	if not valid_win(winid) then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	vim.api.nvim_set_current_win(winid)
-	pcall(vim.api.nvim_win_set_cursor, winid, { entry.line or 1, math.max(0, (entry.col or 1) - 1) })
-	refresh_output_chrome(state)
-	return true
-end
-
-local function open_output_map(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-	if not valid_win(state.output_win) then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	local function output_map_entry_at_cursor()
-		if not valid_buf(state.output_map_buf) then
-			return nil
-		end
-
-		local row = vim.api.nvim_win_get_cursor(0)[1]
-		return output_map_lines[state.output_map_buf] and output_map_lines[state.output_map_buf][row]
-	end
-
-	local function preview_output_map_entry()
-		local entry = output_map_entry_at_cursor()
-		if not entry then
-			notify("No ACP output map entry under the cursor", vim.log.levels.WARN)
-			return false
-		end
-
-		local output_lines = valid_buf(state.output_buf) and vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false) or {}
-		local preview = output.output_map_preview(output_lines, entry)
-		if not preview then
-			notify("No ACP output map preview available", vim.log.levels.WARN)
-			return false
-		end
-
-		local preview_buf, preview_win = vim.lsp.util.open_floating_preview(preview.lines, preview.filetype or "acp", {
-			border = "rounded",
-			focusable = true,
-			max_height = math.max(4, math.floor(vim.o.lines * 0.45)),
-			max_width = math.max(48, math.floor(vim.o.columns * 0.62)),
-			title = preview.title or " ACP output map preview ",
-		})
-		if valid_win(preview_win) then
-			vim.wo[preview_win].cursorline = true
-			pcall(vim.api.nvim_win_set_cursor, preview_win, { math.max(1, preview.cursor_line or 1), 0 })
-		end
-		if valid_buf(preview_buf) then
-			vim.keymap.set("n", "q", function()
-				if valid_win(preview_win) then
-					pcall(vim.api.nvim_win_close, preview_win, true)
-				end
-			end, { buffer = preview_buf, desc = "Close ACP output map preview" })
-		end
-		return true
-	end
-
-	local function open_output_map_quickfix()
-		local output_lines = valid_buf(state.output_buf) and vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false) or {}
-		local entries = output.output_map_entries(output_lines, { cwd = state.cwd })
-		if #entries == 0 then
-			notify("No ACP output map entries found", vim.log.levels.WARN)
-			return false
-		end
-
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP output map #%s"):format(tostring(state.id or "?"))),
-			items = output.output_map_quickfix_items(entries, state.output_buf),
-		})
-		vim.cmd("copen")
-		return true
-	end
-
-	if not valid_buf(state.output_map_buf) then
-		state.output_map_buf = vim.api.nvim_create_buf(false, true)
-		states[state.output_map_buf] = state
-		vim.api.nvim_buf_set_name(state.output_map_buf, ("ACP://%s/%d/output-map"):format(state.adapter, state.id))
-		set_buf_options(state.output_map_buf, {
-			bufhidden = "wipe",
-			buftype = "nofile",
-			filetype = "acp-output-map",
-			modifiable = true,
-			swapfile = false,
-		})
-		vim.keymap.set("n", "q", function()
-			close_output_map(state)
-		end, { buffer = state.output_map_buf, desc = "Close ACP output map" })
-		vim.keymap.set("n", "<Esc>", function()
-			close_output_map(state)
-		end, { buffer = state.output_map_buf, desc = "Close ACP output map" })
-		vim.keymap.set("n", "<CR>", function()
-			jump_output_map_entry(state)
-		end, { buffer = state.output_map_buf, desc = "Jump to ACP output map entry" })
-		vim.keymap.set("n", "K", function()
-			preview_output_map_entry()
-		end, { buffer = state.output_map_buf, desc = "Preview ACP output map entry" })
-		vim.keymap.set("n", "Q", function()
-			open_output_map_quickfix()
-		end, { buffer = state.output_map_buf, nowait = true, desc = "Open ACP output map quickfix" })
-		if state.group then
-			local map_buf = state.output_map_buf
-			vim.api.nvim_create_autocmd("BufWipeout", {
-				group = state.group,
-				buffer = map_buf,
-				callback = function()
-					output_map_lines[map_buf] = nil
-					states[map_buf] = nil
-					if state.output_map_buf == map_buf then
-						state.output_map_buf = nil
-					end
-					state.output_map_win = nil
-				end,
-			})
-		end
-	end
-
-	refresh_output_map(state)
-	if valid_win(state.output_map_win) then
-		vim.api.nvim_set_current_win(state.output_map_win)
-		return true
-	end
-
-	local map_config = output_map_config(state, vim.api.nvim_buf_line_count(state.output_map_buf))
-	if not map_config then
-		return false
-	end
-	state.output_map_win = vim.api.nvim_open_win(state.output_map_buf, true, map_config)
-	vim.wo[state.output_map_win].cursorline = true
-	vim.wo[state.output_map_win].wrap = false
-	vim.wo[state.output_map_win].number = false
-	vim.wo[state.output_map_win].relativenumber = false
-	vim.wo[state.output_map_win].signcolumn = "no"
-	pcall(function()
-		vim.wo[state.output_map_win].winfixbuf = true
-	end)
-	refresh_output_map_highlights(state)
-	return true
-end
-
-local function pulse_output_section(state, range)
-	if not (state and range and valid_buf(state.output_buf)) then
+local function set_status(status)
+	if not state then
 		return
 	end
-
-	state.output_pulse_token = (state.output_pulse_token or 0) + 1
-	local token = state.output_pulse_token
-	local frames = {
-		{ hl = "AcpOutputPulse", badge = (" %s YANKED "):format(icons.yank) },
-		{ hl = "AcpOutputPulseSoft", badge = (" %s COPIED "):format(icons.yank) },
-		{ hl = "AcpOutputPulse", badge = (" %s READY "):format(icons.idle) },
-	}
-
-	local function draw(frame)
-		if token ~= state.output_pulse_token or not valid_buf(state.output_buf) then
-			return
-		end
-
-		vim.api.nvim_buf_clear_namespace(state.output_buf, output_pulse_ns, 0, -1)
-		local style = frames[frame]
-		if not style then
-			return
-		end
-
-		for line = range.line1, range.line2 do
-			local opts = {
-				line_hl_group = style.hl,
-				priority = 95,
-			}
-			if line == range.line1 then
-				opts.virt_text = { { style.badge, "AcpBadge" } }
-				opts.virt_text_pos = "right_align"
-			end
-			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, output_pulse_ns, line - 1, 0, opts)
-		end
-
-		vim.defer_fn(function()
-			draw(frame + 1)
-		end, 90)
-	end
-
-	draw(1)
+	state.status = status
+	update_chrome()
 end
 
-local function save_output_history(state)
-	if not valid_buf(state.output_buf) then
-		return
-	end
-
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local ok, err = pcall(history.save, state, lines)
-	if not ok and not state.history_error_reported then
-		state.history_error_reported = true
-		notify(("Failed to save ACP history: %s"):format(err), vim.log.levels.WARN)
+local function remember_source(bufnr, winid)
+	if valid_buf(bufnr) and vim.bo[bufnr].buftype == "" then
+		state.source_buf = bufnr
+		state.source_win = winid
 	end
 end
 
-function set_buf_options(bufnr, opts)
-	for key, value in pairs(opts) do
-		vim.bo[bufnr][key] = value
-	end
-end
-
-local function enable_output_language_injection(state)
-	if state.output_language_injection_tried or not valid_buf(state.output_buf) then
-		return
-	end
-
-	state.output_language_injection_tried = true
-	state.output_language_injection = false
-	if not (vim.treesitter and vim.treesitter.start) then
-		vim.b[state.output_buf].acp_language_injection = "fence-detection"
-		return
-	end
-
-	local ok = pcall(vim.treesitter.start, state.output_buf, "markdown")
-	state.output_language_injection = ok
-	vim.b[state.output_buf].acp_language_injection = ok and "treesitter-markdown" or "fence-detection"
-end
-
-local function set_output_lines(state, start, stop, lines)
-	if not valid_buf(state.output_buf) then
-		return
-	end
-
-	if lines then
-		local sanitized = {}
-		for index, line in ipairs(lines) do
-			sanitized[index] = output.strip_ansi(line)
-		end
-		lines = sanitized
-	end
-
-	vim.bo[state.output_buf].modifiable = true
-	vim.api.nvim_buf_set_lines(state.output_buf, start, stop, false, lines)
-	vim.bo[state.output_buf].modifiable = false
-	refresh_output_highlights(state)
-	refresh_current_output_section(state)
-	refresh_current_output_item(state)
-	refresh_output_cursor_hint(state)
-	refresh_output_map(state)
-	save_output_history(state)
-end
-
-local function set_panel_lines(bufnr, lines)
-	if not valid_buf(bufnr) then
-		return
-	end
-
-	vim.bo[bufnr].modifiable = true
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-	vim.bo[bufnr].modifiable = false
-end
-
-local function refresh_session_panel_highlights(bufnr, styles)
-	if not valid_buf(bufnr) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(bufnr, session_panel_ns, 0, -1)
-	for line_number, style in pairs(styles or {}) do
-		local opts = {
-			priority = 80,
-		}
-		if style.line_hl_group then
-			opts.line_hl_group = style.line_hl_group
-		end
-		if style.virt_text then
-			opts.virt_text = style.virt_text
-			opts.virt_text_pos = "right_align"
-		end
-		pcall(vim.api.nvim_buf_set_extmark, bufnr, session_panel_ns, line_number - 1, 0, opts)
-	end
-end
-
-local function clear_source_marks(state)
-	if not (state and state.source and valid_buf(state.source.bufnr)) then
-		return
-	end
-
-	for _, mark_id in ipairs(state.source_mark_ids or {}) do
-		pcall(vim.api.nvim_buf_del_extmark, state.source.bufnr, source_ns, mark_id)
-	end
-	state.source_mark_ids = {}
-end
-
-local function link_source_state(state)
-	if not (state and state.source and valid_buf(state.source.bufnr)) then
-		return
-	end
-
-	local bufnr = state.source.bufnr
-	source_links[bufnr] = source_links[bufnr] or {}
-	source_links[bufnr][state.id] = state
-end
-
-local function unlink_source_state(state)
-	if not (state and state.source and state.source.bufnr) then
-		return
-	end
-
-	local linked = source_links[state.source.bufnr]
-	if not linked then
-		return
-	end
-
-	linked[state.id] = nil
-	if next(linked) == nil then
-		source_links[state.source.bufnr] = nil
-	end
-end
-
-local function linked_source_states(bufnr)
-	local linked = source_links[bufnr]
-	if not linked then
-		return {}
-	end
-
-	local list = {}
-	for id, state in pairs(linked) do
-		if state and not state.closed and state.source and state.source.bufnr == bufnr and valid_buf(bufnr) then
-			table.insert(list, state)
-		else
-			linked[id] = nil
-		end
-	end
-	if next(linked) == nil then
-		source_links[bufnr] = nil
-	end
-	table.sort(list, function(left, right)
-		return (left.id or 0) < (right.id or 0)
-	end)
-	return list
-end
-
-local function refresh_source_marks(state)
-	clear_source_marks(state)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		return
-	end
-
-	local line_count = vim.api.nvim_buf_line_count(state.source.bufnr)
-	state.source_mark_ids = {}
-	for _, mark in ipairs(source_view.marks(state)) do
-		local line = math.max(1, math.min(mark.line or 1, line_count))
-		local ok, mark_id =
-			pcall(vim.api.nvim_buf_set_extmark, state.source.bufnr, source_ns, line - 1, mark.col or 0, mark.opts or {})
-		if ok then
-			table.insert(state.source_mark_ids, mark_id)
-		end
-	end
-end
-
-function refresh_output_chrome(state)
-	if not valid_win(state.output_win) then
-		return
-	end
-
-	local current_section
-	if valid_buf(state.output_buf) and vim.api.nvim_win_get_buf(state.output_win) == state.output_buf then
-		local cursor = vim.api.nvim_win_get_cursor(state.output_win)
-		local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-		current_section = output.current_section(lines, cursor[1])
-	end
-	refresh_current_output_section(state)
-	refresh_current_output_item(state)
-	refresh_output_cursor_hint(state)
-	refresh_output_map(state)
-	local title = output.window_title(state, {
-		change_count = changes.count(state),
-		current_section = current_section,
-	})
-	local win_config = vim.api.nvim_win_get_config(state.output_win)
-	if win_config.relative ~= "" then
-		win_config.title = title
-		pcall(vim.api.nvim_win_set_config, state.output_win, win_config)
-	else
-		vim.wo[state.output_win].winbar = output.winbar(state, {
-			change_count = changes.count(state),
-			current_section = current_section,
-		})
-	end
-end
-
-local function stop_output_animation(state)
-	local timer = state and state.output_animation_timer
-	if not timer then
-		return
-	end
-
-	state.output_animation_timer = nil
-	state.output_animation_frame = 1
-	local ok, closing = pcall(function()
-		return timer:is_closing()
-	end)
-	if ok and closing then
-		return
-	end
-	pcall(function()
-		timer:stop()
-	end)
-	pcall(function()
-		timer:close()
-	end)
-end
-
-local function jump_output_section(state, direction)
-	if not state or not valid_buf(state.output_buf) then
-		return
-	end
-
-	local winid = vim.api.nvim_get_current_win()
-	if vim.api.nvim_win_get_buf(winid) ~= state.output_buf then
-		winid = vim.fn.bufwinid(state.output_buf)
-	end
-	if not valid_win(winid) then
-		return
-	end
-
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local current = vim.api.nvim_win_get_cursor(winid)[1]
-	local target = output.next_section(lines, current, direction)
-	if target then
-		vim.api.nvim_win_set_cursor(winid, { target, 0 })
-		refresh_output_chrome(state)
-	end
-end
-
-local function jump_output_item(state, direction)
-	if not state or not valid_buf(state.output_buf) then
-		return false
-	end
-
-	local winid = vim.api.nvim_get_current_win()
-	if vim.api.nvim_win_get_buf(winid) ~= state.output_buf then
-		winid = vim.fn.bufwinid(state.output_buf)
-	end
-	if not valid_win(winid) then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local current = vim.api.nvim_win_get_cursor(winid)[1]
-	local item = output.next_output_item(lines, current, direction, { cwd = state.cwd })
-	if not item then
-		notify(direction < 0 and "No previous ACP output item" or "No next ACP output item", vim.log.levels.WARN)
-		return false
-	end
-
-	vim.api.nvim_set_current_win(winid)
-	pcall(vim.api.nvim_win_set_cursor, winid, { item.line, math.max(0, (item.col or 1) - 1) })
-	refresh_output_chrome(state)
-	return true
-end
-
-local function open_output_outline(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local sections = output.sections(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false))
-	if #sections == 0 then
-		notify("No ACP output sections found", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_sections = output.outline_lines(sections)
-	picker.open({
-		name = ("ACP://%s/%d/output-outline"):format(state.adapter, state.id),
-		filetype = "acp-output",
-		lines = lines,
-		title = " ACP output outline ",
-		title_icon = icons.section,
-		submit_desc = "Jump to ACP output section",
-		close_desc = "Close ACP output outline",
-		on_submit = function(row, view)
-			local section = line_sections[row]
-			if not section then
-				return
-			end
-
-			local winid = vim.fn.bufwinid(state.output_buf)
-			if not valid_win(winid) then
-				notify("ACP output window is not visible", vim.log.levels.WARN)
-				return
-			end
-
-			view.close()
-			vim.api.nvim_set_current_win(winid)
-			pcall(vim.api.nvim_win_set_cursor, winid, { section.line, 0 })
-		end,
-	})
-	return true
-end
-
-local function output_line_preview(lines, entry)
-	if not entry or not entry.line then
-		return nil
-	end
-
-	local line_count = #lines
-	if line_count == 0 then
-		return nil
-	end
-	local line = math.max(1, math.min(entry.line, line_count))
-	local start_line = math.max(1, line - 5)
-	local end_line = math.min(line_count, line + 5)
-	local preview = {}
-	for index = start_line, end_line do
-		local marker = index == line and icons.location or " "
-		table.insert(preview, ("%s %4d  %s"):format(marker, index, lines[index] or ""))
-	end
-
-	return {
-		lines = preview,
-		filetype = "acp",
-		title = (" %s ACP output line %d "):format(icons.map, line),
-		cursor_line = line - start_line + 1,
-	}
-end
-
-local function open_output_search(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local entries = output.transcript_entries(output_lines)
-	if #entries == 0 then
-		notify("No ACP output lines found", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_entries = output.transcript_entry_lines(entries)
-	picker.open({
-		name = ("ACP://%s/%d/output-search"):format(state.adapter, state.id),
-		filetype = "acp-output-search",
-		lines = lines,
-		title = " ACP output search ",
-		title_icon = icons.search,
-		submit_desc = "Jump to ACP output line",
-		close_desc = "Close ACP output search",
-		preview = function(row)
-			return output_line_preview(output_lines, line_entries[row])
-		end,
-		on_submit = function(row, view)
-			local entry = line_entries[row]
-			if not entry then
-				return
-			end
-
-			local winid = vim.fn.bufwinid(state.output_buf)
-			if not valid_win(winid) then
-				notify("ACP output window is not visible", vim.log.levels.WARN)
-				return
-			end
-
-			view.close()
-			vim.api.nvim_set_current_win(winid)
-			pcall(vim.api.nvim_win_set_cursor, winid, { entry.line, 0 })
-			refresh_output_chrome(state)
-		end,
-	})
-	return true
-end
-
-local function jump_to_output_line(state, line, col)
-	local winid = vim.fn.bufwinid(state.output_buf)
-	if not valid_win(winid) then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	vim.api.nvim_set_current_win(winid)
-	pcall(vim.api.nvim_win_set_cursor, winid, { line or 1, math.max(0, (col or 1) - 1) })
-	refresh_output_chrome(state)
-	return true
-end
-
-local function output_cursor_line(state)
-	local winid = vim.api.nvim_get_current_win()
-	if valid_win(winid) and vim.api.nvim_win_get_buf(winid) == state.output_buf then
-		return vim.api.nvim_win_get_cursor(winid)[1]
-	end
-
-	if valid_win(state.output_win) and vim.api.nvim_win_get_buf(state.output_win) == state.output_buf then
-		return vim.api.nvim_win_get_cursor(state.output_win)[1]
-	end
-
-	winid = vim.fn.bufwinid(state.output_buf)
+local function close_window(winid)
 	if valid_win(winid) then
-		return vim.api.nvim_win_get_cursor(winid)[1]
+		pcall(vim.api.nvim_win_close, winid, true)
 	end
-
-	return vim.api.nvim_buf_line_count(state.output_buf)
 end
 
-local function yank_output_section(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
+local function close_tab(tabpage, return_win)
+	if not valid_tab(tabpage) or #vim.api.nvim_list_tabpages() <= 1 then
 		return false
 	end
-
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local text, range, section_lines = output.section_text(lines, output_cursor_line(state))
-	if not text or text == "" then
-		notify("No ACP output section found", vim.log.levels.WARN)
-		return false
+	vim.api.nvim_set_current_tabpage(tabpage)
+	local closed = pcall(vim.cmd, "tabclose!")
+	if valid_win(return_win) then
+		pcall(vim.api.nvim_set_current_win, return_win)
 	end
-
-	vim.fn.setreg('"', text, "l")
-	pulse_output_section(state, range)
-	local count = #section_lines
-	notify(
-		("Yanked ACP %s section (%d line%s)"):format(range.kind or "output", count, count == 1 and "" or "s"),
-		vim.log.levels.INFO
-	)
-	return true
+	return closed
 end
 
-local file_reference_preview
-local jump_to_file_reference
-
-local function code_block_title(block)
-	return (" %s lines %d-%d "):format(block.language or "code", block.start_line or 1, block.end_line or 1)
-end
-
-local function code_block_scratch_winbar(block, syntax)
-	local line_count = block.line_count or #((block and block.lines) or {})
-	local language = block.language or block.filetype or "code"
-	local syntax_icon = syntax == "treesitter" and icons.treesitter or icons.file
-	return (" %s ACP %s code  %s %d line%s  %s %s  %s <leader>at scope  %s <leader>ai draft  %s gO output  %s <leader>aY yank  %s q close "):format(
-		icons.code,
-		language,
-		icons.section,
-		line_count,
-		line_count == 1 and "" or "s",
-		syntax_icon,
-		syntax or "filetype",
-		icons.scope,
-		icons.prompt,
-		icons.map,
-		icons.reference,
-		icons.key
-	)
-end
-
-local function output_inspector_winbar(preview, syntax)
-	local title = preview and preview.title and preview.title:gsub("^%s+", ""):gsub("%s+$", "") or "ACP output inspect"
-	local filetype = preview and preview.filetype or "acp"
-	local syntax_icon = syntax == "treesitter" and icons.treesitter or icons.file
-	return (" %s %s  %s %s  %s %s  %s q close "):format(icons.note, title, icons.code, filetype, syntax_icon, syntax or "filetype", icons.key)
-end
-
-local function close_output_inspector(state)
+function M.close()
 	if not state then
 		return
 	end
-
-	if valid_win(state.output_inspector_win) then
-		pcall(vim.api.nvim_win_close, state.output_inspector_win, true)
+	local current_win = vim.api.nvim_get_current_win()
+	local current_tab = vim.api.nvim_get_current_tabpage()
+	local chat_tab = valid_tab(state.tabpage) and state.tabpage or nil
+	local return_win = chat_tab == current_tab and state.origin_win or current_win
+	if not close_tab(chat_tab, return_win) then
+		close_window(state.input_win)
+		if valid_win(state.output_win) then
+			local output_tab = vim.api.nvim_win_get_tabpage(state.output_win)
+			if #vim.api.nvim_list_tabpages() == 1 and #vim.api.nvim_tabpage_list_wins(output_tab) == 1 then
+				vim.api.nvim_set_current_win(state.output_win)
+				vim.cmd("enew!")
+			else
+				close_window(state.output_win)
+			end
+		end
 	end
-	if valid_buf(state.output_inspector_buf) then
-		pcall(vim.api.nvim_buf_delete, state.output_inspector_buf, { force = true })
+	state.input_win = nil
+	state.output_win = nil
+	state.tabpage = nil
+	if valid_win(return_win) then
+		pcall(vim.api.nvim_set_current_win, return_win)
+	elseif valid_tab(state.origin_tab) then
+		pcall(vim.api.nvim_set_current_tabpage, state.origin_tab)
 	end
-	state.output_inspector_win = nil
-	state.output_inspector_buf = nil
 end
 
-local function open_output_inspector_float(state, preview)
-	if not (state and preview and preview.lines and #preview.lines > 0) then
+local function create_buffers()
+	local created = false
+	if not valid_buf(state.output_buf) then
+		created = true
+		state.output_buf = vim.api.nvim_create_buf(false, true)
+		pcall(vim.api.nvim_buf_set_name, state.output_buf, "acp://codex/chat")
+		vim.bo[state.output_buf].buftype = "nofile"
+		vim.bo[state.output_buf].bufhidden = "hide"
+		vim.bo[state.output_buf].swapfile = false
+		vim.bo[state.output_buf].filetype = "markdown"
+		vim.bo[state.output_buf].modifiable = false
+		set_output(render.thread({ turns = {} }, state.cwd))
+	end
+	if not valid_buf(state.input_buf) then
+		created = true
+		state.input_buf = vim.api.nvim_create_buf(false, true)
+		pcall(vim.api.nvim_buf_set_name, state.input_buf, "acp://codex/prompt")
+		vim.bo[state.input_buf].buftype = "nofile"
+		vim.bo[state.input_buf].bufhidden = "hide"
+		vim.bo[state.input_buf].swapfile = false
+		vim.bo[state.input_buf].filetype = "acp-prompt"
+	end
+	if created then
+		state.keymaps_set = false
+	end
+end
+
+local function focus_input(insert)
+	if not state or not valid_win(state.input_win) then
+		return
+	end
+	vim.api.nvim_set_current_win(state.input_win)
+	if insert then
+		vim.cmd("startinsert")
+	end
+end
+
+local function configure_window(winid, output)
+	vim.wo[winid].number = false
+	vim.wo[winid].relativenumber = false
+	vim.wo[winid].signcolumn = "no"
+	vim.wo[winid].foldcolumn = "0"
+	vim.wo[winid].wrap = true
+	vim.wo[winid].linebreak = true
+	vim.wo[winid].cursorline = not output
+	if output then
+		vim.wo[winid].conceallevel = 2
+	end
+end
+
+local function open_layout()
+	if
+		valid_win(state.output_win)
+		and valid_win(state.input_win)
+		and vim.api.nvim_win_get_tabpage(state.output_win) == vim.api.nvim_win_get_tabpage(state.input_win)
+	then
+		state.tabpage = vim.api.nvim_win_get_tabpage(state.output_win)
+		vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
+		vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
+		configure_window(state.output_win, true)
+		configure_window(state.input_win, false)
+		update_chrome()
+		focus_input(false)
+		return
+	end
+
+	local previous_output = state.output_win
+	local previous_input = state.input_win
+	local tabpage = valid_tab(state.tabpage) and state.tabpage or nil
+	if not tabpage then
+		vim.cmd("tabnew")
+		tabpage = vim.api.nvim_get_current_tabpage()
+	else
+		vim.api.nvim_set_current_tabpage(tabpage)
+	end
+
+	local output_win
+	for _, winid in ipairs({ previous_output, previous_input }) do
+		if valid_win(winid) and vim.api.nvim_win_get_tabpage(winid) == tabpage then
+			output_win = winid
+			break
+		end
+	end
+	output_win = output_win or vim.api.nvim_tabpage_list_wins(tabpage)[1]
+	for _, winid in ipairs({ previous_output, previous_input }) do
+		if valid_win(winid) and winid ~= output_win then
+			close_window(winid)
+		end
+	end
+
+	state.tabpage = tabpage
+	state.output_win = output_win
+	state.input_win = nil
+	vim.api.nvim_set_current_win(state.output_win)
+	vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
+	configure_window(state.output_win, true)
+
+	vim.cmd(("belowright %dsplit"):format(math.max(3, tonumber(config.window.input_height) or 6)))
+	state.input_win = vim.api.nvim_get_current_win()
+	vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
+	configure_window(state.input_win, false)
+	update_chrome()
+	focus_input(false)
+end
+
+local function add_context_from_source(range, file_only)
+	if not state then
 		return false
 	end
-
-	close_output_inspector(state)
-	local bufnr = vim.api.nvim_create_buf(false, true)
-	pcall(vim.api.nvim_buf_set_name, bufnr, ("ACP Inspect://%s/%s"):format(state.adapter or "adapter", tostring(state.id or "?")))
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
-		filetype = preview.filetype or "acp",
-		modifiable = true,
-		swapfile = false,
-	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, preview.lines)
-	vim.bo[bufnr].modifiable = false
-	vim.b[bufnr].acp_output_inspector = state.output_buf
-	local syntax = "filetype"
-	if vim.treesitter and vim.treesitter.start and preview.filetype and preview.filetype ~= "acp" and preview.filetype ~= "text" then
-		local ok = pcall(vim.treesitter.start, bufnr, preview.filetype)
-		syntax = ok and "treesitter" or "filetype"
+	local bufnr = vim.api.nvim_get_current_buf()
+	local winid = vim.api.nvim_get_current_win()
+	if not valid_buf(bufnr) or vim.bo[bufnr].buftype ~= "" then
+		bufnr = state.source_buf
+		winid = state.source_win
 	end
-	vim.b[bufnr].acp_output_inspector_syntax = syntax
-	vim.keymap.set("n", "q", function()
-		close_output_inspector(state)
-	end, { buffer = bufnr, desc = "Close ACP output inspector" })
+	if not valid_buf(bufnr) then
+		notify("No source file is available for context", vim.log.levels.WARN)
+		return false
+	end
+	remember_source(bufnr, winid)
+	local item
+	if range and not file_only then
+		item = context.selection(bufnr, range, state.cwd, config.context)
+	else
+		item = context.file(bufnr, state.cwd)
+	end
+	if not item then
+		notify("The current buffer has no file path", vim.log.levels.WARN)
+		return false
+	end
+	context.add(state.contexts, item)
+	update_chrome()
+	notify(("Added context: %s"):format(item.label))
+	return true
+end
 
-	local winid = vim.api.nvim_open_win(bufnr, false, picker.window_config(preview.lines, {
-		min_width = 48,
-		min_height = 4,
-		padding = 4,
-		title = preview.title or " ACP output inspect ",
-		zindex = 86,
-	}))
-	vim.wo[winid].cursorline = true
-	vim.wo[winid].number = true
-	vim.wo[winid].relativenumber = false
-	vim.wo[winid].signcolumn = "yes:1"
-	vim.wo[winid].wrap = false
-	vim.wo[winid].winbar = output_inspector_winbar(preview, syntax):gsub("%%", "%%%%")
-	pcall(vim.api.nvim_win_set_cursor, winid, { math.max(1, preview.cursor_line or 1), 0 })
+local function ensure_agent_item(item_id)
+	if state.agent_item == item_id then
+		return
+	end
+	state.agent_item = item_id
+	append_lines({ "", "## Codex", "" })
+end
 
-	state.output_inspector_buf = bufnr
-	state.output_inspector_win = winid
-	if state.group and valid_buf(state.output_buf) then
-		vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufLeave" }, {
-			group = state.group,
-			buffer = state.output_buf,
-			once = true,
-			callback = function()
-				close_output_inspector(state)
-			end,
-		})
+local function active_turn(thread)
+	for index = #(thread.turns or {}), 1, -1 do
+		local turn = thread.turns[index]
+		if turn.status == "inProgress" then
+			return turn
+		end
+	end
+end
+
+local function apply_thread_response(result)
+	local thread = result and result.thread
+	if type(thread) ~= "table" or type(thread.id) ~= "string" then
+		return false
+	end
+	state.thread_id = thread.id
+	state.cwd = result.cwd or thread.cwd or state.cwd
+	state.model = result.model or state.model
+	state.effort = present(result.reasoningEffort) and result.reasoningEffort or state.effort
+	state.service_tier = present(result.serviceTier) and result.serviceTier or state.service_tier
+	state.diff = render.thread_diff(thread)
+	state.streamed_items = {}
+	state.items = {}
+	for _, history_turn in ipairs(thread.turns or {}) do
+		for _, item in ipairs(history_turn.items or {}) do
+			if item.id then
+				state.items[item.id] = item
+			end
+		end
+	end
+	state.agent_item = nil
+	state.plan_item = nil
+	state.contexts = {}
+	state.queue = {}
+	local turn = active_turn(thread)
+	state.turn_id = turn and turn.id or nil
+	state.busy = turn ~= nil
+	set_output(render.thread(thread, state.cwd))
+	set_status(state.busy and "running" or "ready")
+	return true
+end
+
+local function flush_thread_waiters(ok, value)
+	local waiters = state.start_waiters
+	state.start_waiters = {}
+	state.starting = false
+	for _, callback in ipairs(waiters) do
+		callback(ok, value)
+	end
+end
+
+local function ensure_thread(callback)
+	if state.thread_id then
+		callback(true, state.thread_id)
+		return
+	end
+	table.insert(state.start_waiters, callback)
+	if state.starting then
+		return
+	end
+	state.starting = true
+	set_status("starting thread")
+	client:start_thread({
+		cwd = state.cwd,
+		model = state.model,
+		approval_policy = config.approval_policy,
+		sandbox = config.sandbox,
+		personality = state.personality,
+		service_tier = state.service_tier,
+	}, function(result, err)
+		if err or not apply_thread_response(result) then
+			local message = err or "Codex did not create a thread"
+			set_status("error")
+			append_lines({ "", ("> Error: %s"):format(message), "" })
+			flush_thread_waiters(false, message)
+			return
+		end
+		flush_thread_waiters(true, state.thread_id)
+	end)
+end
+
+local function prepared_prompt(text)
+	local contexts = vim.deepcopy(state.contexts)
+	if config.auto_context and valid_buf(state.source_buf) then
+		context.add(contexts, context.file(state.source_buf, state.cwd))
+	end
+	local extra_input, additional, labels = context.turn_payload(contexts)
+	local input = { { type = "text", text = text, text_elements = {} } }
+	vim.list_extend(input, extra_input)
+	return {
+		text = text,
+		labels = labels,
+		payload = {
+			input = input,
+			additional_context = additional,
+			cwd = state.cwd,
+			model = state.model,
+			effort = state.effort,
+			personality = state.personality,
+			service_tier = state.service_tier,
+		},
+	}
+end
+
+local function append_user(envelope, suffix)
+	append_lines({ "", ("## You%s"):format(suffix or ""), "" })
+	append_lines(vim.split(envelope.text, "\n", { plain = true }))
+	if #envelope.labels > 0 then
+		append_lines({ "", ("> Context: %s"):format(table.concat(envelope.labels, ", ")) })
+	end
+end
+
+local function start_envelope(envelope)
+	state.busy = true
+	state.agent_item = nil
+	state.plan_item = nil
+	state.streamed_items = {}
+	state.items = {}
+	append_user(envelope)
+	set_status("starting turn")
+	client:start_turn(state.thread_id, envelope.payload, function(result, err)
+		if err or type(result) ~= "table" or type(result.turn) ~= "table" then
+			state.busy = false
+			state.turn_id = nil
+			set_status("error")
+			append_lines({ "", ("> Error: %s"):format(err or "Codex did not start the turn"), "" })
+			drain_queue()
+			return
+		end
+		state.turn_id = result.turn.id
+		state.busy = true
+		set_status("running")
+	end)
+end
+
+local function dispatch_prompt(envelope)
+	ensure_thread(function(ok)
+		if not ok then
+			return
+		end
+		if state.busy then
+			if config.follow_up == "steer" and state.turn_id then
+				append_user(envelope, " (steer)")
+				set_status("steering")
+				client:steer_turn(state.thread_id, state.turn_id, envelope.payload, function(_, err)
+					if err then
+						append_lines({ "", ("> Steer failed: %s"):format(err), "" })
+					end
+					set_status(err and "running" or "steered")
+				end)
+			else
+				table.insert(state.queue, envelope)
+				append_lines({ "", ("> Queued follow-up %d."):format(#state.queue), "" })
+				set_status("running")
+			end
+			update_chrome()
+			return
+		end
+		start_envelope(envelope)
+	end)
+end
+
+drain_queue = function()
+	if not state or state.busy or #state.queue == 0 then
+		update_chrome()
+		return
+	end
+	local envelope = table.remove(state.queue, 1)
+	vim.schedule(function()
+		if state and not state.busy then
+			start_envelope(envelope)
+		end
+	end)
+end
+
+local function local_command(text)
+	local name, args = text:match("^%s*/([%w_-]+)%s*(.-)%s*$")
+	if not name then
+		return false
+	end
+	if name == "model" then
+		select_model()
+	elseif name == "reasoning" then
+		select_reasoning()
+	elseif name == "review" then
+		start_review(args ~= "" and args or nil)
+	elseif name == "compact" then
+		compact_thread()
+	elseif name == "status" then
+		show_status()
+	elseif name == "new" then
+		M.new_chat()
+	elseif name == "threads" then
+		open_threads()
+	elseif name == "login" then
+		M.login()
+	else
+		return false
 	end
 	return true
 end
 
-local function open_output_code_block_buffer(state, block)
-	if not state or not block or not block.lines then
-		return false
+function M.send()
+	if not state then
+		M.open()
+	end
+	local text = input_text():gsub("%s+$", "")
+	if text:match("^%s*$") then
+		notify("Prompt is empty", vim.log.levels.WARN)
+		return
+	end
+	if local_command(text) then
+		set_input("")
+		return
+	end
+	local envelope = prepared_prompt(text)
+	state.contexts = {}
+	set_input("")
+	update_chrome()
+	dispatch_prompt(envelope)
+end
+
+local function set_buffer_keymaps()
+	local opts = { buffer = state.input_buf, silent = true }
+	vim.keymap.set({ "n", "i" }, "<C-s>", M.send, vim.tbl_extend("force", opts, { desc = "Send Codex prompt" }))
+	vim.keymap.set({ "n", "i" }, "<C-CR>", M.send, vim.tbl_extend("force", opts, { desc = "Send Codex prompt" }))
+	vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "Close Codex tab" }))
+
+	local output_opts = { buffer = state.output_buf, silent = true }
+	vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", output_opts, { desc = "Close Codex tab" }))
+	vim.keymap.set("n", "i", function()
+		focus_input(true)
+	end, vim.tbl_extend("force", output_opts, { desc = "Focus Codex prompt" }))
+	vim.keymap.set("n", "n", M.new_chat, vim.tbl_extend("force", output_opts, { desc = "New Codex chat" }))
+	vim.keymap.set("n", "t", function()
+		open_threads()
+	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex threads" }))
+	vim.keymap.set("n", "d", M.open_diff, vim.tbl_extend("force", output_opts, { desc = "Open Codex diff" }))
+	vim.keymap.set("n", "m", function()
+		select_model()
+	end, vim.tbl_extend("force", output_opts, { desc = "Select Codex model" }))
+	vim.keymap.set("n", "r", function()
+		select_reasoning()
+	end, vim.tbl_extend("force", output_opts, { desc = "Select Codex reasoning" }))
+	vim.keymap.set("n", "s", M.stop, vim.tbl_extend("force", output_opts, { desc = "Stop Codex turn" }))
+end
+
+function M.open(opts)
+	if type(opts) == "string" then
+		opts = { prompt = opts }
+	else
+		opts = opts or {}
+	end
+	local origin_buf = vim.api.nvim_get_current_buf()
+	local origin_win = vim.api.nvim_get_current_win()
+	local origin_tab = vim.api.nvim_get_current_tabpage()
+	if not state then
+		state = fresh_state(current_cwd())
+	end
+	if valid_buf(origin_buf) and vim.bo[origin_buf].buftype == "" then
+		state.origin_win = origin_win
+		state.origin_tab = origin_tab
+		remember_source(origin_buf, origin_win)
+		if not state.thread_id then
+			state.cwd = current_cwd()
+		end
+	end
+	if opts.new then
+		if not M.new_chat({ keep_layout = true }) then
+			return
+		end
+	end
+	if opts.range then
+		add_context_from_source(opts.range, false)
+	elseif opts.file_context then
+		add_context_from_source(nil, true)
 	end
 
-	local scratch_win
+	create_buffers()
+	if not state.keymaps_set then
+		set_buffer_keymaps()
+		state.keymaps_set = true
+	end
+	open_layout()
+	if opts.prompt and opts.prompt ~= "" then
+		set_input(opts.prompt)
+		M.send()
+	end
+end
+
+function M.new_chat(opts)
+	opts = opts or {}
+	if state and (state.busy or state.starting) then
+		notify("Stop or wait for the active Codex turn before starting a new chat", vim.log.levels.WARN)
+		return false
+	end
+	local previous_thread = state and state.thread_id
+	if not state then
+		state = fresh_state(current_cwd())
+	else
+		local windows = {
+			output_buf = state.output_buf,
+			input_buf = state.input_buf,
+			output_win = state.output_win,
+			input_win = state.input_win,
+			tabpage = state.tabpage,
+			origin_win = state.origin_win,
+			origin_tab = state.origin_tab,
+			source_buf = state.source_buf,
+			source_win = state.source_win,
+			keymaps_set = state.keymaps_set,
+		}
+		state = vim.tbl_extend("force", fresh_state(current_cwd()), windows)
+	end
+	if previous_thread and client and client.unsubscribe_thread then
+		client:unsubscribe_thread(previous_thread, function(_, err)
+			if err then
+				notify(("Could not unload the previous Codex thread: %s"):format(err), vim.log.levels.WARN)
+			end
+		end)
+	end
+	if valid_buf(state.output_buf) then
+		set_output(render.thread({ turns = {} }, state.cwd))
+	end
+	if valid_buf(state.input_buf) then
+		set_input("")
+	end
+	update_chrome()
+	if not opts.keep_layout then
+		M.open()
+	end
+	return true
+end
+
+local function resume_thread(thread)
+	if state.busy or state.starting then
+		notify("Stop or wait for the active Codex turn before switching threads", vim.log.levels.WARN)
+		return
+	end
+	local previous_thread = state.thread_id
+	set_status("resuming")
+	client:resume_thread(thread.id, { cwd = thread.cwd or state.cwd }, function(result, err)
+		if err or not apply_thread_response(result) then
+			set_status("error")
+			notify(err or "Failed to resume Codex thread", vim.log.levels.ERROR)
+			return
+		end
+		if previous_thread and previous_thread ~= state.thread_id and client.unsubscribe_thread then
+			client:unsubscribe_thread(previous_thread, function(_, unload_err)
+				if unload_err then
+					notify(("Could not unload the previous Codex thread: %s"):format(unload_err), vim.log.levels.WARN)
+				end
+			end)
+		end
+		focus_input(false)
+	end)
+end
+
+local function refresh_threads(callback)
+	set_status("loading threads")
+	client:list_threads({
+		cwd = state.cwd,
+		source_kinds = config.thread_sources,
+		max_threads = config.max_threads,
+	}, function(threads, err)
+		if err then
+			set_status(state.busy and "running" or "ready")
+			notify(err, vim.log.levels.ERROR)
+			if callback then
+				callback(nil)
+			end
+			return
+		end
+		state.threads = threads
+		set_status(state.busy and "running" or "ready")
+		if callback then
+			callback(threads)
+		end
+	end)
+end
+
+open_threads = function()
+	if not state then
+		M.open()
+	end
+	refresh_threads(function(threads)
+		if not threads or #threads == 0 then
+			notify("No Codex threads found for this working directory")
+			return
+		end
+		vim.ui.select(threads, {
+			prompt = "Codex threads",
+			format_item = render.thread_label,
+		}, function(choice)
+			if choice then
+				resume_thread(choice)
+			end
+		end)
+	end)
+end
+
+local function model_by_id(id)
+	for _, model in ipairs(state.models or {}) do
+		if model.id == id or model.model == id then
+			return model
+		end
+	end
+end
+
+local function load_models(callback)
+	if state.models then
+		callback(state.models)
+		return
+	end
+	set_status("loading models")
+	client:list_models(function(models, err)
+		if err then
+			set_status(state.busy and "running" or "ready")
+			notify(err, vim.log.levels.ERROR)
+			callback(nil)
+			return
+		end
+		state.models = models
+		set_status(state.busy and "running" or "ready")
+		callback(models)
+	end)
+end
+
+select_model = function()
+	if not state then
+		M.open()
+	end
+	load_models(function(models)
+		if not models then
+			return
+		end
+		vim.ui.select(models, {
+			prompt = "Codex model",
+			format_item = function(model)
+				local current = model.id == state.model and " (current)" or ""
+				local default = model.isDefault and " [default]" or ""
+				return ("%s%s%s — %s"):format(
+					model.displayName or model.id,
+					current,
+					default,
+					model.description or ""
+				)
+			end,
+		}, function(choice)
+			if not choice then
+				return
+			end
+			state.model = choice.id or choice.model
+			local supported = {}
+			for _, option in ipairs(choice.supportedReasoningEfforts or {}) do
+				supported[option.reasoningEffort] = true
+			end
+			if not supported[state.effort] then
+				state.effort = choice.defaultReasoningEffort
+			end
+			update_chrome()
+		end)
+	end)
+end
+
+select_reasoning = function()
+	if not state then
+		M.open()
+	end
+	load_models(function(models)
+		if not models then
+			return
+		end
+		local model = model_by_id(state.model)
+		if not model then
+			for _, candidate in ipairs(models) do
+				if candidate.isDefault then
+					model = candidate
+					break
+				end
+			end
+		end
+		local options = model and model.supportedReasoningEfforts or {}
+		if #options == 0 then
+			notify("The selected model does not advertise reasoning options", vim.log.levels.WARN)
+			return
+		end
+		vim.ui.select(options, {
+			prompt = "Codex reasoning effort",
+			format_item = function(option)
+				local current = option.reasoningEffort == state.effort and " (current)" or ""
+				return ("%s%s — %s"):format(option.reasoningEffort, current, option.description or "")
+			end,
+		}, function(choice)
+			if choice then
+				state.effort = choice.reasoningEffort
+				update_chrome()
+			end
+		end)
+	end)
+end
+
+start_review = function(instructions)
+	if not state then
+		M.open()
+	end
+	ensure_thread(function(ok)
+		if not ok then
+			return
+		end
+		if state.busy then
+			notify("Wait for the active turn before starting a review", vim.log.levels.WARN)
+			return
+		end
+		local target = instructions and { type = "custom", instructions = instructions }
+			or { type = "uncommittedChanges" }
+		state.busy = true
+		set_status("starting review")
+		client:review(state.thread_id, target, config.review_delivery, function(result, err)
+			if err or type(result) ~= "table" then
+				state.busy = false
+				set_status("error")
+				notify(err or "Failed to start Codex review", vim.log.levels.ERROR)
+				return
+			end
+			if result.reviewThreadId and result.reviewThreadId ~= state.thread_id then
+				state.thread_id = result.reviewThreadId
+			end
+			state.turn_id = result.turn and result.turn.id or nil
+			set_status("reviewing")
+		end)
+	end)
+end
+
+compact_thread = function()
+	if not state or not state.thread_id then
+		notify("Start or resume a Codex thread first", vim.log.levels.WARN)
+		return
+	end
+	client:compact(state.thread_id, function(_, err)
+		if err then
+			notify(err, vim.log.levels.ERROR)
+		else
+			set_status("compacting")
+		end
+	end)
+end
+
+show_status = function()
+	if not state then
+		notify("Codex tab is not open")
+		return
+	end
+	local usage = state.tokens and tostring(state.tokens.totalTokens or 0) or "unknown"
+	notify(table.concat({
+		("Thread: %s"):format(state.thread_id or "not started"),
+		("Model: %s"):format(state.model or "default"),
+		("Reasoning: %s"):format(state.effort or "default"),
+		("Status: %s"):format(state.status),
+		("Tokens: %s"):format(usage),
+		("Working directory: %s"):format(state.cwd),
+	}, "\n"))
+end
+
+function M.stop()
+	if not state or not state.thread_id or not state.turn_id or not state.busy then
+		notify("No active Codex turn", vim.log.levels.WARN)
+		return
+	end
+	set_status("stopping")
+	client:interrupt_turn(state.thread_id, state.turn_id, function(_, err)
+		if err then
+			set_status("running")
+			notify(err, vim.log.levels.ERROR)
+		end
+	end)
+end
+
+function M.open_diff()
+	if not state or not state.diff or state.diff == "" then
+		notify("The current Codex thread has no diff", vim.log.levels.WARN)
+		return
+	end
+	local return_win = vim.api.nvim_get_current_win()
+	vim.cmd("tabnew")
+	local tabpage = vim.api.nvim_get_current_tabpage()
+	local winid = vim.api.nvim_get_current_win()
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	pcall(
 		vim.api.nvim_buf_set_name,
 		bufnr,
-		("ACP Code://%s/%s/%d-%d.%s"):format(
-			state.adapter or "adapter",
-			tostring(state.id or "?"),
-			block.start_line or 1,
-			block.end_line or 1,
-			block.filetype or "text"
-		)
+		("acp://codex/diff/%s/%s"):format(state.thread_id or "new", tostring(vim.uv.hrtime()))
 	)
-	set_buf_options(bufnr, {
-		bufhidden = "wipe",
-		buftype = "nofile",
-		filetype = block.filetype or "text",
-		modifiable = true,
-		swapfile = false,
-	})
-	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, block.lines)
-	vim.b[bufnr].acp_output_source = state.output_buf
-	vim.b[bufnr].acp_output_source_line = block.start_line
-	vim.b[bufnr].acp_output_source_end_line = block.end_line
-	local syntax = "filetype"
-	if vim.treesitter and vim.treesitter.start and block.filetype and block.filetype ~= "text" then
-		local ok = pcall(vim.treesitter.start, bufnr, block.filetype)
-		syntax = ok and "treesitter" or "filetype"
-	end
-	vim.b[bufnr].acp_code_block_syntax = syntax
-
-	local function focus_output_source()
-		if not valid_buf(state.output_buf) then
-			notify("The source ACP output buffer is no longer available", vim.log.levels.WARN)
-			return false
-		end
-
-		local output_win = valid_win(state.output_win) and state.output_win or vim.fn.bufwinid(state.output_buf)
-		if not (output_win and output_win ~= -1 and valid_win(output_win)) then
-			notify("The source ACP output window is not visible", vim.log.levels.WARN)
-			return false
-		end
-
-		if vim.fn.win_gotoid(output_win) ~= 1 then
-			notify("Could not focus the source ACP output window", vim.log.levels.WARN)
-			return false
-		end
-
-		local line_count = vim.api.nvim_buf_line_count(state.output_buf)
-		local target = math.max(1, math.min(block.start_line or 1, line_count))
-		pcall(vim.api.nvim_win_set_cursor, output_win, { target, 0 })
-		refresh_output_chrome(state)
-		return true
-	end
-
-	local function draft_code_context()
-		if not valid_buf(bufnr) then
-			return false
-		end
-
-		local winid = valid_win(scratch_win) and scratch_win or vim.api.nvim_get_current_win()
-		local cursor = vim.api.nvim_win_get_cursor(winid)
-		local node_list = nil
-		local node_err = nil
-		if vim.treesitter and vim.treesitter.get_node then
-			node_list, node_err = treesitter.nodes(bufnr, cursor)
-		end
-
-		local selected_node = node_list and node_list[1] or nil
-		local line1, line2 = treesitter.range_lines(selected_node)
-		local instruction = "Use this ACP output code block as context for a follow-up."
-		local source_range = {
-			line1 = 1,
-			line2 = vim.api.nvim_buf_line_count(bufnr),
-		}
-		local details = {
-			("Origin: output lines %d-%d"):format(block.start_line or 1, block.end_line or block.start_line or 1),
-		}
-
-		if selected_node and line1 then
-			source_range = {
-				line1 = line1,
-				line2 = line2,
-			}
-			instruction = "Use this Tree-sitter scope from an ACP output code block as context for a follow-up."
-			table.insert(details, ("Scope: %s lines %d-%d"):format(selected_node.type or "node", line1, line2 or line1))
-		elseif node_err then
-			table.insert(details, ("Tree-sitter scope unavailable: %s"):format(node_err))
-		end
-
-		local rendered = context.render(context.capture(bufnr, winid, source_range), {
-			buffer_diagnostic_limit = 0,
-			diagnostic_limit = 0,
-			selection_limit = 160,
-			treesitter_text_lines = 40,
-		})
-		if not rendered then
-			notify("Could not draft ACP output code context", vim.log.levels.WARN)
-			return false
-		end
-
-		append_input_text(state, table.concat({
-			instruction,
-			table.concat(details, "\n"),
-			"",
-			rendered,
-			"",
-			"Request:",
-		}, "\n"))
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-		return true
-	end
-
-	local function open_code_treesitter_scope()
-		local winid = valid_win(scratch_win) and scratch_win or vim.api.nvim_get_current_win()
-		local cursor = vim.api.nvim_win_get_cursor(winid)
-		local node_list, err = treesitter.nodes(bufnr, cursor)
-		if err then
-			notify(err, vim.log.levels.WARN)
-			return false
-		end
-		if not node_list or #node_list == 0 then
-			notify("No Tree-sitter node found for this ACP code block cursor", vim.log.levels.WARN)
-			return false
-		end
-
-		local lines, line_nodes = treesitter.picker_lines(node_list, {
-			title = "ACP Code Tree-sitter Scope",
-			footer = "Press <Enter> to jump to the node, or q/<Esc> to close.",
-		})
-		picker.open({
-			name = ("ACP://%s/%s/code-tree/%d-%d"):format(
-				state.adapter or "adapter",
-				tostring(state.id or "?"),
-				block.start_line or 1,
-				block.end_line or 1
-			),
-			filetype = "acp-code-treesitter",
-			lines = lines,
-			title = " ACP code Tree-sitter scope ",
-			title_icon = icons.treesitter,
-			submit_desc = "Jump to ACP code Tree-sitter node",
-			close_desc = "Close ACP code Tree-sitter scope",
-			preview = function(row)
-				local item = line_nodes[row]
-				local line1, line2 = treesitter.range_lines(item)
-				if not line1 then
-					return nil
-				end
-				return {
-					lines = vim.api.nvim_buf_get_lines(bufnr, line1 - 1, line2, false),
-					filetype = vim.bo[bufnr].filetype,
-					title = (" %s lines %d-%d "):format(item.type or "node", line1, line2),
-					cursor_line = 1,
-				}
-			end,
-			on_submit = function(row, view)
-				local item = line_nodes[row]
-				local line1 = treesitter.range_lines(item)
-				if not line1 then
-					return
-				end
-				view.close()
-				local target_win = valid_win(scratch_win) and scratch_win or vim.fn.bufwinid(bufnr)
-				if target_win ~= -1 and valid_win(target_win) then
-					vim.fn.win_gotoid(target_win)
-					pcall(
-						vim.api.nvim_win_set_cursor,
-						target_win,
-						{ line1, item.range and item.range.start_col or 0 }
-					)
-				end
-			end,
-		})
-		return true
-	end
-
+	vim.api.nvim_win_set_buf(winid, bufnr)
+	vim.bo[bufnr].buftype = "nofile"
+	vim.bo[bufnr].bufhidden = "wipe"
+	vim.bo[bufnr].swapfile = false
+	vim.bo[bufnr].filetype = "diff"
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, vim.split(state.diff, "\n", { plain = true }))
+	vim.bo[bufnr].modifiable = false
+	vim.wo[winid].winbar = " Codex changes · q close tab "
 	vim.keymap.set("n", "q", function()
-		pcall(vim.cmd, "tabclose")
-	end, { buffer = bufnr, desc = "Close ACP code block" })
-	vim.keymap.set("n", "gO", focus_output_source, { buffer = bufnr, desc = "Return to ACP output code block" })
-	vim.keymap.set("n", "<leader>at", open_code_treesitter_scope, {
-		buffer = bufnr,
-		desc = "Open ACP code block Tree-sitter scope",
-	})
-	vim.keymap.set("n", "<leader>ai", draft_code_context, {
-		buffer = bufnr,
-		desc = "Draft ACP code block context",
-	})
-	vim.keymap.set("n", "<leader>aY", function()
-		local text = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
-		if text ~= "" then
-			text = text .. "\n"
-		end
-		vim.fn.setreg('"', text, "l")
-		notify(("Yanked ACP %s code block (%d line%s)"):format(block.language or "output", #block.lines, #block.lines == 1 and "" or "s"))
-	end, { buffer = bufnr, desc = "Yank ACP code block" })
-
-	vim.cmd("tabnew")
-	scratch_win = vim.api.nvim_get_current_win()
-	vim.api.nvim_win_set_buf(0, bufnr)
-	vim.wo[0].cursorline = true
-	vim.wo[0].number = true
-	vim.wo[0].relativenumber = false
-	vim.wo[0].signcolumn = "yes:1"
-	vim.wo[0].wrap = false
-	vim.wo[0].winbar = code_block_scratch_winbar(block, syntax):gsub("%%", "%%%%")
-	return true
+		close_tab(tabpage, return_win)
+	end, { buffer = bufnr, silent = true, desc = "Close Codex diff tab" })
 end
 
-local function open_output_code_blocks(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local blocks = output.code_blocks(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false))
-	if #blocks == 0 then
-		notify("No ACP code blocks found in the output", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_blocks = output.code_block_lines(blocks)
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/code-blocks"):format(state.adapter, state.id),
-		filetype = "acp-code-blocks",
-		lines = lines,
-		title = " ACP code blocks ",
-		title_icon = icons.code,
-		submit_desc = "Open ACP code block",
-		close_desc = "Close ACP code blocks",
-		preview = function(row)
-			local block = line_blocks[row]
-			if not block then
-				return nil
-			end
-			return {
-				lines = block.lines,
-				filetype = block.filetype,
-				title = code_block_title(block),
-			}
-		end,
-		on_submit = function(row, view)
-			local block = line_blocks[row]
-			if not block then
-				return
-			end
-
-			view.close()
-			open_output_code_block_buffer(state, block)
-		end,
-	})
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP output code blocks #%s"):format(tostring(state.id or "?"))),
-			items = output.code_block_quickfix_items(blocks, state.output_buf),
-		})
-		vim.cmd("copen")
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP code blocks quickfix" })
-	return true
-end
-
-local function output_location_references(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return nil
-	end
-
-	local references = output.file_references(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), {
-		cwd = state.cwd,
-	})
-	if #references == 0 then
-		notify("No local file references found in the ACP output", vim.log.levels.WARN)
-		return nil
-	end
-	return references
-end
-
-local function open_output_location_quickfix(state, references)
-	references = references or output_location_references(state)
-	if not references then
-		return false
-	end
-
-	vim.fn.setqflist({}, " ", {
-		title = icons.quickfix_title(("ACP output locations #%s"):format(tostring(state.id or "?"))),
-		items = output.file_reference_quickfix_items(references),
-	})
-	vim.cmd("copen")
-	return true
-end
-
-local function open_output_locations(state)
-	local references = output_location_references(state)
-	if not references then
-		return false
-	end
-
-	local lines, line_references = output.file_reference_lines(references)
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/output-locations"):format(state.adapter, state.id),
-		filetype = "acp-output-locations",
-		lines = lines,
-		title = " ACP output locations ",
-		title_icon = icons.reference,
-		submit_desc = "Jump to ACP output location",
-		close_desc = "Close ACP output locations",
-		preview = function(row)
-			return file_reference_preview(line_references[row])
-		end,
-		on_submit = function(row, view)
-			local reference = line_references[row]
-			if not reference then
-				return
-			end
-
-			view.close()
-			jump_to_file_reference(reference)
-		end,
-	})
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		open_output_location_quickfix(state, references)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP output locations quickfix" })
-	return true
-end
-
-local function open_output_problems(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local items = output.problem_diagnostics(lines)
-	refresh_output_diagnostics(state, lines)
-	if #items == 0 then
-		notify("No ACP output problems found", vim.log.levels.WARN)
-		return false
-	end
-
-	local winid = vim.fn.bufwinid(state.output_buf)
-	if not valid_win(winid) then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	vim.api.nvim_set_current_win(winid)
-	vim.diagnostic.setloclist({
-		namespace = output_diagnostic_ns,
-		open = true,
-		title = icons.title(("ACP output problems #%s"):format(tostring(state.id or "?")), icons.error),
-	})
-	return true
-end
-
-local function open_changed_files(state)
-	if not state or changes.count(state) == 0 then
-		notify("No ACP file changes recorded for this session", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_entries = changes.picker_lines(state)
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/changes"):format(state.adapter, state.id),
-		filetype = "acp-changes",
-		lines = lines,
-		title = " ACP changed files ",
-		title_icon = icons.changes,
-		submit_desc = "Open ACP changed file",
-		close_desc = "Close ACP changed files",
-		preview = function(row)
-			return changes.preview(line_entries[row])
-		end,
-		on_submit = function(row, picker_view)
-			local entry = line_entries[row]
-			if not entry then
-				return
-			end
-
-			picker_view.close()
-			vim.cmd("edit " .. vim.fn.fnameescape(entry.path))
-		end,
-	})
-
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		changes.open_quickfix(state)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP changed files quickfix" })
-	return true
-end
-
-local function follow_output(state)
-	if not valid_win(state.output_win) or not valid_buf(state.output_buf) then
-		return
-	end
-
-	local line_count = vim.api.nvim_buf_line_count(state.output_buf)
-	pcall(vim.api.nvim_win_set_cursor, state.output_win, { line_count, 0 })
-end
-
-local output_status = {}
-
-local function agent_status_attaches(state, status)
-	if not status or status == "" then
-		return false
-	end
-	if status:match("^error:") or status:match("^restor") then
-		return false
-	end
-	return state.busy or status:match("^stopped") ~= nil
-end
-
-function output_status.line_index(state)
-	if not valid_buf(state.output_buf) or not state.run_status_line then
-		return nil
-	end
-
-	local row = tonumber(state.run_status_line)
-	local line_count = vim.api.nvim_buf_line_count(state.output_buf)
-	if not row or row < 0 or row >= line_count then
-		state.run_status_line = nil
-		return nil
-	end
-
-	local line = vim.api.nvim_buf_get_lines(state.output_buf, row, row + 1, false)[1] or ""
-	if not line:match("^Status:") then
-		state.run_status_line = nil
-		return nil
-	end
-
-	return row
-end
-
-function output_status.agent_line_index(state)
-	if not valid_buf(state.output_buf) then
-		return nil
-	end
-
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	for index = #lines, 1, -1 do
-		if output.is_agent_header(lines[index]) then
-			state.run_status_agent_line = index - 1
-			return index - 1
-		end
-	end
-end
-
-function output_status.clear(state)
-	local row = output_status.line_index(state)
-	if not row then
-		return false
-	end
-
-	set_output_lines(state, row, row + 1, {})
-	state.run_status_line = nil
-	return true
-end
-
-function output_status.clear_agent(state)
-	local row = output_status.agent_line_index(state)
-	if not row then
-		return false
-	end
-
-	local line = vim.api.nvim_buf_get_lines(state.output_buf, row, row + 1, false)[1] or ""
-	if line == "Agent" then
-		return false
-	end
-
-	set_output_lines(state, row, row + 1, { "Agent" })
-	state.run_status_agent_line = nil
-	return true
-end
-
-function output_status.attach_to_agent(state)
-	if not agent_status_attaches(state, state.run_status) then
-		return false
-	end
-
-	output_status.clear(state)
-	local row = output_status.agent_line_index(state)
-	if not row then
-		return false
-	end
-
-	set_output_lines(state, row, row + 1, { output.agent_status_line(state.run_status) })
-	state.run_status_agent_line = row
-	return true
-end
-
-function output_status.write(state)
-	if not valid_buf(state.output_buf) or not state.run_status or state.run_status == "" then
-		return
-	end
-
-	if output_status.attach_to_agent(state) then
-		return
-	end
-
-	output_status.clear_agent(state)
-	local line = ("Status: %s"):format(state.run_status)
-	local row = output_status.line_index(state)
-	if row then
-		set_output_lines(state, row, row + 1, { line })
-		state.run_status_line = row
-		return
-	end
-
-	local current = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	if #current == 1 and current[1] == "" then
-		set_output_lines(state, 0, -1, { line })
-		state.run_status_line = 0
-		return
-	end
-
-	set_output_lines(state, -1, -1, { line })
-	state.run_status_line = vim.api.nvim_buf_line_count(state.output_buf) - 1
-end
-
-function output_status.restore(state, status)
-	if status and status ~= "" then
-		state.run_status = status
-		output_status.write(state)
-	end
-end
-
-function output_status.ensure_agent_content_gap(state)
-	if not valid_buf(state.output_buf) then
-		return
-	end
-
-	local row = output_status.agent_line_index(state)
-	if not row then
-		return
-	end
-
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, row + 1, -1, false)
-	local blank_count = 0
-	for _, line in ipairs(lines) do
-		if line == "" then
-			blank_count = blank_count + 1
-		else
+function M.login()
+	client:read_account(function(result, err)
+		if err then
+			notify(err, vim.log.levels.ERROR)
 			return
 		end
-	end
-
-	local missing = 2 - blank_count
-	if missing <= 0 then
-		return
-	end
-
-	local insert_at = row + 1 + blank_count
-	local blanks = {}
-	for _ = 1, missing do
-		table.insert(blanks, "")
-	end
-	set_output_lines(state, insert_at, insert_at, blanks)
-end
-
-local function append_lines(state, lines)
-	local status = state.run_status
-	output_status.clear(state)
-	if valid_buf(state.output_buf) then
-		local current = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-		if #current == 1 and current[1] == "" then
-			local replacement = vim.deepcopy(lines or {})
-			while #replacement > 1 and replacement[1] == "" do
-				table.remove(replacement, 1)
-			end
-			set_output_lines(state, 0, -1, replacement)
-			output_status.restore(state, status)
-			follow_output(state)
+		if result and result.account and result.account ~= vim.NIL then
+			local account = result.account
+			notify(present(account.email) and ("Signed in as " .. account.email) or ("Signed in with " .. account.type))
 			return
 		end
-	end
-
-	set_output_lines(state, -1, -1, lines)
-	output_status.restore(state, status)
-	follow_output(state)
-end
-
-local function append_text(state, text)
-	if not valid_buf(state.output_buf) or not text or text == "" then
-		return
-	end
-
-	local status = state.run_status
-	output_status.clear(state)
-	local line_count = vim.api.nvim_buf_line_count(state.output_buf)
-	local last = vim.api.nvim_buf_get_lines(state.output_buf, line_count - 1, line_count, false)[1] or ""
-	local parts = vim.split(text, "\n", { plain = true })
-
-	if #parts == 1 then
-		set_output_lines(state, line_count - 1, line_count, { last .. parts[1] })
-		output_status.restore(state, status)
-		follow_output(state)
-		return
-	end
-
-	local replacement = { last .. parts[1] }
-	for index = 2, #parts do
-		table.insert(replacement, parts[index])
-	end
-
-	set_output_lines(state, line_count - 1, line_count, replacement)
-	output_status.restore(state, status)
-	follow_output(state)
-end
-
-local function ensure_terminal_block(state, terminal_id)
-	state.rendered_terminals = state.rendered_terminals or {}
-	if state.rendered_terminals[terminal_id] then
-		return
-	end
-
-	state.rendered_terminals[terminal_id] = true
-	append_lines(state, { "", ("Terminal: %s"):format(terminal_id), "" })
-end
-
-local function append_terminal_output(state, event)
-	if not event or not event.terminal_id then
-		return
-	end
-
-	ensure_terminal_block(state, event.terminal_id)
-	if event.text and event.text ~= "" then
-		append_text(state, event.text)
-	end
-	if event.truncated then
-		state.truncated_terminals = state.truncated_terminals or {}
-		if not state.truncated_terminals[event.terminal_id] then
-			state.truncated_terminals[event.terminal_id] = true
-			append_lines(state, { "", "Terminal output truncated to the configured byte limit.", "" })
-		end
-	end
-end
-
-local function sorted_sessions()
-	local list = {}
-	for _, state in pairs(sessions) do
-		if not state.closed then
-			table.insert(list, state)
-		end
-	end
-
-	table.sort(list, function(left, right)
-		return left.id < right.id
-	end)
-	return list
-end
-
-local function session_status(state)
-	local status = state.run_status or (state.busy and "running" or "idle")
-	local count = changes.count(state)
-	if count > 0 then
-		return ("%s  %d change(s)"):format(status, count)
-	end
-	return status
-end
-
-local function render_session_panel(state)
-	if not valid_buf(state.session_panel_buf) then
-		return
-	end
-
-	local items = {}
-	for _, session in ipairs(sorted_sessions()) do
-		local item = vim.tbl_extend("force", {}, session)
-		if valid_buf(session.output_buf) then
-			item.transcript_stats = output.transcript_stats(vim.api.nvim_buf_get_lines(session.output_buf, 0, -1, false), {
-				change_count = changes.count(session),
-				cwd = session.cwd,
-				start_line = 1,
-			})
-		end
-		local source = session.source
-		if source and valid_buf(source.bufnr) then
-			local name = vim.api.nvim_buf_get_name(source.bufnr)
-			local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or ("buffer " .. source.bufnr)
-			if #path > 28 then
-				path = vim.fn.fnamemodify(path, ":t")
+		client:login(function(login, login_err)
+			if login_err then
+				notify(login_err, vim.log.levels.ERROR)
+				return
 			end
-			if source.range then
-				item.source_label = ("src %s:%d-%d"):format(path, source.range.line1, source.range.line2)
-			else
-				local cursor = source.cursor or { 1, 0 }
-				item.source_label = ("src %s:%d"):format(path, cursor[1] or 1)
+			local url = login and (login.authUrl or login.verificationUrl)
+			if not url then
+				notify("Codex login started")
+				return
 			end
-		end
-		table.insert(items, item)
-	end
-
-	local lines, line_ids, styles = session_view.panel(items, state.id, changes.count)
-	session_panel_lines[state.session_panel_buf] = line_ids
-	set_panel_lines(state.session_panel_buf, lines)
-	refresh_session_panel_highlights(state.session_panel_buf, styles)
-end
-
-local function refresh_session_panels()
-	for _, state in pairs(sessions) do
-		render_session_panel(state)
-	end
-end
-
-local refresh_prompt_hints
-
-local function set_run_status(state, status)
-	if not state then
-		return
-	end
-
-	if state.run_status == status and output_status.line_index(state) then
-		return
-	end
-
-	state.run_status = status
-	output_status.write(state)
-	stop_output_animation(state)
-	refresh_output_chrome(state)
-	refresh_source_marks(state)
-	refresh_prompt_hints(state)
-	refresh_session_panels()
-end
-
-local function trim(text)
-	return text:gsub("^%s+", ""):gsub("%s+$", "")
-end
-
-local function format_count(value)
-	local number = tonumber(value)
-	if not number then
-		return tostring(value)
-	end
-
-	if number >= 1000000 then
-		local formatted = number / 1000000
-		return formatted % 1 == 0 and ("%dM"):format(formatted) or ("%.1fM"):format(formatted)
-	end
-	if number >= 1000 then
-		local formatted = number / 1000
-		return formatted % 1 == 0 and ("%dk"):format(formatted) or ("%.1fk"):format(formatted)
-	end
-	return tostring(number)
-end
-
-local function prompt_title(state, as_chunks)
-	local chunks = {
-		{ " ", "AcpPromptTitle" },
-		{ icons.prompt, "AcpPromptTitle" },
-		{ " Prompt", "AcpPromptTitle" },
-	}
-
-	local function add_gap()
-		table.insert(chunks, { "  ", "AcpPromptTitleMeta" })
-	end
-
-	local function add_icon_text(icon, hl_group, text)
-		add_gap()
-		table.insert(chunks, { icon, hl_group })
-		table.insert(chunks, { (" %s"):format(text), hl_group })
-	end
-
-	if state.model and state.model ~= "" then
-		add_icon_text(icons.model, "AcpPromptTitleModel", state.model)
-	end
-	if state.context_window then
-		add_icon_text(icons.context, "AcpPromptTitleContext", ("ctx %s"):format(format_count(state.context_window)))
-	end
-
-	table.insert(chunks, { " ", "AcpPromptTitle" })
-
-	if as_chunks then
-		return chunks
-	end
-
-	local parts = {}
-	for _, chunk in ipairs(chunks) do
-		table.insert(parts, chunk[1])
-	end
-	return table.concat(parts)
-end
-
-local function refresh_prompt_chrome(state)
-	if not valid_win(state.input_win) then
-		return
-	end
-
-	local title = prompt_title(state)
-	if state.mode == "window" then
-		vim.wo[state.input_win].winbar = title
-		return
-	end
-
-	local win_config = vim.api.nvim_win_get_config(state.input_win)
-	if win_config.relative ~= "" then
-		win_config.title = prompt_title(state, true)
-		pcall(vim.api.nvim_win_set_config, state.input_win, win_config)
-	end
-end
-
-refresh_prompt_hints = function(state)
-	if not valid_buf(state.input_buf) then
-		return
-	end
-
-	vim.api.nvim_buf_clear_namespace(state.input_buf, prompt_ns, 0, -1)
-	local lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
-	local blink_ok, blink_cmp = pcall(require, "blink.cmp")
-	local info = prompt_view.info(lines, {
-		adapter = state.adapter,
-		blink = vim.b[state.input_buf].acp_blink_source == true,
-		blink_available = blink_ok and type(blink_cmp.show) == "function",
-		busy = state.busy,
-		context_window = state.context_window,
-		model = state.model,
-		run_status = state.run_status,
-		source = state.source,
-	})
-	if info.empty then
-		pcall(vim.api.nvim_buf_set_extmark, state.input_buf, prompt_ns, 0, 0, {
-			virt_lines = info.ribbon and { info.ribbon } or nil,
-			virt_lines_above = true,
-			virt_text = { { info.ghost, "AcpPromptGhost" } },
-			virt_text_pos = "eol",
-			hl_mode = "combine",
-			priority = 80,
-		})
-		return
-	end
-
-	if info.ribbon then
-		pcall(vim.api.nvim_buf_set_extmark, state.input_buf, prompt_ns, 0, 0, {
-			virt_lines = { info.ribbon },
-			virt_lines_above = true,
-			hl_mode = "combine",
-			priority = 80,
-		})
-	end
-
-	local row = math.max(0, #lines - 1)
-	local last = lines[#lines] or ""
-	pcall(vim.api.nvim_buf_set_extmark, state.input_buf, prompt_ns, row, #last, {
-		virt_text = { { info.stats, "AcpPromptStats" } },
-		virt_text_pos = "eol",
-		hl_mode = "combine",
-		priority = 80,
-	})
-end
-
-local function input_prompt(state)
-	if not valid_buf(state.input_buf) then
-		return nil
-	end
-
-	local lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
-	local prompt = trim(table.concat(lines, "\n"))
-	if prompt == "" then
-		return nil
-	end
-	return prompt
-end
-
-local function raw_input_text(state)
-	if not valid_buf(state.input_buf) then
-		return ""
-	end
-
-	return table.concat(vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false), "\n")
-end
-
-local function set_input_text(state, text)
-	if not valid_buf(state.input_buf) then
-		return
-	end
-
-	local lines = text and text ~= "" and vim.split(text, "\n", { plain = true }) or { "" }
-	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, lines)
-	if valid_win(state.input_win) then
-		local line_count = vim.api.nvim_buf_line_count(state.input_buf)
-		local last = vim.api.nvim_buf_get_lines(state.input_buf, line_count - 1, line_count, false)[1] or ""
-		pcall(vim.api.nvim_win_set_cursor, state.input_win, { line_count, #last })
-	end
-	refresh_prompt_hints(state)
-end
-
-local function clear_input(state)
-	if not valid_buf(state.input_buf) then
-		return
-	end
-
-	set_input_text(state, "")
-end
-
-append_input_text = function(state, text)
-	if not valid_buf(state.input_buf) or not text or text == "" then
-		return
-	end
-
-	local lines = vim.split(text, "\n", { plain = true })
-	local existing = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
-	local empty = #existing == 0 or (#existing == 1 and existing[1] == "")
-	if empty then
-		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, lines)
-	else
-		vim.api.nvim_buf_set_lines(state.input_buf, -1, -1, false, { "", "" })
-		vim.api.nvim_buf_set_lines(state.input_buf, -1, -1, false, lines)
-	end
-
-	if valid_win(state.input_win) then
-		local line_count = vim.api.nvim_buf_line_count(state.input_buf)
-		local last = vim.api.nvim_buf_get_lines(state.input_buf, line_count - 1, line_count, false)[1] or ""
-		pcall(vim.api.nvim_win_set_cursor, state.input_win, { line_count, #last })
-	end
-	refresh_prompt_hints(state)
-end
-
-local function draft_output_section(state)
-	if not state or not valid_buf(state.output_buf) or not valid_buf(state.input_buf) then
-		notify("No ACP output section is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local text, range, section_lines = output.section_text(lines, output_cursor_line(state))
-	if not text or text == "" then
-		notify("No ACP output section found", vim.log.levels.WARN)
-		return false
-	end
-
-	local title = ("%s: %s"):format(range.kind or "SECTION", range.title or "section")
-	append_input_text(
-		state,
-		table.concat({
-			"Use this ACP output section as context for a follow-up.",
-			"",
-			("ACP output section (%s):"):format(title),
-			"",
-			text,
-			"",
-			"Request:",
-		}, "\n")
-	)
-	pulse_output_section(state, range)
-	if valid_win(state.input_win) then
-		vim.api.nvim_set_current_win(state.input_win)
-	end
-	notify(
-		("Drafted ACP %s section into prompt (%d line%s)"):format(
-			range.kind or "output",
-			#section_lines,
-			#section_lines == 1 and "" or "s"
-		),
-		vim.log.levels.INFO
-	)
-	return true
-end
-
-local function record_prompt(state, prompt)
-	if not prompt or prompt == "" then
-		return
-	end
-
-	state.prompt_history = state.prompt_history or {}
-	if state.prompt_history[#state.prompt_history] ~= prompt then
-		table.insert(state.prompt_history, prompt)
-	end
-	state.prompt_history_cursor = #state.prompt_history + 1
-	state.prompt_history_draft = nil
-end
-
-local function recall_prompt(state, delta)
-	local history = state.prompt_history or {}
-	if #history == 0 then
-		notify("No ACP prompt history for this session", vim.log.levels.WARN)
-		return
-	end
-
-	local cursor = state.prompt_history_cursor or (#history + 1)
-	if cursor > #history then
-		state.prompt_history_draft = raw_input_text(state)
-	end
-
-	cursor = math.max(1, math.min(#history + 1, cursor + delta))
-	state.prompt_history_cursor = cursor
-	if cursor == #history + 1 then
-		set_input_text(state, state.prompt_history_draft or "")
-	else
-		set_input_text(state, history[cursor])
-	end
-
-	if valid_win(state.input_win) then
-		vim.api.nvim_set_current_win(state.input_win)
-	end
-end
-
-local function adapter_names()
-	local names = vim.tbl_keys(config.adapters)
-	table.sort(names)
-	return names
-end
-
-local function command_source_range(command)
-	if not command or not command.range or command.range == 0 then
-		return nil
-	end
-	return {
-		line1 = command.line1,
-		line2 = command.line2,
-	}
-end
-
-local function source_preview(bufnr, range, title)
-	if not valid_buf(bufnr) then
-		return nil
-	end
-
-	local line_count = vim.api.nvim_buf_line_count(bufnr)
-	if line_count == 0 then
-		return nil
-	end
-	local line1 = range and range.line1 or 1
-	local line2 = range and range.line2 or line1
-	line1 = math.max(1, math.min(line1, line_count))
-	line2 = math.max(1, math.min(line2, line_count))
-	if line2 < line1 then
-		line1, line2 = line2, line1
-	end
-	local start_line = math.max(1, line1 - 4)
-	local end_line = math.min(line_count, line2 + 4)
-	local lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
-	local name = vim.api.nvim_buf_get_name(bufnr)
-	local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or "[No Name]"
-
-	return {
-		lines = #lines > 0 and lines or { "" },
-		filetype = vim.bo[bufnr].filetype ~= "" and vim.bo[bufnr].filetype or "text",
-		title = title or (" %s:%d "):format(path, line1),
-		cursor_line = line1 - start_line + 1,
-	}
-end
-
-function file_reference_preview(reference)
-	if not reference or not reference.path then
-		return nil
-	end
-
-	local bufnr = vim.fn.bufadd(reference.path)
-	if bufnr == 0 then
-		return nil
-	end
-	pcall(function()
-		vim.bo[bufnr].swapfile = false
+			local opened = false
+			if vim.ui.open then
+				opened = pcall(vim.ui.open, url)
+			end
+			if not opened then
+				notify(("Open this URL to sign in:\n%s"):format(url))
+			end
+		end)
 	end)
-	local loaded = pcall(vim.fn.bufload, bufnr)
-	if vim.bo[bufnr].filetype == "" and vim.filetype and vim.filetype.match then
-		local filetype = vim.filetype.match({ filename = reference.path })
-		if filetype then
-			vim.bo[bufnr].filetype = filetype
-		end
-	end
-	if loaded then
-		return source_preview(
-			bufnr,
-			{ line1 = reference.line or 1, line2 = reference.line or 1 },
-			(" %s:%d "):format(reference.display_path or reference.path, reference.line or 1)
-		)
-	end
-
-	local ok, lines = pcall(vim.fn.readfile, reference.path)
-	if not ok or #lines == 0 then
-		return nil
-	end
-	local line = math.max(1, math.min(reference.line or 1, #lines))
-	local start_line = math.max(1, line - 4)
-	local end_line = math.min(#lines, line + 4)
-	local preview = {}
-	for index = start_line, end_line do
-		table.insert(preview, lines[index])
-	end
-	return {
-		lines = preview,
-		filetype = (vim.filetype and vim.filetype.match and vim.filetype.match({ filename = reference.path })) or "text",
-		title = (" %s:%d "):format(reference.display_path or reference.path, reference.line or 1),
-		cursor_line = line - start_line + 1,
-	}
 end
 
-function jump_to_file_reference(reference)
-	if not reference or not reference.path then
-		return false
-	end
-
-	vim.cmd("noswapfile edit " .. vim.fn.fnameescape(reference.path))
-	local line_count = vim.api.nvim_buf_line_count(0)
-	local line = math.max(1, math.min(reference.line or 1, line_count))
-	local column = math.max(0, (reference.column or 1) - 1)
-	pcall(vim.api.nvim_win_set_cursor, 0, { line, column })
-	return true
-end
-
-local function visible_output_window(state)
-	local winid = vim.api.nvim_get_current_win()
-	if not (valid_win(winid) and vim.api.nvim_win_get_buf(winid) == state.output_buf) then
-		winid = vim.fn.bufwinid(state.output_buf)
-	end
-	if not valid_win(winid) then
-		return nil
-	end
-	return winid
-end
-
-local function jump_output_reference(state, output_winid, reference)
-	local target_win
-	if state.source and valid_win(state.source.winid) then
-		local current_tab = vim.api.nvim_get_current_tabpage()
-		if vim.api.nvim_win_get_tabpage(state.source.winid) == current_tab then
-			target_win = state.source.winid
-		end
-	end
-	if not target_win then
-		vim.api.nvim_set_current_win(output_winid)
-		vim.cmd("rightbelow split")
-		target_win = vim.api.nvim_get_current_win()
-	end
-
-	vim.api.nvim_set_current_win(target_win)
-	return jump_to_file_reference(reference)
-end
-
-local function output_cursor_context(state)
-	if not state or not valid_buf(state.output_buf) then
-		return nil
-	end
-
-	local winid = visible_output_window(state)
-	if not winid then
-		return nil
-	end
-
-	local cursor = vim.api.nvim_win_get_cursor(winid)
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	return {
-		winid = winid,
-		cursor = cursor,
-		lines = lines,
-		reference = output.file_reference_at(lines, cursor[1], cursor[2], {
-			cwd = state.cwd,
-		}),
-		code_block = output.code_block_at(lines, cursor[1]),
-	}
-end
-
-local function output_section_preview(context_info)
-	local section_lines, range = output.section_lines(context_info.lines, context_info.cursor[1])
-	if not section_lines then
-		return nil
-	end
-
-	return {
-		lines = section_lines,
-		filetype = "acp",
-		title = (" %s ACP %s: %s "):format(icons.section, range.kind or "section", range.title or "Output"),
-		cursor_line = math.max(1, context_info.cursor[1] - range.line1 + 1),
-	}
-end
-
-local function output_problem_preview(context_info)
-	local diagnostic = output.problem_diagnostic_at(context_info.lines, context_info.cursor[1])
-	if not diagnostic then
-		return nil
-	end
-
-	local line = context_info.lines[context_info.cursor[1]] or ""
-	return {
-		lines = {
-			line,
-			"",
-			diagnostic.message or "ACP output problem",
+function M.open_actions()
+	local actions = {
+		{ label = "New chat", run = M.new_chat },
+		{ label = "Open recent threads", run = open_threads },
+		{
+			label = "Add current file",
+			run = function()
+				add_context_from_source(nil, true)
+			end,
 		},
-		filetype = "acp",
-		title = (" %s ACP output problem "):format(icons.error),
-		cursor_line = 1,
+		{ label = "Choose model", run = select_model },
+		{ label = "Choose reasoning effort", run = select_reasoning },
+		{
+			label = "Review uncommitted changes",
+			run = function()
+				start_review()
+			end,
+		},
+		{ label = "Open latest diff", run = M.open_diff },
+		{ label = "Compact context", run = compact_thread },
+		{ label = "Show status", run = show_status },
+		{ label = "Stop active turn", run = M.stop },
 	}
-end
-
-local function output_inspector_preview(context_info)
-	if context_info.reference then
-		return file_reference_preview(context_info.reference)
-	end
-
-	if context_info.code_block then
-		local block = context_info.code_block
-		return {
-			lines = block.lines,
-			filetype = block.filetype,
-			title = code_block_title(block),
-			cursor_line = math.max(1, math.min(#block.lines, context_info.cursor[1] - block.start_line)),
-		}
-	end
-
-	return output_problem_preview(context_info) or output_section_preview(context_info)
-end
-
-local function output_item_preview(state, lines, item)
-	if not item then
-		return nil
-	end
-
-	if item.kind == "reference" then
-		local reference = output.file_reference_at(lines, item.line, math.max(0, (item.col or 1) - 1), {
-			cwd = state.cwd,
-		})
-		return file_reference_preview(reference) or output_line_preview(lines, item)
-	end
-
-	if item.kind == "code" then
-		local block = output.code_block_at(lines, item.line)
-		if block then
-			return {
-				lines = block.lines,
-				filetype = block.filetype,
-				title = code_block_title(block),
-				cursor_line = 1,
-			}
-		end
-	end
-
-	if item.kind == "problem" then
-		return output_problem_preview({
-			lines = lines,
-			cursor = { item.line or 1, math.max(0, (item.col or 1) - 1) },
-		})
-	end
-
-	return output_line_preview(lines, item)
-end
-
-local function open_output_item_quickfix(state, items)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	items = items or output.output_items(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), { cwd = state.cwd })
-	if #items == 0 then
-		notify("No ACP output items found", vim.log.levels.WARN)
-		return false
-	end
-
-	vim.fn.setqflist({}, " ", {
-		title = icons.quickfix_title(("ACP output items #%s"):format(tostring(state.id or "?"))),
-		items = output.output_item_quickfix_items(items, state.output_buf),
-	})
-	vim.cmd("copen")
-	return true
-end
-
-local function open_output_items(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	local items = output.output_items(output_lines, { cwd = state.cwd })
-	if #items == 0 then
-		notify("No ACP output items found", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_items = output.output_item_lines(items, { total_lines = #output_lines })
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/output-items"):format(state.adapter, state.id),
-		filetype = "acp-output-items",
-		lines = lines,
-		title = " ACP output items ",
-		title_icon = icons.map,
-		submit_desc = "Jump to ACP output item",
-		close_desc = "Close ACP output items",
-		preview = function(row)
-			return output_item_preview(state, output_lines, line_items[row])
+	vim.ui.select(actions, {
+		prompt = "Codex actions",
+		format_item = function(item)
+			return item.label
 		end,
-		on_submit = function(row, view)
-			local item = line_items[row]
-			if not item then
-				return
-			end
-
-			view.close()
-			jump_to_output_line(state, item.line, item.col)
-		end,
-	})
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		open_output_item_quickfix(state, items)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP output item quickfix" })
-	return true
-end
-
-local function inspect_output_at_cursor(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local context_info = output_cursor_context(state)
-	if not context_info then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	local preview = output_inspector_preview(context_info)
-	if not preview then
-		notify("No ACP output preview found under the cursor", vim.log.levels.WARN)
-		return false
-	end
-	return open_output_inspector_float(state, preview)
-end
-
-local function yank_output_code_block(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local context_info = output_cursor_context(state)
-	if not context_info then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	local block = context_info.code_block
-	if not block then
-		notify("No ACP code block found under the cursor", vim.log.levels.WARN)
-		return false
-	end
-
-	local text = output.code_block_text(block)
-	if not text or text == "" then
-		notify("ACP code block under the cursor is empty", vim.log.levels.WARN)
-		return false
-	end
-
-	vim.fn.setreg('"', text, "l")
-	pulse_output_section(state, {
-		line1 = block.start_line,
-		line2 = block.end_line,
-	})
-	local count = block.line_count or #block.lines
-	notify(
-		("Yanked ACP %s code block (%d line%s)"):format(block.language or "output", count, count == 1 and "" or "s"),
-		vim.log.levels.INFO
-	)
-	return true
-end
-
-local function open_output_reference_at_cursor(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local context_info = output_cursor_context(state)
-	if not context_info then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	local reference = context_info.reference
-	if not reference then
-		notify("No local file reference found under the cursor", vim.log.levels.WARN)
-		return false
-	end
-
-	return jump_output_reference(state, context_info.winid, reference)
-end
-
-local function open_output_context_at_cursor(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local context_info = output_cursor_context(state)
-	if not context_info then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	if context_info.reference then
-		return jump_output_reference(state, context_info.winid, context_info.reference)
-	end
-	if context_info.code_block then
-		return open_output_code_block_buffer(state, context_info.code_block)
-	end
-
-	notify("No ACP output item found under the cursor", vim.log.levels.WARN)
-	return false
-end
-
-local function output_action_items(state, context_info)
-	local items = {}
-	if not (state and context_info) then
-		return items
-	end
-
-	local function add(label, detail, key, run)
-		table.insert(items, {
-			label = label,
-			detail = detail,
-			key = key,
-			scope = "output",
-			run = run,
-		})
-	end
-
-	add("Inspect item", "Open a floating preview for the output item under the cursor", "K", function()
-		inspect_output_at_cursor(state)
-	end)
-	add("Next item", "Jump to the next reference, code block, or problem", "]o", function()
-		jump_output_item(state, 1)
-	end)
-	add("Previous item", "Jump to the previous reference, code block, or problem", "[o", function()
-		jump_output_item(state, -1)
-	end)
-	add("Output items", "Browse references, code blocks, and problems in one picker", "<leader>aO", function()
-		open_output_items(state)
-	end)
-	if context_info.reference then
-		add("Open reference", "Jump to the local file reference under the cursor", "gf", function()
-			open_output_reference_at_cursor(state)
-		end)
-	end
-	if context_info.reference or context_info.code_block then
-		add("Open item", "Open the reference or code block under the cursor", "<Enter>", function()
-			open_output_context_at_cursor(state)
-		end)
-	end
-	if context_info.code_block then
-		add("Draft code block", "Insert this fenced code block as follow-up prompt context", ":AcpCodeBlockDraft", function()
-			M.draft_code_block()
-		end)
-		add("Yank code block", "Copy the fenced code block without Markdown fences", "<leader>aY", function()
-			yank_output_code_block(state)
-		end)
-		add("Code blocks", "Browse fenced code blocks from this transcript", "<leader>ab", function()
-			open_output_code_blocks(state)
-		end)
-		add("Code blocks quickfix", "Send fenced code blocks to quickfix", ":AcpCodeBlocksQuickfix", function()
-			local blocks = output.code_blocks(context_info.lines)
-			vim.fn.setqflist({}, " ", {
-				title = icons.quickfix_title(("ACP output code blocks #%s"):format(tostring(state.id or "?"))),
-				items = output.code_block_quickfix_items(blocks, state.output_buf),
-			})
-			vim.cmd("copen")
-		end)
-	end
-	if output.problem_diagnostic_at(context_info.lines, context_info.cursor[1]) then
-		add("Output problems", "Open transcript errors and stderr in the location list", "<leader>ae", function()
-			open_output_problems(state)
-		end)
-	end
-
-	add("Draft section", "Insert the current output section as follow-up prompt context", "<leader>ai", function()
-		draft_output_section(state)
-	end)
-	add("Yank section", "Copy the current output section into the unnamed register", "<leader>ay", function()
-		yank_output_section(state)
-	end)
-	add("Search output", "Search every non-empty transcript line", "<leader>ax", function()
-		open_output_search(state)
-	end)
-	add("Output map", "Keep a live transcript map beside the output", "<leader>am", function()
-		open_output_map(state)
-	end)
-	add("Output outline", "Jump across transcript sections", "<leader>av", function()
-		open_output_outline(state)
-	end)
-	return items
-end
-
-local function open_output_actions(state)
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local context_info = output_cursor_context(state)
-	if not context_info then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	local items = output_action_items(state, context_info)
-	if #items == 0 then
-		notify("No ACP output actions found", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_actions = actions.picker_lines(items)
-	local origin_win = context_info.winid
-	picker.open({
-		name = ("ACP://%s/%d/output-actions"):format(state.adapter, state.id),
-		filetype = "acp-output-actions",
-		lines = lines,
-		title = " ACP output actions ",
-		title_icon = icons.action,
-		submit_desc = "Run ACP output action",
-		close_desc = "Close ACP output actions",
-		preview = actions.previewer(line_actions, function()
-			return output_inspector_preview(context_info)
-		end),
-		on_submit = function(row, view)
-			local action = line_actions[row]
-			if not action then
-				return
-			end
-
-			view.close()
-			if valid_win(origin_win) then
-				vim.api.nvim_set_current_win(origin_win)
-			end
-			action.run()
-		end,
-	})
-	return true
-end
-
-local function prompt_action_items()
-	local items = {}
-
-	local function add(label, detail, key, scope, run)
-		table.insert(items, {
-			label = label,
-			detail = detail,
-			key = key,
-			scope = scope,
-			run = run,
-		})
-	end
-
-	add("Send prompt", "Submit the current prompt buffer", "<C-s>", "prompt", function()
-		M.send()
-	end)
-	add("Stop agent", "Stop the active ACP adapter process", "<leader>aq", "prompt", function()
-		M.stop()
-	end)
-	add("Add context", "Insert captured editor context into the prompt", "<leader>ac", "source", function()
-		M.add_context()
-	end)
-	add("Smart context", "Insert source context plus available LSP signals", ":AcpSmartContext", "source+LSP", function()
-		M.add_smart_context()
-	end)
-	add("Source diagnostics", "Draft a focused fix from source diagnostics", "<leader>ad", "LSP", function()
-		M.open_diagnostics()
-	end)
-	add("Diagnostics quickfix", "Send source diagnostics to quickfix", "<leader>aD", "LSP", function()
-		M.open_diagnostics_quickfix()
-	end)
-	add("Workspace diagnostics", "Draft a focused fix from diagnostics across loaded project buffers", ":AcpWorkspaceDiagnostics", "LSP", function()
-		M.open_workspace_diagnostics()
-	end)
-	add("Workspace diagnostics quickfix", "Send loaded-buffer diagnostics to quickfix", ":AcpWorkspaceDiagnosticsQuickfix", "LSP", function()
-		M.open_workspace_diagnostics_quickfix()
-	end)
-	add("Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
-		M.open_code_actions()
-	end)
-	add("Code lens", "Draft from source-buffer LSP code lenses", ":AcpCodeLens", "LSP", function()
-		M.open_code_lens()
-	end)
-	add("Code lens quickfix", "Send source-buffer LSP code lenses to quickfix", ":AcpCodeLensQuickfix", "LSP", function()
-		M.open_code_lens_quickfix()
-	end)
-	add("Document colors", "Show source-buffer LSP document colors as visual swatches", ":AcpDocumentColors", "LSP", function()
-		M.open_document_colors()
-	end)
-	add("Document colors quickfix", "Send source-buffer LSP document colors to quickfix", ":AcpDocumentColorsQuickfix", "LSP", function()
-		M.open_document_colors_quickfix()
-	end)
-	add("Clear document colors", "Clear source-buffer LSP document-color swatches", ":AcpClearDocumentColors", "LSP", function()
-		M.clear_document_colors()
-	end)
-	add("Document links", "Pick source-buffer LSP document links as focused context", ":AcpDocumentLinks", "LSP", function()
-		M.open_document_links()
-	end)
-	add("Document links quickfix", "Send source-buffer LSP document links to quickfix", ":AcpDocumentLinksQuickfix", "LSP", function()
-		M.open_document_links_quickfix()
-	end)
-	add("Clear document links", "Clear source-buffer LSP document-link badges", ":AcpClearDocumentLinks", "LSP", function()
-		M.clear_document_links()
-	end)
-	add("Folding ranges", "Pick source-buffer LSP folding ranges as focused context", ":AcpFoldingRanges", "LSP", function()
-		M.open_folding_ranges()
-	end)
-	add("Folding ranges quickfix", "Send source-buffer LSP folding ranges to quickfix", ":AcpFoldingRangesQuickfix", "LSP", function()
-		M.open_folding_ranges_quickfix()
-	end)
-	add("Clear folding ranges", "Clear source-buffer LSP folding-range overlays", ":AcpClearFoldingRanges", "LSP", function()
-		M.clear_folding_ranges()
-	end)
-	add("Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
-		M.rename_symbol()
-	end)
-	add("Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
-		M.add_hover()
-	end)
-	add("Signature help", "Insert LSP signature help for the source cursor", ":AcpSignature", "LSP", function()
-		M.add_signature()
-	end)
-	add("Inlay hints", "Pick LSP inlay hints as source context", ":AcpInlayHints", "LSP", function()
-		M.open_inlay_hints()
-	end)
-	add("Selection ranges", "Pick LSP semantic ranges around the source cursor", ":AcpSelectionRanges", "LSP", function()
-		M.open_selection_ranges()
-	end)
-	add("Callers", "Pick incoming LSP call hierarchy entries as focused context", ":AcpCallers", "LSP", function()
-		M.open_callers()
-	end)
-	add("Callers quickfix", "Send incoming LSP call hierarchy entries to quickfix", ":AcpCallersQuickfix", "LSP", function()
-		M.open_callers_quickfix()
-	end)
-	add("Callees", "Pick outgoing LSP call hierarchy entries as focused context", ":AcpCallees", "LSP", function()
-		M.open_callees()
-	end)
-	add("Callees quickfix", "Send outgoing LSP call hierarchy entries to quickfix", ":AcpCalleesQuickfix", "LSP", function()
-		M.open_callees_quickfix()
-	end)
-	add("Supertypes", "Pick LSP type hierarchy supertypes as focused context", ":AcpSupertypes", "LSP", function()
-		M.open_supertypes()
-	end)
-	add("Supertypes quickfix", "Send LSP type hierarchy supertypes to quickfix", ":AcpSupertypesQuickfix", "LSP", function()
-		M.open_supertypes_quickfix()
-	end)
-	add("Subtypes", "Pick LSP type hierarchy subtypes as focused context", ":AcpSubtypes", "LSP", function()
-		M.open_subtypes()
-	end)
-	add("Subtypes quickfix", "Send LSP type hierarchy subtypes to quickfix", ":AcpSubtypesQuickfix", "LSP", function()
-		M.open_subtypes_quickfix()
-	end)
-	add("LSP highlights", "Show source-buffer LSP read/write highlights", "<leader>aH", "LSP", function()
-		M.open_highlights()
-	end)
-	add("Clear highlights", "Clear source-buffer LSP highlight marks", ":AcpClearHighlights", "LSP", function()
-		M.clear_highlights()
-	end)
-	add("References", "Pick LSP references as focused context", "<leader>ar", "LSP", function()
-		M.open_references()
-	end)
-	add("References quickfix", "Send source-buffer LSP references to quickfix", "<leader>aR", "LSP", function()
-		M.open_references_quickfix()
-	end)
-	add("Declarations", "Pick LSP declarations as focused context", "<leader>aC", "LSP", function()
-		M.open_declarations()
-	end)
-	add("Declarations quickfix", "Send source-buffer LSP declarations to quickfix", ":AcpDeclarationsQuickfix", "LSP", function()
-		M.open_declarations_quickfix()
-	end)
-	add("Definitions", "Pick LSP definitions as focused context", "<leader>aG", "LSP", function()
-		M.open_definitions()
-	end)
-	add("Definitions quickfix", "Send source-buffer LSP definitions to quickfix", ":AcpDefinitionsQuickfix", "LSP", function()
-		M.open_definitions_quickfix()
-	end)
-	add("Implementations", "Pick LSP implementations as focused context", "<leader>aI", "LSP", function()
-		M.open_implementations()
-	end)
-	add("Implementations quickfix", "Send source-buffer LSP implementations to quickfix", ":AcpImplementationsQuickfix", "LSP", function()
-		M.open_implementations_quickfix()
-	end)
-	add("Type definitions", "Pick LSP type definitions as focused context", "<leader>aT", "LSP", function()
-		M.open_type_definitions()
-	end)
-	add("Type definitions quickfix", "Send source-buffer LSP type definitions to quickfix", ":AcpTypeDefinitionsQuickfix", "LSP", function()
-		M.open_type_definitions_quickfix()
-	end)
-	add("Workspace symbols", "Search LSP workspace symbols as focused context", "<leader>aw", "LSP", function()
-		M.open_workspace_symbols()
-	end)
-	add("Workspace symbols quickfix", "Send LSP workspace symbols to quickfix", ":AcpWorkspaceSymbolsQuickfix", "LSP", function()
-		M.open_workspace_symbols_quickfix()
-	end)
-	add("Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
-		M.open_symbols()
-	end)
-	add("Symbols quickfix", "Send source-buffer LSP symbols to quickfix", "<leader>aL", "LSP", function()
-		M.open_symbols_quickfix()
-	end)
-	add("Tree-sitter nodes", "Pick syntax-aware source context", "<leader>at", "Tree-sitter", function()
-		M.open_treesitter()
-	end)
-	add("Slash commands", "Draft an adapter-advertised slash command", "<leader>a/", "session", function()
-		M.open_commands()
-	end)
-	add("Config options", "Pick adapter-advertised session config", "<leader>ao", "session", function()
-		M.open_config()
-	end)
-	add("Search output", "Search every non-empty transcript line with context preview", "<leader>ax", "output", function()
-		M.open_output_search()
-	end)
-	add("Output map", "Keep a live transcript map beside the output", "<leader>am", "output", function()
-		M.open_output_map()
-	end)
-	add("Output items", "Browse references, code blocks, and problems in one picker", "<leader>aO", "output", function()
-		M.open_output_items()
-	end)
-	add("Draft from output", "Insert the current transcript section as follow-up prompt context", "<leader>ai", "output", function()
-		M.draft_output_section()
-	end)
-	add("Output outline", "Jump across transcript sections", "<leader>av", "output", function()
-		M.open_output()
-	end)
-	add("All actions", "Open the full ACP workflow palette", "<leader>ak", "session", function()
-		M.open_actions()
-	end)
-	add("Previous prompt", "Recall the previous sent prompt", "<M-p>", "prompt", function()
-		M.prompt_previous()
-	end)
-	add("Next prompt", "Step forward through prompt history or restore the draft", "<M-n>", "prompt", function()
-		M.prompt_next()
-	end)
-
-	return items
-end
-
-local function prompt_actions_preview(state)
-	if not state then
-		return nil
-	end
-
-	local lines = { "Prompt Actions", "" }
-	table.insert(lines, ("Session: #%d %s"):format(state.id, state.adapter))
-	if state.model and state.model ~= "" then
-		table.insert(lines, ("Model: %s"):format(state.model))
-	end
-	if state.context_window then
-		table.insert(lines, ("Context window: %s"):format(format_count(state.context_window)))
-	end
-	table.insert(lines, ("Status: %s"):format(state.run_status or (state.busy and "running" or "ready")))
-
-	table.insert(lines, "")
-	table.insert(lines, "Draft")
-	if valid_buf(state.input_buf) then
-		local prompt_lines = vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false)
-		local text = table.concat(prompt_lines, "\n")
-		local content = trim(text)
-		if content == "" then
-			table.insert(lines, "Empty prompt")
-		else
-			local words = 0
-			for _ in content:gmatch("%S+") do
-				words = words + 1
-			end
-			table.insert(lines, ("%d line(s), %d char(s), %d word(s)"):format(
-				math.max(1, #prompt_lines),
-				vim.fn.strchars(text),
-				words
-			))
+	}, function(choice)
+		if choice then
+			choice.run()
 		end
-	end
-
-	table.insert(lines, "")
-	table.insert(lines, "Source")
-	if state.source and valid_buf(state.source.bufnr) then
-		local name = vim.api.nvim_buf_get_name(state.source.bufnr)
-		local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or "[No Name]"
-		local filetype = vim.bo[state.source.bufnr].filetype
-		table.insert(lines, ("File: %s"):format(path))
-		if filetype ~= "" then
-			table.insert(lines, ("Filetype: %s"):format(filetype))
-		end
-		if state.source.range then
-			table.insert(lines, ("Selection: lines %d-%d"):format(state.source.range.line1, state.source.range.line2))
-		elseif state.source.cursor then
-			table.insert(lines, ("Cursor: %d:%d"):format(state.source.cursor[1] or 1, (state.source.cursor[2] or 0) + 1))
-		end
-	else
-		table.insert(lines, "No source buffer captured for this session")
-	end
-
-	table.insert(lines, "")
-	table.insert(lines, "Context Sources")
-	table.insert(lines, "- Source selection and cursor context")
-	table.insert(lines, "- Smart context combines source, Tree-sitter, diagnostics, hover, signature help, inlay hints, and semantic ranges")
-	table.insert(
-		lines,
-		"- LSP diagnostics, code actions, hover, signature help, inlay hints, selection ranges, call hierarchy, type hierarchy, highlights, references, declarations, definitions, implementations, type definitions, workspace symbols, symbols"
-	)
-	table.insert(lines, "- Tree-sitter nodes around the source cursor")
-	table.insert(lines, "- Output transcript search, outline, and follow-up drafts")
-
-	return {
-		lines = lines,
-		filetype = "acp",
-		title = (" %s ACP prompt preview "):format(icons.prompt),
-	}
+	end)
 end
 
-local function open_prompt_actions(state)
-	if not state or not valid_buf(state.input_buf) then
-		notify("No ACP prompt buffer is available", vim.log.levels.WARN)
-		return false
+local function notification_thread_id(method, params)
+	if params.threadId then
+		return params.threadId
 	end
-
-	local lines, line_actions = actions.picker_lines(prompt_action_items())
-	local origin_win = valid_win(state.input_win) and state.input_win or vim.api.nvim_get_current_win()
-	picker.open({
-		name = ("ACP://%s/%d/prompt-actions"):format(state.adapter, state.id),
-		filetype = "acp-prompt-actions",
-		lines = lines,
-		title = " ACP prompt actions ",
-		title_icon = icons.prompt,
-		submit_desc = "Run ACP prompt action",
-		close_desc = "Close ACP prompt actions",
-		preview = actions.previewer(line_actions, function()
-			return prompt_actions_preview(state)
-		end),
-		on_submit = function(row, view)
-			local action = line_actions[row]
-			if not action then
-				return
-			end
-
-			view.close()
-			if valid_win(origin_win) then
-				vim.api.nvim_set_current_win(origin_win)
-			end
-			action.run()
-		end,
-	})
-	return true
-end
-
-local function source_range(source)
-	if source and source.range then
-		return source.range
-	end
-	if source and source.cursor then
-		return {
-			line1 = source.cursor[1] or 1,
-			line2 = source.cursor[1] or 1,
-		}
+	if method == "thread/started" and type(params.thread) == "table" then
+		return params.thread.id
 	end
 	return nil
 end
 
-local function diagnostics_prompt(source)
-	if not source or not source.bufnr then
-		return nil
+function M._handle_notification(method, params)
+	params = params or {}
+	if method == "account/login/completed" then
+		notify(
+			params.success and "Codex sign-in completed" or (params.error or "Codex sign-in failed"),
+			params.success and vim.log.levels.INFO or vim.log.levels.ERROR
+		)
+		return
 	end
-
-	local rendered_diagnostics = diagnostics.render(source.bufnr, {
-		range = source.range,
-	})
-	if not rendered_diagnostics then
-		return nil
+	if not state then
+		return
 	end
-
-	local lines = {
-		"Fix the diagnostics below. Keep the changes focused and preserve existing behavior.",
-	}
-	local rendered_context = context.render(source, {
-		include_diagnostics = false,
-	})
-	if rendered_context then
-		table.insert(lines, "")
-		table.insert(lines, rendered_context)
-	end
-	table.insert(lines, "")
-	table.insert(lines, rendered_diagnostics)
-	return table.concat(lines, "\n")
-end
-
-local function diagnostic_item_prompt(source, item)
-	if not source or not source.bufnr then
-		return nil
-	end
-
-	local range = diagnostics.range(item)
-	local diagnostic_source = context.capture(source.bufnr, source.winid, range)
-	local rendered_diagnostics = diagnostics.render(source.bufnr, {
-		range = range,
-		limit = 8,
-	})
-	if not rendered_diagnostics then
-		return nil
-	end
-
-	local rendered_context = context.render(diagnostic_source, {
-		include_diagnostics = false,
-	})
-	if not rendered_context then
-		return nil
-	end
-
-	return table.concat({
-		"Fix this diagnostic. Keep the change focused and preserve existing behavior.",
-		"",
-		rendered_context,
-		"",
-		rendered_diagnostics,
-	}, "\n")
-end
-
-local function context_prompt(source, instruction)
-	if not source or not source.bufnr then
-		return nil
-	end
-
-	local rendered_context = context.render(source)
-	if not rendered_context then
-		return nil
-	end
-
-	return table.concat({
-		instruction,
-		"",
-		rendered_context,
-	}, "\n")
-end
-
-local function symbol_prompt(source, symbol)
-	local line1, line2 = symbols.range_lines(symbol)
-	if not line1 then
-		return nil
-	end
-
-	local symbol_source = context.capture(source.bufnr, source.winid, {
-		line1 = line1,
-		line2 = line2,
-	})
-	local rendered_context = context.render(symbol_source, {
-		treesitter_text_lines = 40,
-		selection_limit = 120,
-	})
-	if not rendered_context then
-		return nil
-	end
-
-	return table.concat({
-		("Use this LSP symbol as context: %s (%s)."):format(symbol.name, symbols.kind_name(symbol.kind)),
-		"",
-		rendered_context,
-	}, "\n")
-end
-
-local function code_action_prompt(source, action)
-	local rendered_context = context.render(source, {
-		treesitter_text_lines = 40,
-		selection_limit = 120,
-	})
-	if not rendered_context then
-		return nil
-	end
-
-	local lines = {
-		("Use this LSP code action as guidance: %s."):format(action.title),
-		("Kind: %s"):format(code_actions.kind_label(action)),
-	}
-	if action.isPreferred then
-		table.insert(lines, "Preferred: yes")
-	end
-	local diagnostic_count = code_actions.diagnostic_count(action)
-	if diagnostic_count > 0 then
-		table.insert(lines, ("Action diagnostics: %d"):format(diagnostic_count))
-	end
-	if code_actions.has_edit(action) then
-		table.insert(lines, "Workspace edit: provided by LSP")
-	end
-	if type(action.command) == "table" and action.command.command then
-		table.insert(lines, ("Command: %s"):format(action.command.command))
-	elseif type(action.command) == "string" then
-		table.insert(lines, ("Command: %s"):format(action.command))
-	end
-	table.insert(lines, "")
-	table.insert(lines, rendered_context)
-	return table.concat(lines, "\n")
-end
-
-local function treesitter_prompt(source, item)
-	local line1, line2 = treesitter.range_lines(item)
-	if not line1 then
-		return nil
-	end
-
-	local node_source = context.capture(source.bufnr, source.winid, {
-		line1 = line1,
-		line2 = line2,
-	})
-	local rendered_context = context.render(node_source, {
-		treesitter_text_lines = 40,
-		selection_limit = 120,
-	})
-	if not rendered_context then
-		return nil
-	end
-
-	return table.concat({
-		("Use this Tree-sitter node as context: %s."):format(item.type or "node"),
-		"",
-		rendered_context,
-	}, "\n")
-end
-
-local function hover_prompt(source, hover_text)
-	local rendered_context = context.render(source, {
-		treesitter_text_lines = 24,
-		selection_limit = 80,
-	})
-	if not rendered_context then
-		return nil
-	end
-
-	return table.concat({
-		"Use this LSP hover documentation as context.",
-		"",
-		"Hover:",
-		hover_text,
-		"",
-		rendered_context,
-	}, "\n")
-end
-
-local function location_prompt(location, opts)
-	opts = opts or {}
-	local bufnr, err = references.bufnr(location)
-	if not bufnr then
-		return nil, err
-	end
-	local range = references.range(location)
-	if not range then
-		return nil, opts.range_error or "LSP location has no range"
-	end
-
-	local location_source = context.capture(bufnr, nil, range)
-	if location_source then
-		location_source.cursor = { range.line1, 0 }
-	end
-	local rendered_context = context.render(location_source, {
-		treesitter_text_lines = 24,
-		selection_limit = 80,
-	})
-	if not rendered_context then
-		return nil, opts.render_error or "Failed to render LSP location context"
-	end
-
-	local noun = opts.noun or "Location"
-	local instruction = opts.instruction or "Use this LSP location as context."
-	return table.concat({
-		instruction,
-		("%s: %s:%d"):format(noun, references.display_path(location), range.line1),
-		"",
-		rendered_context,
-	}, "\n")
-end
-
-local function reference_prompt(reference)
-	return location_prompt(reference, {
-		noun = "Reference",
-		instruction = "Use this LSP reference as context.",
-		range_error = "LSP reference has no range",
-		render_error = "Failed to render LSP reference context",
-	})
-end
-
-local lsp_location_specs = {
-	declaration = {
-		method = "textDocument/declaration",
-		plural = "declarations",
-		noun = "Declaration",
-		label = "DECLARATION",
-		picker_title = "ACP Declarations",
-		filetype = "acp-declarations",
-		name_suffix = "declarations",
-		instruction = "Use this LSP declaration as context.",
-		range_error = "LSP declaration has no range",
-		render_error = "Failed to render LSP declaration context",
-		unavailable = "Neovim LSP declaration requests are unavailable",
-		unsupported = "No attached LSP client supports declarations",
-	},
-	definition = {
-		method = "textDocument/definition",
-		plural = "definitions",
-		noun = "Definition",
-		label = "DEFINITION",
-		picker_title = "ACP Definitions",
-		filetype = "acp-definitions",
-		name_suffix = "definitions",
-		instruction = "Use this LSP definition as context.",
-		range_error = "LSP definition has no range",
-		render_error = "Failed to render LSP definition context",
-		unavailable = "Neovim LSP definition requests are unavailable",
-		unsupported = "No attached LSP client supports definitions",
-	},
-	implementation = {
-		method = "textDocument/implementation",
-		plural = "implementations",
-		noun = "Implementation",
-		label = "IMPLEMENTATION",
-		picker_title = "ACP Implementations",
-		filetype = "acp-implementations",
-		name_suffix = "implementations",
-		instruction = "Use this LSP implementation as context.",
-		range_error = "LSP implementation has no range",
-		render_error = "Failed to render LSP implementation context",
-		unavailable = "Neovim LSP implementation requests are unavailable",
-		unsupported = "No attached LSP client supports implementations",
-	},
-	type_definition = {
-		method = "textDocument/typeDefinition",
-		plural = "type definitions",
-		noun = "Type definition",
-		label = "TYPE DEFINITION",
-		picker_title = "ACP Type Definitions",
-		filetype = "acp-type-definitions",
-		name_suffix = "type-definitions",
-		instruction = "Use this LSP type definition as context.",
-		range_error = "LSP type definition has no range",
-		render_error = "Failed to render LSP type definition context",
-		unavailable = "Neovim LSP type-definition requests are unavailable",
-		unsupported = "No attached LSP client supports type definitions",
-	},
-}
-
-local function escape_tabline(text)
-	return tostring(text):gsub("%%", "%%%%")
-end
-
-local function tab_title(tabpage)
-	local ok, title = pcall(vim.api.nvim_tabpage_get_var, tabpage, "acp_title")
-	if ok and title and title ~= "" then
-		return title
-	end
-
-	for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
-		if vim.api.nvim_win_get_config(winid).relative == "" then
-			local bufnr = vim.api.nvim_win_get_buf(winid)
-			local name = vim.api.nvim_buf_get_name(bufnr)
-			return name ~= "" and vim.fn.fnamemodify(name, ":t") or "[No Name]"
-		end
-	end
-
-	return "[No Name]"
-end
-
-local function set_tab_title(state, title)
-	if not state.tabpage or not vim.api.nvim_tabpage_is_valid(state.tabpage) then
+	local thread_id = notification_thread_id(method, params)
+	if thread_id and state.thread_id and thread_id ~= state.thread_id then
 		return
 	end
 
-	state.title = title
-	pcall(vim.api.nvim_tabpage_set_var, state.tabpage, "acp_title", title)
-	refresh_session_panels()
-end
-
-local function float_layout()
-	local columns = vim.o.columns
-	local lines = vim.o.lines
-	local padding = prompt_frame.padding()
-	local width = math.max(48, math.floor(columns * config.layout.width_ratio))
-	width = math.min(width, math.max(20, columns - 4))
-	local input_inset = width > 24 + padding * 2 and padding or 0
-	local input_outer_width = math.max(22, width + prompt_frame.size - input_inset * 2)
-	local input_width = prompt_frame.content_width(input_outer_width)
-
-	local total_height = math.max(12, math.floor(lines * config.layout.height_ratio))
-	total_height = math.min(total_height, math.max(8, lines - 4))
-
-	local input_outer_height = math.min(config.layout.input_height, math.max(5, total_height - 6))
-	local input_height = prompt_frame.content_height(input_outer_height)
-	local gap = math.max(1, padding)
-	local output_height = math.max(5, total_height - input_outer_height - gap - prompt_frame.size)
-	local row = math.max(0, lines - total_height - 2)
-	local col = math.max(0, math.floor((columns - width) / 2))
-
-	return {
-		width = width,
-		input_width = input_width,
-		output_height = output_height,
-		input_height = input_height,
-		output_row = row,
-		input_row = row + output_height + prompt_frame.size + gap,
-		col = col,
-		input_col = col + input_inset,
-	}
-end
-
-local function input_float_config(state)
-	local columns = vim.o.columns
-	local lines = vim.o.lines
-	local padding = prompt_frame.padding()
-	local row = 0
-	local col = math.max(0, math.floor((columns - math.max(48, math.floor(columns * config.layout.width_ratio))) / 2))
-	local width = math.max(48, math.floor(columns * config.layout.width_ratio))
-	local output_height = lines
-
-	if valid_win(state.output_win) then
-		local output_position = vim.api.nvim_win_get_position(state.output_win)
-		local output_width = vim.api.nvim_win_get_width(state.output_win)
-		output_height = vim.api.nvim_win_get_height(state.output_win)
-		local textoff = 0
-		local info = vim.fn.getwininfo(state.output_win)[1]
-		if info and type(info.textoff) == "number" then
-			textoff = math.max(0, info.textoff)
+	if method == "turn/started" then
+		state.busy = true
+		state.turn_id = params.turn and params.turn.id or state.turn_id
+		set_status("running")
+	elseif method == "item/started" then
+		local item = params.item or {}
+		if item.id then
+			state.items[item.id] = item
 		end
-
-		row = output_position[1]
-		col = output_position[2] + textoff
-		width = math.max(20, output_width - textoff)
-	end
-
-	local inset = width > 24 + padding * 2 and padding or 0
-	col = col + inset
-	local outer_width = math.max(22, width - inset * 2)
-	outer_width = math.min(outer_width, math.max(22, columns - col))
-	width = prompt_frame.content_width(outer_width)
-
-	local outer_height = math.min(config.layout.input_height, math.max(5, output_height - inset * 2))
-	local input_height = prompt_frame.content_height(outer_height)
-	row = row + math.max(0, output_height - outer_height - inset)
-
-	return {
-		relative = "editor",
-		row = math.max(0, math.min(row, math.max(0, lines - outer_height - 2))),
-		col = col,
-		width = width,
-		height = input_height,
-		style = "minimal",
-		border = prompt_frame.copy_border(),
-		title = prompt_title(state, true),
-		title_pos = "left",
-		zindex = 50,
-	}
-end
-
-local function apply_window_options(state)
-	for _, winid in ipairs({ state.session_panel_win, state.output_win, state.input_win }) do
-		if valid_win(winid) then
-			vim.wo[winid].wrap = true
-			vim.wo[winid].linebreak = true
-			vim.wo[winid].signcolumn = "no"
-			vim.wo[winid].number = false
-			vim.wo[winid].relativenumber = false
-			vim.wo[winid].foldcolumn = "0"
-			pcall(function()
-				vim.wo[winid].statuscolumn = ""
-			end)
-			pcall(function()
-				vim.wo[winid].winfixbuf = true
-			end)
+		if item.type == "agentMessage" then
+			ensure_agent_item(item.id)
 		end
-	end
-
-	if valid_win(state.session_panel_win) then
-		vim.wo[state.session_panel_win].wrap = false
-		vim.wo[state.session_panel_win].linebreak = false
-		vim.wo[state.session_panel_win].cursorline = true
-		pcall(function()
-			vim.wo[state.session_panel_win].winfixwidth = true
-		end)
-	end
-
-	if valid_win(state.output_win) then
-		vim.wo[state.output_win].cursorline = false
-		vim.wo[state.output_win].foldmethod = "expr"
-		vim.wo[state.output_win].foldexpr = "v:lua.acp_nvim_output_foldexpr()"
-		vim.wo[state.output_win].foldtext = "v:lua.acp_nvim_output_foldtext()"
-		vim.wo[state.output_win].foldlevel = 99
-		vim.wo[state.output_win].foldcolumn = "1"
-		vim.wo[state.output_win].signcolumn = "yes:1"
-		pcall(function()
-			vim.wo[state.output_win].statuscolumn = "%s%C "
-		end)
-		refresh_output_chrome(state)
-	end
-
-	if valid_win(state.input_win) and state.mode ~= "window" then
-		vim.wo[state.input_win].signcolumn = "yes:1"
-		vim.wo[state.input_win].winhighlight =
-			"NormalFloat:AcpPromptFloat,FloatBorder:AcpPromptBorder,FloatTitle:AcpPromptTitle,SignColumn:AcpPromptFloat"
-	end
-
-	if state.mode ~= "float" and state.mode == "window" and valid_win(state.input_win) then
-		vim.wo[state.input_win].winbar = prompt_title(state)
-	end
-end
-
-local function apply_float_layout(state)
-	local dims = float_layout()
-
-	local output_config = {
-		relative = "editor",
-		row = dims.output_row,
-		col = dims.col,
-		width = dims.width,
-		height = dims.output_height,
-		style = "minimal",
-		border = "rounded",
-		title = output.window_title(state, {
-			change_count = changes.count(state),
-		}),
-		title_pos = "left",
-		zindex = 40,
-	}
-
-	local input_config = {
-		relative = "editor",
-		row = dims.input_row,
-		col = dims.input_col,
-		width = dims.input_width,
-		height = dims.input_height,
-		style = "minimal",
-		border = prompt_frame.copy_border(),
-		title = prompt_title(state, true),
-		title_pos = "left",
-		zindex = 50,
-	}
-
-	if valid_win(state.output_win) then
-		vim.api.nvim_win_set_config(state.output_win, output_config)
-	else
-		state.output_win = vim.api.nvim_open_win(state.output_buf, false, output_config)
-	end
-
-	if valid_win(state.input_win) then
-		vim.api.nvim_win_set_config(state.input_win, input_config)
-	else
-		state.input_win = vim.api.nvim_open_win(state.input_buf, true, input_config)
+		set_status(render.item_status(item))
+	elseif method == "item/agentMessage/delta" then
+		ensure_agent_item(params.itemId)
+		state.streamed_items[params.itemId] = true
+		append_text(params.delta or "")
+		set_status("responding")
+	elseif method == "item/plan/delta" then
+		if state.plan_item ~= params.itemId then
+			state.plan_item = params.itemId
+			append_lines({ "", "### Plan", "" })
+		end
+		state.streamed_items[params.itemId] = true
+		append_text(params.delta or "")
+		set_status("planning")
+	elseif method == "item/reasoning/summaryTextDelta" or method == "item/reasoning/textDelta" then
+		set_status("thinking")
+	elseif method == "item/commandExecution/outputDelta" then
+		set_status("running command")
+	elseif method == "item/completed" then
+		local item = params.item or {}
+		if item.id then
+			state.items[item.id] = item
+		end
+		if item.type == "agentMessage" then
+			if not state.streamed_items[item.id] and item.text and item.text ~= "" then
+				ensure_agent_item(item.id)
+				append_text(item.text)
+			end
+		elseif not state.streamed_items[item.id] then
+			append_lines(render.completed_item(item))
+		end
+		set_status("working")
+	elseif method == "turn/diff/updated" then
+		state.diff = params.diff or state.diff
+	elseif method == "thread/tokenUsage/updated" then
+		local context_window = params.tokenUsage and params.tokenUsage.modelContextWindow
+		if not present(context_window) then
+			context_window = nil
+		end
+		state.tokens = params.tokenUsage
+				and vim.tbl_extend("force", params.tokenUsage.total or {}, {
+					modelContextWindow = context_window,
+				})
+			or state.tokens
+		update_chrome()
+	elseif method == "model/rerouted" then
+		state.model = params.toModel or state.model
+		append_lines({
+			"",
+			("> Model changed from `%s` to `%s`."):format(params.fromModel or "unknown", state.model),
+			"",
+		})
+		update_chrome()
+	elseif method == "error" then
+		local message = params.error and params.error.message or "Codex error"
+		append_lines({ "", ("> Error: %s"):format(message), "" })
+		set_status(params.willRetry and "retrying" or "error")
+	elseif method == "warning" or method == "configWarning" then
+		local message = params.message or params.warning or "Codex warning"
+		append_lines({ "", ("> Warning: %s"):format(message), "" })
+	elseif method == "thread/compacted" then
+		append_lines({ "", "> Conversation context compacted.", "" })
+		set_status("ready")
+	elseif method == "turn/completed" then
+		local turn = params.turn or {}
+		state.busy = false
+		state.turn_id = nil
+		if turn.status == "failed" and turn.error then
+			append_lines({ "", ("> Error: %s"):format(turn.error.message or "Turn failed"), "" })
+		end
+		set_status(turn.status or "completed")
+		refresh_threads()
+		drain_queue()
+	elseif method == "thread/name/updated" or method == "thread/archived" or method == "thread/unarchived" then
+		refresh_threads()
 	end
 end
 
-local function apply_window_layout(state)
-	if not valid_win(state.output_win) or not valid_win(state.input_win) then
-		local total_height = math.max(config.layout.input_height + 6, math.floor(vim.o.lines * 0.45))
-
-		vim.cmd(("botright %dsplit"):format(total_height))
-		state.output_win = vim.api.nvim_get_current_win()
-		vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
-
-		vim.cmd(("botright %dsplit"):format(config.layout.input_height))
-		state.input_win = vim.api.nvim_get_current_win()
-		vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
-	end
-
-	if valid_win(state.input_win) then
-		pcall(vim.api.nvim_win_set_height, state.input_win, config.layout.input_height)
-	end
-end
-
-local function register_session_panel_autocmd(state)
-	if not state.group or not valid_buf(state.session_panel_buf) then
+local function handle_stderr(data)
+	local text = tostring(data):gsub("%s+$", "")
+	if text == "" or text:find("could not create PATH aliases", 1, true) then
 		return
 	end
+	if state and valid_buf(state.output_buf) then
+		append_lines({ "", ("> Server: %s"):format(text:gsub("\n", " ")), "" })
+	else
+		notify(text, vim.log.levels.WARN)
+	end
+end
 
-	vim.api.nvim_create_autocmd("BufWipeout", {
-		group = state.group,
-		buffer = state.session_panel_buf,
-		callback = function()
-			session_panel_lines[state.session_panel_buf] = nil
+local function handle_request(method, params, reply)
+	if state and params.itemId and state.items[params.itemId] then
+		params = vim.tbl_extend("force", vim.deepcopy(params), { item = state.items[params.itemId] })
+	end
+	return requests.handle(method, params, reply)
+end
+
+local function make_client()
+	local instance = Codex.new({
+		command = config.command,
+		timeout_ms = config.timeout_ms,
+		client_info = config.client_info,
+		capabilities = config.capabilities,
+		service_name = config.service_name,
+		on_notification = M._handle_notification,
+		on_request = handle_request,
+		on_stderr = handle_stderr,
+		on_error = function(message)
+			notify(message, vim.log.levels.ERROR)
 		end,
-	})
-end
-
-local function create_session_panel_buffer(state)
-	state.session_panel_buf = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(state.session_panel_buf, ("ACP://%s/%d/sessions"):format(state.adapter, state.id))
-	set_buf_options(state.session_panel_buf, {
-		bufhidden = "wipe",
-		buftype = "nofile",
-		filetype = "acp-sessions",
-		modifiable = true,
-		swapfile = false,
-	})
-	set_panel_lines(state.session_panel_buf, { "Sessions", "" })
-	vim.keymap.set("n", "<CR>", function()
-		M.select_session()
-	end, { buffer = state.session_panel_buf, desc = "Open ACP session" })
-	vim.keymap.set("n", "x", function()
-		M.close_selected_session()
-	end, { buffer = state.session_panel_buf, desc = "Close ACP session" })
-	vim.keymap.set("n", "<leader>ak", function()
-		M.open_actions()
-	end, { buffer = state.session_panel_buf, desc = "Open ACP actions" })
-	register_session_panel_autocmd(state)
-end
-
-local function apply_tab_layout(state)
-	if not valid_buf(state.session_panel_buf) then
-		create_session_panel_buffer(state)
-		states[state.session_panel_buf] = state
-	end
-
-	if not valid_win(state.output_win) then
-		vim.cmd("tabnew")
-		state.tabpage = vim.api.nvim_get_current_tabpage()
-		set_tab_title(state, state.title)
-		state.output_win = vim.api.nvim_get_current_win()
-		vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
-	end
-
-	if not valid_win(state.session_panel_win) and valid_buf(state.session_panel_buf) then
-		local output_win = state.output_win
-		vim.api.nvim_set_current_win(output_win)
-		vim.cmd(("topleft %dvsplit"):format(config.layout.session_panel_width))
-		state.session_panel_win = vim.api.nvim_get_current_win()
-		vim.api.nvim_win_set_buf(state.session_panel_win, state.session_panel_buf)
-		pcall(vim.api.nvim_win_set_width, state.session_panel_win, config.layout.session_panel_width)
-		vim.api.nvim_set_current_win(output_win)
-	end
-
-	render_session_panel(state)
-
-	if valid_win(state.input_win) then
-		vim.api.nvim_win_set_config(state.input_win, input_float_config(state))
-	else
-		state.input_win = vim.api.nvim_open_win(state.input_buf, true, input_float_config(state))
-	end
-end
-
-local function apply_layout(state)
-	if not valid_buf(state.output_buf) or not valid_buf(state.input_buf) then
-		return
-	end
-
-	if state.mode == "tab" then
-		apply_tab_layout(state)
-	elseif state.mode == "window" then
-		apply_window_layout(state)
-	else
-		apply_float_layout(state)
-	end
-
-	apply_window_options(state)
-end
-
-local function create_buffers(state)
-	create_session_panel_buffer(state)
-	state.output_buf = vim.api.nvim_create_buf(false, true)
-	state.input_buf = vim.api.nvim_create_buf(false, true)
-
-	vim.api.nvim_buf_set_name(state.output_buf, ("ACP://%s/%d/output"):format(state.adapter, state.id))
-	vim.api.nvim_buf_set_name(state.input_buf, ("ACP://%s/%d/input"):format(state.adapter, state.id))
-
-	set_buf_options(state.output_buf, {
-		bufhidden = "wipe",
-		buftype = "nofile",
-		filetype = "acp",
-		modifiable = true,
-		swapfile = false,
-	})
-	enable_output_language_injection(state)
-	set_buf_options(state.input_buf, {
-		bufhidden = "wipe",
-		buftype = "nofile",
-		filetype = "acp-prompt",
-		swapfile = false,
-	})
-	vim.b[state.input_buf].acp_blink_source = true
-	vim.b[state.input_buf].acp_state_id = state.id
-
-	refresh_output_highlights(state)
-	refresh_current_output_section(state)
-	refresh_current_output_item(state)
-	refresh_output_cursor_hint(state)
-	refresh_output_map(state)
-	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "" })
-	refresh_prompt_hints(state)
-end
-
-local function unregister(state)
-	if not state or state.closed then
-		return
-	end
-
-	state.closed = true
-	state.connection:stop()
-	stop_output_animation(state)
-	close_output_inspector(state)
-	close_output_map(state)
-	clear_source_marks(state)
-	unlink_source_state(state)
-	session_panel_lines[state.session_panel_buf] = nil
-	states[state.session_panel_buf] = nil
-	states[state.output_buf] = nil
-	states[state.input_buf] = nil
-	sessions[state.id] = nil
-
-	for _, winid in ipairs({ state.session_panel_win, state.output_win, state.input_win }) do
-		if valid_win(winid) then
-			pcall(vim.api.nvim_win_close, winid, true)
-		end
-	end
-
-	refresh_session_panels()
-end
-
-local function register_autocmds(state)
-	local group = vim.api.nvim_create_augroup(("AcpClient%d"):format(state.id), { clear = true })
-	state.group = group
-
-	vim.api.nvim_create_autocmd("VimResized", {
-		group = group,
-		callback = function()
-			if not state.closed then
-				apply_layout(state)
+		on_exit = function(_, message)
+			if state then
+				state.busy = false
+				state.turn_id = nil
+				set_status("disconnected")
+				append_lines({ "", ("> %s"):format(message), "" })
 			end
 		end,
 	})
-
-	register_session_panel_autocmd(state)
-
-	vim.api.nvim_create_autocmd("BufWipeout", {
-		group = group,
-		buffer = state.output_buf,
-		callback = function()
-			unregister(state)
-		end,
-	})
-
-	vim.api.nvim_create_autocmd("BufWipeout", {
-		group = group,
-		buffer = state.input_buf,
-		callback = function()
-			unregister(state)
-		end,
-	})
-
-	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-		group = group,
-		buffer = state.input_buf,
-		callback = function()
-			refresh_prompt_hints(state)
-		end,
-	})
-
-	vim.api.nvim_create_autocmd("CompleteDone", {
-		group = group,
-		buffer = state.input_buf,
-		callback = function()
-			local completed_item = {
-				word = vim.v.completed_item and vim.v.completed_item.word,
-				user_data = vim.v.completed_item and vim.v.completed_item.user_data,
-			}
-			vim.schedule(function()
-				M.handle_prompt_completion_action(state.id, completed_item)
-			end)
-		end,
-	})
-
-	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-		group = group,
-		buffer = state.output_buf,
-		callback = function()
-			refresh_output_highlights(state)
-			refresh_output_chrome(state)
-		end,
-	})
-
-	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
-		group = group,
-		buffer = state.output_buf,
-		callback = function()
-			refresh_output_chrome(state)
-		end,
-	})
+	return instance
 end
 
-local function register_keymaps(state)
-	local send = function()
-		M.send()
+local function command_range(command)
+	if command.range and command.range > 0 then
+		return { line1 = command.line1, line2 = command.line2 }
 	end
-	local stop = function()
-		M.stop()
-	end
-	local add_context = function()
-		M.add_context()
-	end
-	local open_changes = function()
-		M.open_changes()
-	end
-	local open_output = function()
-		open_output_outline(state)
-	end
-	local open_map = function()
-		open_output_map(state)
-	end
-	local open_search = function()
-		open_output_search(state)
-	end
-	local open_output_item_picker = function()
-		open_output_items(state)
-	end
-	local yank_section = function()
-		yank_output_section(state)
-	end
-	local draft_section = function()
-		draft_output_section(state)
-	end
-	local open_code_blocks = function()
-		open_output_code_blocks(state)
-	end
-	local yank_code_block = function()
-		yank_output_code_block(state)
-	end
-	local open_locations = function()
-		open_output_locations(state)
-	end
-	local open_reference = function()
-		open_output_reference_at_cursor(state)
-	end
-	local open_context = function()
-		open_output_context_at_cursor(state)
-	end
-	local inspect_output = function()
-		inspect_output_at_cursor(state)
-	end
-	local open_output_action_menu = function()
-		open_output_actions(state)
-	end
-	local open_output_help = function()
-		M.open_output_help()
-	end
-	local open_prompt_action_menu = function()
-		open_prompt_actions(state)
-	end
-	local previous_output_item = function()
-		jump_output_item(state, -1)
-	end
-	local next_output_item = function()
-		jump_output_item(state, 1)
-	end
-	local open_problems = function()
-		open_output_problems(state)
-	end
-	local open_diagnostics = function()
-		M.open_diagnostics()
-	end
-	local open_diagnostics_quickfix = function()
-		M.open_diagnostics_quickfix()
-	end
-	local open_commands = function()
-		M.open_commands()
-	end
-	local open_config = function()
-		M.open_config()
-	end
-	local open_actions = function()
-		M.open_actions()
-	end
-	local open_code_actions = function()
-		M.open_code_actions()
-	end
-	local add_hover = function()
-		M.add_hover()
-	end
-	local open_highlights = function()
-		M.open_highlights()
-	end
-	local open_references = function()
-		M.open_references()
-	end
-	local open_references_quickfix = function()
-		M.open_references_quickfix()
-	end
-	local open_declarations = function()
-		M.open_declarations()
-	end
-	local open_definitions = function()
-		M.open_definitions()
-	end
-	local open_implementations = function()
-		M.open_implementations()
-	end
-	local open_type_definitions = function()
-		M.open_type_definitions()
-	end
-	local open_workspace_symbols = function()
-		M.open_workspace_symbols()
-	end
-	local open_symbols = function()
-		M.open_symbols()
-	end
-	local open_symbols_quickfix = function()
-		M.open_symbols_quickfix()
-	end
-	local open_treesitter = function()
-		M.open_treesitter()
-	end
-	local previous_prompt = function()
-		M.prompt_previous()
-	end
-	local next_prompt = function()
-		M.prompt_next()
-	end
+end
 
-	for _, bufnr in ipairs({ state.output_buf, state.input_buf }) do
-		vim.keymap.set("n", "<leader>as", send, { buffer = bufnr, desc = "Send ACP prompt" })
-		vim.keymap.set("n", "<leader>aq", stop, { buffer = bufnr, desc = "Stop ACP agent" })
-		vim.keymap.set("n", "<leader>av", open_output, { buffer = bufnr, desc = "Open ACP output outline" })
-		vim.keymap.set("n", "<leader>am", open_map, { buffer = bufnr, desc = "Open ACP output map" })
-		vim.keymap.set("n", "<leader>ax", open_search, { buffer = bufnr, desc = "Search ACP output" })
-		vim.keymap.set("n", "<leader>aO", open_output_item_picker, { buffer = bufnr, desc = "Browse ACP output items" })
-		vim.keymap.set("n", "<leader>ay", yank_section, { buffer = bufnr, desc = "Yank current ACP output section" })
-		vim.keymap.set("n", "<leader>ai", draft_section, { buffer = bufnr, desc = "Draft from current ACP output section" })
-		vim.keymap.set("n", "<leader>ab", open_code_blocks, { buffer = bufnr, desc = "Open ACP code blocks" })
-		vim.keymap.set("n", "<leader>aB", function()
-			M.open_code_blocks_quickfix()
-		end, { buffer = bufnr, desc = "Open ACP code blocks quickfix" })
-		vim.keymap.set("n", "<leader>aY", yank_code_block, { buffer = bufnr, desc = "Yank ACP output code block" })
-		vim.keymap.set("n", "<leader>ag", open_locations, { buffer = bufnr, desc = "Open ACP output locations" })
-		vim.keymap.set("n", "<leader>ae", open_problems, { buffer = bufnr, desc = "Open ACP output problems" })
-		vim.keymap.set("n", "<leader>ad", open_diagnostics, { buffer = bufnr, desc = "Open ACP diagnostics" })
-		vim.keymap.set("n", "<leader>aD", open_diagnostics_quickfix, { buffer = bufnr, desc = "Open ACP diagnostics quickfix" })
-		vim.keymap.set("n", "<leader>af", open_changes, { buffer = bufnr, desc = "Preview ACP changed files" })
-		vim.keymap.set("n", "<leader>a/", open_commands, { buffer = bufnr, desc = "Open ACP slash commands" })
-		vim.keymap.set("n", "<leader>a?", open_output_help, { buffer = bufnr, desc = "Open ACP output help" })
-		vim.keymap.set("n", "<leader>ao", open_config, { buffer = bufnr, desc = "Open ACP config options" })
-		vim.keymap.set("n", "<leader>ak", open_actions, { buffer = bufnr, desc = "Open ACP actions" })
-		vim.keymap.set("n", "<leader>aa", open_code_actions, { buffer = bufnr, desc = "Open ACP LSP code actions" })
-		vim.keymap.set("n", "<leader>ah", add_hover, { buffer = bufnr, desc = "Add ACP LSP hover context" })
-		vim.keymap.set("n", "<leader>aH", open_highlights, { buffer = bufnr, desc = "Show ACP LSP highlights" })
-		vim.keymap.set("n", "<leader>ar", open_references, { buffer = bufnr, desc = "Open ACP LSP references" })
-		vim.keymap.set("n", "<leader>aR", open_references_quickfix, { buffer = bufnr, desc = "Open ACP LSP references quickfix" })
-		vim.keymap.set("n", "<leader>aC", open_declarations, { buffer = bufnr, desc = "Open ACP LSP declarations" })
-		vim.keymap.set("n", "<leader>aG", open_definitions, { buffer = bufnr, desc = "Open ACP LSP definitions" })
-		vim.keymap.set("n", "<leader>aI", open_implementations, { buffer = bufnr, desc = "Open ACP LSP implementations" })
-		vim.keymap.set("n", "<leader>aT", open_type_definitions, { buffer = bufnr, desc = "Open ACP LSP type definitions" })
-		vim.keymap.set("n", "<leader>aw", open_workspace_symbols, { buffer = bufnr, desc = "Open ACP LSP workspace symbols" })
-		vim.keymap.set("n", "<leader>al", open_symbols, { buffer = bufnr, desc = "Open ACP LSP symbols" })
-		vim.keymap.set("n", "<leader>aL", open_symbols_quickfix, { buffer = bufnr, desc = "Open ACP LSP symbols quickfix" })
-		vim.keymap.set("n", "<leader>at", open_treesitter, { buffer = bufnr, desc = "Open ACP Tree-sitter nodes" })
-		vim.keymap.set("n", "<leader>ap", previous_prompt, { buffer = bufnr, desc = "Previous ACP prompt" })
-		vim.keymap.set("n", "<leader>an", next_prompt, { buffer = bufnr, desc = "Next ACP prompt" })
-	end
-
-	vim.keymap.set("n", "<leader>ac", add_context, { buffer = state.input_buf, desc = "Add ACP editor context" })
-	vim.keymap.set("n", "?", open_prompt_action_menu, { buffer = state.input_buf, desc = "Open ACP prompt actions" })
-	vim.keymap.set("n", "[[", function()
-		jump_output_section(state, -1)
-	end, { buffer = state.output_buf, desc = "Previous ACP output section" })
-	vim.keymap.set("n", "]]", function()
-		jump_output_section(state, 1)
-	end, { buffer = state.output_buf, desc = "Next ACP output section" })
-	vim.keymap.set("n", "[o", previous_output_item, { buffer = state.output_buf, desc = "Previous ACP output item" })
-	vim.keymap.set("n", "]o", next_output_item, { buffer = state.output_buf, desc = "Next ACP output item" })
-	vim.keymap.set("n", "<CR>", open_context, { buffer = state.output_buf, desc = "Open ACP output item" })
-	vim.keymap.set("n", "?", open_output_action_menu, { buffer = state.output_buf, desc = "Open ACP output actions" })
-	vim.keymap.set("n", "K", inspect_output, { buffer = state.output_buf, desc = "Inspect ACP output item" })
-	vim.keymap.set("n", "gf", open_reference, { buffer = state.output_buf, desc = "Open ACP output file reference" })
-	vim.keymap.set("n", "<leader>az", "za", { buffer = state.output_buf, desc = "Toggle ACP output fold" })
-	vim.keymap.set({ "n", "i" }, "<M-p>", previous_prompt, { buffer = state.input_buf, desc = "Previous ACP prompt" })
-	vim.keymap.set({ "n", "i" }, "<M-n>", next_prompt, { buffer = state.input_buf, desc = "Next ACP prompt" })
-	vim.keymap.set("i", "<CR>", "<CR>", { buffer = state.input_buf, desc = "Insert newline" })
-	vim.keymap.set("i", "<C-Space>", function()
-		local ok, cmp = pcall(require, "blink.cmp")
-		if ok and type(cmp.show) == "function" then
-			local showed, result = pcall(cmp.show, { providers = { "acp" } })
-			if showed and result then
-				return
-			end
-		end
-		notify("blink.cmp is required for ACP prompt completion", vim.log.levels.WARN)
-	end, { buffer = state.input_buf, desc = "Complete ACP prompt" })
-	vim.keymap.set({ "n", "i" }, "<C-CR>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
-	vim.keymap.set({ "n", "i" }, "<C-s>", send, { buffer = state.input_buf, desc = "Send ACP prompt" })
+local function create_command(name, callback, opts)
+	opts = vim.tbl_extend("force", opts or {}, { force = true })
+	vim.api.nvim_create_user_command(name, callback, opts)
 end
 
 function M.setup(opts)
-	config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
-	define_highlights()
-
-	if vim.o.tabline == "" then
-		vim.o.tabline = "%!v:lua.require'acp.ui'.tabline()"
+	if state then
+		M._reset()
+	elseif client then
+		client:stop()
 	end
-
-	vim.api.nvim_create_user_command("AcpChat", function(command)
-		M.open(command.args ~= "" and command.args or nil, {
-			mode = config.default_mode,
-			source_range = command_source_range(command),
-		})
-	end, {
-		nargs = "?",
-		range = true,
-		complete = function()
-			return adapter_names()
-		end,
-	})
-
-	vim.api.nvim_create_user_command("AcpChatContext", function(command)
-		M.open(command.args ~= "" and command.args or nil, {
-			mode = config.default_mode,
-			source_range = command_source_range(command),
-			draft = "context",
-		})
-	end, {
-		nargs = "?",
-		range = true,
-		complete = function()
-			return adapter_names()
-		end,
-	})
-
-	vim.api.nvim_create_user_command("AcpReview", function(command)
-		M.open(command.args ~= "" and command.args or nil, {
-			mode = config.default_mode,
-			source_range = command_source_range(command),
-			draft = "review",
-		})
-	end, {
-		nargs = "?",
-		range = true,
-		complete = function()
-			return adapter_names()
-		end,
-	})
-
-	vim.api.nvim_create_user_command("AcpChatFloat", function(command)
-		M.open(command.args ~= "" and command.args or nil, {
-			mode = "float",
-			source_range = command_source_range(command),
-		})
-	end, {
-		nargs = "?",
-		range = true,
-		complete = function()
-			return adapter_names()
-		end,
-	})
-
-	vim.api.nvim_create_user_command("AcpChatWindow", function(command)
-		M.open(command.args ~= "" and command.args or nil, {
-			mode = "window",
-			source_range = command_source_range(command),
-		})
-	end, {
-		nargs = "?",
-		range = true,
-		complete = function()
-			return adapter_names()
-		end,
-	})
-
-	vim.api.nvim_create_user_command("AcpChatBuffer", function(command)
-		M.open(command.args ~= "" and command.args or nil, {
-			mode = "window",
-			source_range = command_source_range(command),
-		})
-	end, {
-		nargs = "?",
-		range = true,
-		complete = function()
-			return adapter_names()
-		end,
-	})
-
-	vim.api.nvim_create_user_command("AcpChatTab", function(command)
-		M.open(command.args ~= "" and command.args or nil, {
-			mode = "tab",
-			source_range = command_source_range(command),
-		})
-	end, {
-		nargs = "?",
-		range = true,
-		complete = function()
-			return adapter_names()
-		end,
-	})
-
-	vim.api.nvim_create_user_command("AcpSend", function()
-		M.send()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpPromptPrev", function()
-		M.prompt_previous()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpPromptNext", function()
-		M.prompt_next()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpStop", function()
-		M.stop()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpClose", function()
-		M.close()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCloseAll", function()
-		M.close_all()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSessions", function()
-		M.focus_sessions()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpActions", function()
-		M.open_actions()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpPromptActions", function()
-		M.open_prompt_actions()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSourceActions", function()
-		M.open_source_actions()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpRefreshSource", function(command)
-		M.refresh_source({
-			range = command_source_range(command),
-		})
-	end, {
-		range = true,
-	})
-
-	vim.api.nvim_create_user_command("AcpChanges", function()
-		M.open_changes()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpChangesQuickfix", function()
-		M.open_changes_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutput", function()
-		M.open_output()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputMap", function()
-		M.open_output_map()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputSearch", function()
-		M.open_output_search()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputItems", function()
-		M.open_output_items()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputItemsQuickfix", function()
-		M.open_output_items_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputYank", function()
-		M.yank_output_section()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputDraft", function()
-		M.draft_output_section()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputOpen", function()
-		M.open_output_context()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputInspect", function()
-		M.inspect_output()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputActions", function()
-		M.open_output_actions()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputHelp", function()
-		M.open_output_help()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputNextItem", function()
-		M.next_output_item()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputPrevItem", function()
-		M.previous_output_item()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCodeBlocks", function()
-		M.open_code_blocks()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCodeBlocksQuickfix", function()
-		M.open_code_blocks_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCodeBlockDraft", function()
-		M.draft_code_block()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCodeBlockYank", function()
-		M.yank_code_block()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputLocations", function()
-		M.open_output_locations()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputQuickfix", function()
-		M.open_output_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpOutputProblems", function()
-		M.open_output_problems()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDiagnostics", function()
-		M.open_diagnostics()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDiagnosticsQuickfix", function()
-		M.open_diagnostics_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpWorkspaceDiagnostics", function()
-		M.open_workspace_diagnostics()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpWorkspaceDiagnosticsQuickfix", function()
-		M.open_workspace_diagnostics_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCommands", function()
-		M.open_commands()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpConfig", function()
-		M.open_config()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCodeActions", function()
-		M.open_code_actions()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCodeLens", function()
-		M.open_code_lens()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCodeLensQuickfix", function()
-		M.open_code_lens_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDocumentColors", function()
-		M.open_document_colors()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDocumentColorsQuickfix", function()
-		M.open_document_colors_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpClearDocumentColors", function()
-		M.clear_document_colors()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDocumentLinks", function()
-		M.open_document_links()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDocumentLinksQuickfix", function()
-		M.open_document_links_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpClearDocumentLinks", function()
-		M.clear_document_links()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpFoldingRanges", function()
-		M.open_folding_ranges()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpFoldingRangesQuickfix", function()
-		M.open_folding_ranges_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpClearFoldingRanges", function()
-		M.clear_folding_ranges()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpRename", function()
-		M.rename_symbol()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSmartContext", function()
-		M.add_smart_context()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpHover", function()
-		M.add_hover()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSignature", function()
-		M.add_signature()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpInlayHints", function()
-		M.open_inlay_hints()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSelectionRanges", function()
-		M.open_selection_ranges()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCallers", function()
-		M.open_callers()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCallersQuickfix", function()
-		M.open_callers_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCallees", function()
-		M.open_callees()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpCalleesQuickfix", function()
-		M.open_callees_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSupertypes", function()
-		M.open_supertypes()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSupertypesQuickfix", function()
-		M.open_supertypes_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSubtypes", function()
-		M.open_subtypes()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSubtypesQuickfix", function()
-		M.open_subtypes_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpHighlights", function()
-		M.open_highlights()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpClearHighlights", function()
-		M.clear_highlights()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpReferences", function()
-		M.open_references()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpReferencesQuickfix", function()
-		M.open_references_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDeclarations", function()
-		M.open_declarations()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDeclarationsQuickfix", function()
-		M.open_declarations_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDefinitions", function()
-		M.open_definitions()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpDefinitionsQuickfix", function()
-		M.open_definitions_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpImplementations", function()
-		M.open_implementations()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpImplementationsQuickfix", function()
-		M.open_implementations_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpTypeDefinitions", function()
-		M.open_type_definitions()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpTypeDefinitionsQuickfix", function()
-		M.open_type_definitions_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpWorkspaceSymbols", function(command)
-		M.open_workspace_symbols(command.args)
-	end, {
-		nargs = "*",
-	})
-
-	vim.api.nvim_create_user_command("AcpWorkspaceSymbolsQuickfix", function(command)
-		M.open_workspace_symbols_quickfix(command.args)
-	end, {
-		nargs = "*",
-	})
-
-	vim.api.nvim_create_user_command("AcpSymbols", function()
-		M.open_symbols()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpSymbolsQuickfix", function()
-		M.open_symbols_quickfix()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpTreeSitter", function()
-		M.open_treesitter()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpHistory", function()
-		history.open_browser()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpRestore", function(command)
-		M.restore(command.args ~= "" and command.args or nil)
-	end, {
-		nargs = "?",
-		complete = function()
-			return adapter_names()
-		end,
-	})
-
-	vim.api.nvim_create_user_command("AcpHistoryDraft", function(command)
-		local adapter_name = command.args ~= "" and command.args or nil
-		history.open_browser({
-			open_chat = function(entry)
-				local prompt = history.replay_prompt(entry)
-				if not prompt then
-					notify("Failed to read ACP history entry", vim.log.levels.ERROR)
-					return
-				end
-				M.open(adapter_name, {
-					mode = config.default_mode,
-					initial_prompt = prompt,
-				})
-			end,
-		})
-	end, {
-		nargs = "?",
-		complete = function()
-			return adapter_names()
-		end,
-	})
-
-	vim.api.nvim_create_user_command("AcpAddContext", function()
-		M.add_context()
-	end, {})
-
-	vim.api.nvim_create_user_command("AcpFixDiagnostics", function(command)
-		local source_range = command_source_range(command)
-		local bufnr = vim.api.nvim_get_current_buf()
-		if diagnostics.count(bufnr, { range = source_range }) == 0 then
-			notify("No diagnostics found in the current buffer or range", vim.log.levels.WARN)
-			return
+	config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
+	client = make_client()
+
+	create_command("AcpChat", function(command)
+		M.open({ prompt = command.args ~= "" and command.args or nil, range = command_range(command) })
+	end, { nargs = "*", range = true })
+	create_command("AcpNew", function(command)
+		M.open({ new = true, prompt = command.args ~= "" and command.args or nil, range = command_range(command) })
+	end, { nargs = "*", range = true })
+	create_command("AcpThreads", open_threads)
+	create_command("AcpSessions", open_threads)
+	create_command("AcpAddContext", function(command)
+		if not state then
+			M.open()
 		end
+		add_context_from_source(command_range(command), command.range == 0)
+	end, { range = true })
+	create_command("AcpAddFile", function()
+		if not state then
+			M.open()
+		end
+		add_context_from_source(nil, true)
+	end)
+	create_command("AcpModel", select_model)
+	create_command("AcpReasoning", select_reasoning)
+	create_command("AcpReview", function(command)
+		start_review(command.args ~= "" and command.args or nil)
+	end, { nargs = "*" })
+	create_command("AcpDiff", M.open_diff)
+	create_command("AcpActions", M.open_actions)
+	create_command("AcpLogin", M.login)
+	create_command("AcpSend", M.send)
+	create_command("AcpStop", M.stop)
+	create_command("AcpClose", M.close)
 
-		M.open(command.args ~= "" and command.args or nil, {
-			mode = config.default_mode,
-			source_range = source_range,
-			draft = "diagnostics",
-		})
-	end, {
-		nargs = "?",
-		range = true,
-		complete = function()
-			return adapter_names()
+	local group = vim.api.nvim_create_augroup("acp.nvim", { clear = true })
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = group,
+		callback = function()
+			if client then
+				client:stop()
+			end
 		end,
 	})
-
-	vim.api.nvim_create_user_command("AcpHealth", function(command)
-		M.health(command.args ~= "" and command.args or nil)
-	end, {
-		nargs = "?",
-		complete = function()
-			return adapter_names()
-		end,
-	})
+	return M
 end
 
 function M.get_config()
 	return vim.deepcopy(config)
 end
 
-local function append_role_text(state, role, text)
-	if not text or text == "" then
-		return
-	end
-	if state.stream_role ~= role then
-		append_lines(state, { "", role, "" })
-		state.stream_role = role
-	end
-	if role == "Agent" then
-		output_status.ensure_agent_content_gap(state)
-	end
-	append_text(state, text)
-end
-
-local function chat_handlers(state, opts)
-	opts = opts or {}
-	return {
-		started = function()
-			if opts.started then
-				opts.started()
-			else
-				set_run_status(state, "running")
-			end
-		end,
-		user_message_chunk = function(text)
-			append_role_text(state, "You", text)
-		end,
-		message_chunk = function(text)
-			if not state.streaming then
-				state.streaming = true
-				set_run_status(state, "streaming")
-			end
-			append_role_text(state, "Agent", text)
-		end,
-		thought_chunk = function(text)
-			state.stream_role = nil
-			set_run_status(state, "thinking")
-			append_lines(state, { "", ("Thought: %s"):format(text), "" })
-		end,
-		tool_call = function(update)
-			state.stream_role = nil
-			set_run_status(state, ("tool: %s"):format(update.title or update.kind or "tool call"))
-			append_lines(state, { "", ("Tool: %s"):format(update.title or update.kind or "tool call"), "" })
-		end,
-		tool_update = function(update)
-			state.stream_role = nil
-			set_run_status(state, ("tool: %s"):format(update.status or update.title or "updated"))
-			append_lines(state, { "", ("Tool update: %s"):format(update.status or update.title or "updated"), "" })
-		end,
-		terminal_attach = function(event)
-			state.stream_role = nil
-			ensure_terminal_block(state, event.terminal_id)
-			if event.output and event.output ~= "" then
-				append_terminal_output(state, {
-					terminal_id = event.terminal_id,
-					text = event.output,
-					truncated = event.truncated,
-				})
-			end
-		end,
-		terminal_output = function(event)
-			state.stream_role = nil
-			set_run_status(state, ("terminal: %s"):format(event.terminal_id))
-			append_terminal_output(state, event)
-		end,
-		file_written = function(path)
-			state.stream_role = nil
-			local entry = changes.record(state, path)
-			local display = entry and entry.display or vim.fn.fnamemodify(path, ":.")
-			set_run_status(state, ("wrote %s"):format(display))
-			append_lines(state, { "", ("Wrote %s"):format(display), "Use :AcpChanges to preview changed files.", "" })
-			refresh_output_chrome(state)
-			refresh_session_panels()
-		end,
-		session_info = function(update)
-			if update.title and update.title ~= "" then
-				set_tab_title(state, update.title)
-			end
-			if metadata.apply_session(state, update) then
-				refresh_output_chrome(state)
-				refresh_prompt_chrome(state)
-			end
-		end,
-		usage = function(update)
-			if metadata.apply_session(state, update) then
-				refresh_output_chrome(state)
-				refresh_prompt_chrome(state)
-			end
-		end,
-		available_commands = function(commands)
-			state.available_commands = commands
-			set_run_status(state, ("%d command(s) available"):format(#commands))
-			refresh_session_panels()
-		end,
-		config_options = function(options)
-			state.config_options = options
-			if not state.busy then
-				set_run_status(state, ("%d config option(s) available"):format(#acp_config.select_options(options)))
-			else
-				refresh_session_panels()
-			end
-		end,
-		stderr = function(text)
-			state.stream_role = nil
-			append_lines(state, { "", "stderr:" })
-			append_lines(state, vim.split(text:gsub("%s+$", ""), "\n", { plain = true }))
-			append_lines(state, { "" })
-		end,
-		done = function(stop_reason)
-			state.busy = false
-			set_run_status(state, ("stopped: %s"):format(stop_reason or "done"))
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-		error = function(message)
-			state.busy = false
-			set_run_status(state, ("error: %s"):format(message))
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	}
-end
-
-local function start_restore(state, session_info)
-	local title = session_info.title or session_info.sessionId
-	state.restored_session_id = session_info.sessionId
-	state.busy = true
-	state.streaming = false
-	state.stream_role = nil
-	set_tab_title(state, title and ("ACP %s"):format(title) or state.title)
-	append_lines(state, { ("Restoring session: %s"):format(title or "[unknown]"), "" })
-	set_run_status(state, "restoring")
-
-	local ok = state.connection:restore_session_async(session_info, chat_handlers(state), function(success, mode_or_err)
-		state.busy = false
-		if not success then
-			set_run_status(state, ("error: %s"):format(mode_or_err))
-			return
-		end
-
-		if mode_or_err == "resume" then
-			append_lines(state, { "", "Session resumed without replayed transcript.", "" })
-		end
-		set_run_status(state, ("restored: %s"):format(mode_or_err or "done"))
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end)
-
-	if not ok then
-		state.busy = false
-		set_run_status(state, "error: failed to restore session")
-	end
-end
-
-function M.open(adapter_name, opts)
-	opts = opts or {}
-	adapter_name = adapter_name or config.default_adapter
-	local adapter = config.adapters[adapter_name]
-	if not adapter then
-		notify(("Unknown ACP adapter: %s"):format(adapter_name), vim.log.levels.ERROR)
-		return
-	end
-
-	local id = next_session_id
-	next_session_id = next_session_id + 1
-	local resolved_metadata = metadata.resolve_adapter(adapter)
-	local source = context.capture(vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win(), opts.source_range)
-	local cwd = vim.fn.getcwd()
-
-	local state = {
-		id = id,
-		adapter = adapter_name,
-		mode = opts.mode or config.default_mode,
-		title = ("ACP %s #%d"):format(adapter_name, id),
-		cwd = cwd,
-		model = resolved_metadata.model,
-		context_window = resolved_metadata.context_window,
-		connection = opts.connection or Connection.new({
-			adapter = adapter,
-			cwd = cwd,
-		}),
-		source = source,
-		busy = false,
-	}
-
-	create_buffers(state)
-	sessions[id] = state
-	states[state.session_panel_buf] = state
-	states[state.output_buf] = state
-	states[state.input_buf] = state
-	link_source_state(state)
-	if opts.draft == "diagnostics" then
-		append_input_text(state, diagnostics_prompt(state.source))
-	elseif opts.draft == "context" then
-		append_input_text(state, context_prompt(state.source, "Use this editor context for the next request."))
-	elseif opts.draft == "review" then
-		append_input_text(state, context_prompt(
-			state.source,
-			"Review this code. Prioritize correctness, edge cases, and maintainability."
-		))
-	elseif opts.initial_prompt then
-		append_input_text(state, opts.initial_prompt)
-	end
-	register_keymaps(state)
-	register_autocmds(state)
-	apply_layout(state)
-	refresh_source_marks(state)
-	refresh_session_panels()
-
-	if opts.restore_session then
-		start_restore(state, opts.restore_session)
-	elseif valid_win(state.input_win) then
-		vim.api.nvim_set_current_win(state.input_win)
-	end
-end
-
-local function current_state()
-	local bufnr = vim.api.nvim_get_current_buf()
-	local state = states[bufnr]
-	if not state then
-		notify("Current buffer is not an ACP chat", vim.log.levels.WARN)
-		return nil
-	end
+function M._state()
 	return state
 end
 
-local function state_for_current_buffer()
-	return states[vim.api.nvim_get_current_buf()]
+function M._client()
+	return client
 end
 
-local function add_action(items, label, detail, key, scope, run)
-	table.insert(items, {
-		label = label,
-		detail = detail,
-		key = key,
-		scope = scope,
-		run = run,
-	})
+function M._set_client(value)
+	if client and client ~= value and client.stop then
+		client:stop()
+	end
+	client = value
+	if client and client.set_handlers then
+		client:set_handlers({
+			on_notification = M._handle_notification,
+			on_request = handle_request,
+		})
+	end
 end
 
-local function action_palette_items(state)
-	local items = {}
-
+function M._reset()
+	if client and client.stop then
+		client:stop()
+	end
 	if state then
-		add_action(items, "Send prompt", "Submit the current prompt buffer", "<C-s>", "session", function()
-			M.send()
-		end)
-		add_action(items, "Stop agent", "Stop the active ACP adapter process", "<leader>aq", "session", function()
-			M.stop()
-		end)
-		add_action(items, "Close session", "Close this ACP session and clear its source marks", ":AcpClose", "session", function()
-			M.close()
-		end)
-		add_action(items, "Add context", "Insert captured editor context into the prompt", "<leader>ac", "session", function()
-			M.add_context()
-		end)
-		add_action(items, "Smart context", "Insert source context plus available LSP signals", ":AcpSmartContext", "source+LSP", function()
-			M.add_smart_context()
-		end)
-		add_action(items, "Prompt actions", "Show composer-focused actions and source context preview", "?", "session", function()
-			M.open_prompt_actions()
-		end)
-		add_action(items, "Source actions", "Show actions for the source buffer linked to this session", ":AcpSourceActions", "source", function()
-			M.open_source_actions()
-		end)
-		add_action(items, "Refresh source", "Update this session's source context from the current source cursor or range", ":AcpRefreshSource", "source", function()
-			M.refresh_source()
-		end)
-		add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "session", function()
-			M.open_output()
-		end)
-		add_action(items, "Output map", "Keep a live transcript map beside the output", "<leader>am", "session", function()
-			M.open_output_map()
-		end)
-		add_action(items, "Search output", "Search every non-empty transcript line with context preview", "<leader>ax", "session", function()
-			M.open_output_search()
-		end)
-		add_action(items, "Output items", "Browse references, code blocks, and problems in one picker", "<leader>aO", "session", function()
-			M.open_output_items()
-		end)
-		add_action(items, "Output items quickfix", "Send references, code blocks, and problems to quickfix", ":AcpOutputItemsQuickfix", "session", function()
-			M.open_output_items_quickfix()
-		end)
-		add_action(items, "Yank output section", "Copy the current transcript section into the unnamed register", "<leader>ay", "session", function()
-			M.yank_output_section()
-		end)
-		add_action(items, "Draft from output", "Insert the current transcript section as follow-up prompt context", "<leader>ai", "session", function()
-			M.draft_output_section()
-		end)
-		add_action(items, "Open output item", "Open a transcript file reference or code block under the cursor", "<CR>", "session", function()
-			M.open_output_context()
-		end)
-		add_action(items, "Inspect output item", "Preview the transcript item under the output cursor", "K", "session", function()
-			M.inspect_output()
-		end)
-		add_action(items, "Output actions", "Show cursor-aware actions for the output item", "?", "session", function()
-			M.open_output_actions()
-		end)
-		add_action(items, "Output help", "Show all output-buffer workflows and shortcuts", "<leader>a?", "session", function()
-			M.open_output_help()
-		end)
-		add_action(items, "Code blocks", "Preview and open fenced code from the output", "<leader>ab", "session", function()
-			M.open_code_blocks()
-		end)
-		add_action(items, "Code blocks quickfix", "Send fenced output code blocks to quickfix", ":AcpCodeBlocksQuickfix", "session", function()
-			M.open_code_blocks_quickfix()
-		end)
-		add_action(items, "Draft code block", "Insert the fenced code block under the output cursor into the prompt", ":AcpCodeBlockDraft", "session", function()
-			M.draft_code_block()
-		end)
-		add_action(items, "Yank code block", "Copy the fenced code block under the output cursor", "<leader>aY", "session", function()
-			M.yank_code_block()
-		end)
-		add_action(items, "Output locations", "Preview and jump to file references in the transcript", "<leader>ag", "session", function()
-			M.open_output_locations()
-		end)
-		add_action(items, "Output problems", "Open transcript errors and stderr as native diagnostics", "<leader>ae", "session", function()
-			M.open_output_problems()
-		end)
-		add_action(items, "Output quickfix", "Send transcript file references to quickfix", ":AcpOutputQuickfix", "session", function()
-			M.open_output_quickfix()
-		end)
-		add_action(items, "Changed files", "Preview files changed by this session", "<leader>af", "session", function()
-			M.open_changes()
-		end)
-		add_action(items, "Changed files quickfix", "Send files changed by this session to quickfix", ":AcpChangesQuickfix", "session", function()
-			M.open_changes_quickfix()
-		end)
-		add_action(items, "Diagnostics", "Draft a focused fix from source diagnostics", "<leader>ad", "LSP", function()
-			M.open_diagnostics()
-		end)
-		add_action(items, "Diagnostics quickfix", "Send source diagnostics to quickfix", "<leader>aD", "LSP", function()
-			M.open_diagnostics_quickfix()
-		end)
-		add_action(items, "Workspace diagnostics", "Draft a focused fix from diagnostics across loaded project buffers", ":AcpWorkspaceDiagnostics", "LSP", function()
-			M.open_workspace_diagnostics()
-		end)
-		add_action(items, "Workspace diagnostics quickfix", "Send loaded-buffer diagnostics to quickfix", ":AcpWorkspaceDiagnosticsQuickfix", "LSP", function()
-			M.open_workspace_diagnostics_quickfix()
-		end)
-		add_action(items, "Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
-			M.open_code_actions()
-		end)
-		add_action(items, "Code lens", "Draft from source-buffer LSP code lenses", ":AcpCodeLens", "LSP", function()
-			M.open_code_lens()
-		end)
-		add_action(items, "Code lens quickfix", "Send source-buffer LSP code lenses to quickfix", ":AcpCodeLensQuickfix", "LSP", function()
-			M.open_code_lens_quickfix()
-		end)
-		add_action(items, "Document colors", "Show source-buffer LSP document colors as visual swatches", ":AcpDocumentColors", "LSP", function()
-			M.open_document_colors()
-		end)
-		add_action(items, "Document colors quickfix", "Send source-buffer LSP document colors to quickfix", ":AcpDocumentColorsQuickfix", "LSP", function()
-			M.open_document_colors_quickfix()
-		end)
-		add_action(items, "Clear document colors", "Clear source-buffer LSP document-color swatches", ":AcpClearDocumentColors", "LSP", function()
-			M.clear_document_colors()
-		end)
-		add_action(items, "Document links", "Pick source-buffer LSP document links as focused context", ":AcpDocumentLinks", "LSP", function()
-			M.open_document_links()
-		end)
-		add_action(items, "Document links quickfix", "Send source-buffer LSP document links to quickfix", ":AcpDocumentLinksQuickfix", "LSP", function()
-			M.open_document_links_quickfix()
-		end)
-		add_action(items, "Clear document links", "Clear source-buffer LSP document-link badges", ":AcpClearDocumentLinks", "LSP", function()
-			M.clear_document_links()
-		end)
-		add_action(items, "Folding ranges", "Pick source-buffer LSP folding ranges as focused context", ":AcpFoldingRanges", "LSP", function()
-			M.open_folding_ranges()
-		end)
-		add_action(items, "Folding ranges quickfix", "Send source-buffer LSP folding ranges to quickfix", ":AcpFoldingRangesQuickfix", "LSP", function()
-			M.open_folding_ranges_quickfix()
-		end)
-		add_action(items, "Clear folding ranges", "Clear source-buffer LSP folding-range overlays", ":AcpClearFoldingRanges", "LSP", function()
-			M.clear_folding_ranges()
-		end)
-		add_action(items, "Rename symbol", "Draft an LSP prepare-rename request for the source cursor", ":AcpRename", "LSP", function()
-			M.rename_symbol()
-		end)
-		add_action(items, "Hover context", "Insert LSP hover documentation into the prompt", "<leader>ah", "LSP", function()
-			M.add_hover()
-		end)
-		add_action(items, "Signature help", "Insert LSP signature help into the prompt", ":AcpSignature", "LSP", function()
-			M.add_signature()
-		end)
-		add_action(items, "Inlay hints", "Pick LSP inlay hints as focused source context", ":AcpInlayHints", "LSP", function()
-			M.open_inlay_hints()
-		end)
-		add_action(items, "Selection ranges", "Pick LSP semantic ranges around the source cursor", ":AcpSelectionRanges", "LSP", function()
-			M.open_selection_ranges()
-		end)
-		add_action(items, "Callers", "Pick incoming LSP call hierarchy entries as focused context", ":AcpCallers", "LSP", function()
-			M.open_callers()
-		end)
-		add_action(items, "Callers quickfix", "Send incoming LSP call hierarchy entries to quickfix", ":AcpCallersQuickfix", "LSP", function()
-			M.open_callers_quickfix()
-		end)
-		add_action(items, "Callees", "Pick outgoing LSP call hierarchy entries as focused context", ":AcpCallees", "LSP", function()
-			M.open_callees()
-		end)
-		add_action(items, "Callees quickfix", "Send outgoing LSP call hierarchy entries to quickfix", ":AcpCalleesQuickfix", "LSP", function()
-			M.open_callees_quickfix()
-		end)
-		add_action(items, "Supertypes", "Pick LSP type hierarchy supertypes as focused context", ":AcpSupertypes", "LSP", function()
-			M.open_supertypes()
-		end)
-		add_action(items, "Supertypes quickfix", "Send LSP type hierarchy supertypes to quickfix", ":AcpSupertypesQuickfix", "LSP", function()
-			M.open_supertypes_quickfix()
-		end)
-		add_action(items, "Subtypes", "Pick LSP type hierarchy subtypes as focused context", ":AcpSubtypes", "LSP", function()
-			M.open_subtypes()
-		end)
-		add_action(items, "Subtypes quickfix", "Send LSP type hierarchy subtypes to quickfix", ":AcpSubtypesQuickfix", "LSP", function()
-			M.open_subtypes_quickfix()
-		end)
-		add_action(items, "LSP highlights", "Show source-buffer LSP read/write highlights", "<leader>aH", "LSP", function()
-			M.open_highlights()
-		end)
-		add_action(items, "Clear highlights", "Clear source-buffer LSP highlight marks", ":AcpClearHighlights", "LSP", function()
-			M.clear_highlights()
-		end)
-		add_action(items, "References", "Pick LSP references as focused context", "<leader>ar", "LSP", function()
-			M.open_references()
-		end)
-		add_action(items, "References quickfix", "Send source-buffer LSP references to quickfix", "<leader>aR", "LSP", function()
-			M.open_references_quickfix()
-		end)
-		add_action(items, "Declarations", "Pick LSP declarations as focused context", "<leader>aC", "LSP", function()
-			M.open_declarations()
-		end)
-		add_action(items, "Declarations quickfix", "Send source-buffer LSP declarations to quickfix", ":AcpDeclarationsQuickfix", "LSP", function()
-			M.open_declarations_quickfix()
-		end)
-		add_action(items, "Definitions", "Pick LSP definitions as focused context", "<leader>aG", "LSP", function()
-			M.open_definitions()
-		end)
-		add_action(items, "Definitions quickfix", "Send source-buffer LSP definitions to quickfix", ":AcpDefinitionsQuickfix", "LSP", function()
-			M.open_definitions_quickfix()
-		end)
-		add_action(items, "Implementations", "Pick LSP implementations as focused context", "<leader>aI", "LSP", function()
-			M.open_implementations()
-		end)
-		add_action(items, "Implementations quickfix", "Send source-buffer LSP implementations to quickfix", ":AcpImplementationsQuickfix", "LSP", function()
-			M.open_implementations_quickfix()
-		end)
-		add_action(items, "Type definitions", "Pick LSP type definitions as focused context", "<leader>aT", "LSP", function()
-			M.open_type_definitions()
-		end)
-		add_action(items, "Type definitions quickfix", "Send source-buffer LSP type definitions to quickfix", ":AcpTypeDefinitionsQuickfix", "LSP", function()
-			M.open_type_definitions_quickfix()
-		end)
-		add_action(items, "Workspace symbols", "Search LSP workspace symbols as focused context", "<leader>aw", "LSP", function()
-			M.open_workspace_symbols()
-		end)
-		add_action(items, "Workspace symbols quickfix", "Send LSP workspace symbols to quickfix", ":AcpWorkspaceSymbolsQuickfix", "LSP", function()
-			M.open_workspace_symbols_quickfix()
-		end)
-		add_action(items, "Symbols", "Pick LSP document symbols as focused context", "<leader>al", "LSP", function()
-			M.open_symbols()
-		end)
-		add_action(items, "Symbols quickfix", "Send source-buffer LSP symbols to quickfix", "<leader>aL", "LSP", function()
-			M.open_symbols_quickfix()
-		end)
-		add_action(items, "Tree-sitter nodes", "Pick syntax-aware source context", "<leader>at", "Tree-sitter", function()
-			M.open_treesitter()
-		end)
-		add_action(items, "Slash commands", "Draft an adapter-advertised slash command", "<leader>a/", "session", function()
-			M.open_commands()
-		end)
-		add_action(items, "Config options", "Pick adapter-advertised session config", "<leader>ao", "session", function()
-			M.open_config()
-		end)
-	else
-		add_action(items, "New chat", "Open the default ACP chat layout", ":AcpChat", "global", function()
-			M.open(config.default_adapter, { mode = config.default_mode })
-		end)
-		add_action(items, "Chat with context", "Open chat with source context prefilled", ":AcpChatContext", "global", function()
-			M.open(config.default_adapter, { mode = config.default_mode, draft = "context" })
-		end)
-		add_action(items, "Review source", "Open a review-focused chat draft", ":AcpReview", "global", function()
-			M.open(config.default_adapter, { mode = config.default_mode, draft = "review" })
-		end)
-	end
-
-	add_action(items, "Sessions", "Focus or pick an open ACP session", ":AcpSessions", "global", function()
-		M.focus_sessions()
-	end)
-	add_action(items, "Close all sessions", "Close every open ACP session", ":AcpCloseAll", "global", function()
-		M.close_all()
-	end)
-	add_action(items, "Restore session", "Restore an adapter-backed ACP session", ":AcpRestore", "global", function()
-		M.restore(config.default_adapter)
-	end)
-	add_action(items, "History", "Browse saved plain-text transcripts", ":AcpHistory", "global", function()
-		history.open_browser()
-	end)
-
-	return items
-end
-
-local function open_action_palette(state, origin_win)
-	local action_items = action_palette_items(state)
-	local lines, line_actions = actions.picker_lines(action_items)
-	picker.open({
-		name = "ACP://actions",
-		filetype = "acp-actions",
-		lines = lines,
-		title = " ACP actions ",
-		title_icon = icons.action,
-		submit_desc = "Run ACP action",
-		close_desc = "Close ACP actions",
-		preview = actions.previewer(line_actions),
-		on_submit = function(row, view)
-			local action = line_actions[row]
-			if not action then
-				return
-			end
-
-			view.close()
-			if valid_win(origin_win) then
-				vim.api.nvim_set_current_win(origin_win)
-			end
-			action.run()
-		end,
-	})
-end
-
-local function focus_session(state)
-	if not state or state.closed then
-		notify("ACP session is no longer available", vim.log.levels.WARN)
-		return
-	end
-
-	if state.mode == "tab" and state.tabpage and vim.api.nvim_tabpage_is_valid(state.tabpage) then
-		vim.api.nvim_set_current_tabpage(state.tabpage)
-	end
-
-	apply_layout(state)
-
-	if valid_win(state.input_win) then
-		vim.api.nvim_set_current_win(state.input_win)
-	elseif valid_win(state.output_win) then
-		vim.api.nvim_set_current_win(state.output_win)
-	end
-
-	refresh_session_panels()
-end
-
-local function current_source_action_state()
-	local state = state_for_current_buffer()
-	if state then
-		return state
-	end
-
-	local linked = linked_source_states(vim.api.nvim_get_current_buf())
-	if #linked == 0 then
-		notify("Current buffer is not linked to an ACP source context", vim.log.levels.WARN)
-		return nil
-	end
-	return linked[#linked]
-end
-
-local function add_marked_source_context(state)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	local rendered = context.render(state.source)
-	if not rendered then
-		notify("No editor context is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	append_input_text(state, rendered)
-	focus_session(state)
-	return true
-end
-
-local function refresh_source_context(state, opts)
-	opts = opts or {}
-	if not state then
-		return false
-	end
-
-	local current_state = state_for_current_buffer()
-	local bufnr
-	local winid
-	local range
-	if current_state == state then
-		if not state.source or not valid_buf(state.source.bufnr) then
-			notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-			return false
-		end
-		bufnr = state.source.bufnr
-		winid = state.source.winid
-		range = opts.range or state.source.range
-	else
-		bufnr = vim.api.nvim_get_current_buf()
-		winid = vim.api.nvim_get_current_win()
-		range = opts.range
-	end
-
-	if not valid_buf(bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	clear_source_marks(state)
-	unlink_source_state(state)
-	state.source = context.capture(bufnr, winid, range)
-	state.source_highlights = nil
-	link_source_state(state)
-	refresh_source_marks(state)
-	refresh_output_chrome(state)
-	refresh_prompt_chrome(state)
-	refresh_session_panels()
-	return true
-end
-
-local function source_action_items(state)
-	local items = {}
-
-	local function add(label, detail, key, scope, run)
-		table.insert(items, {
-			label = label,
-			detail = detail,
-			key = key,
-			scope = scope,
-			run = run,
-		})
-	end
-
-	add("Focus chat", "Jump to the ACP prompt linked to this source context", ":AcpSourceActions", "source", function()
-		focus_session(state)
-	end)
-	add("Add marked context", "Insert this marked source range into the prompt", "<leader>ac", "source", function()
-		add_marked_source_context(state)
-	end)
-	add("Smart context", "Insert source context plus available LSP signals", ":AcpSmartContext", "source+LSP", function()
-		focus_session(state)
-		M.add_smart_context()
-	end)
-	add("Refresh source", "Update this ACP session to the current source cursor or range", ":AcpRefreshSource", "source", function()
-		refresh_source_context(state)
-	end)
-	add("Prompt actions", "Open composer-focused actions for the linked ACP session", "?", "prompt", function()
-		focus_session(state)
-		M.open_prompt_actions()
-	end)
-	add("Source diagnostics", "Draft a focused fix from diagnostics in the marked source", "<leader>ad", "LSP", function()
-		focus_session(state)
-		M.open_diagnostics()
-	end)
-	add("Diagnostics quickfix", "Send diagnostics in the marked source to quickfix", "<leader>aD", "LSP", function()
-		focus_session(state)
-		M.open_diagnostics_quickfix()
-	end)
-	add("Code actions", "Draft from source-buffer LSP code actions", "<leader>aa", "LSP", function()
-		focus_session(state)
-		M.open_code_actions()
-	end)
-	add("Hover context", "Insert LSP hover documentation from the source cursor", "<leader>ah", "LSP", function()
-		focus_session(state)
-		M.add_hover()
-	end)
-	add("Signature help", "Insert LSP signature help from the source cursor", ":AcpSignature", "LSP", function()
-		focus_session(state)
-		M.add_signature()
-	end)
-	add("Inlay hints", "Pick LSP inlay hints from the source cursor", ":AcpInlayHints", "LSP", function()
-		focus_session(state)
-		M.open_inlay_hints()
-	end)
-	add("Selection ranges", "Pick LSP semantic ranges from the source cursor", ":AcpSelectionRanges", "LSP", function()
-		focus_session(state)
-		M.open_selection_ranges()
-	end)
-	add("Callers", "Pick incoming LSP call hierarchy entries from the source cursor", ":AcpCallers", "LSP", function()
-		focus_session(state)
-		M.open_callers()
-	end)
-	add("Callers quickfix", "Send incoming LSP call hierarchy entries to quickfix", ":AcpCallersQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_callers_quickfix()
-	end)
-	add("Callees", "Pick outgoing LSP call hierarchy entries from the source cursor", ":AcpCallees", "LSP", function()
-		focus_session(state)
-		M.open_callees()
-	end)
-	add("Callees quickfix", "Send outgoing LSP call hierarchy entries to quickfix", ":AcpCalleesQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_callees_quickfix()
-	end)
-	add("Supertypes", "Pick LSP type hierarchy supertypes from the source cursor", ":AcpSupertypes", "LSP", function()
-		focus_session(state)
-		M.open_supertypes()
-	end)
-	add("Supertypes quickfix", "Send LSP type hierarchy supertypes to quickfix", ":AcpSupertypesQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_supertypes_quickfix()
-	end)
-	add("Subtypes", "Pick LSP type hierarchy subtypes from the source cursor", ":AcpSubtypes", "LSP", function()
-		focus_session(state)
-		M.open_subtypes()
-	end)
-	add("Subtypes quickfix", "Send LSP type hierarchy subtypes to quickfix", ":AcpSubtypesQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_subtypes_quickfix()
-	end)
-	add("LSP highlights", "Show LSP read/write highlights from the source cursor", "<leader>aH", "LSP", function()
-		focus_session(state)
-		M.open_highlights()
-	end)
-	add("Document colors", "Show LSP document colors as source swatches", ":AcpDocumentColors", "LSP", function()
-		focus_session(state)
-		M.open_document_colors()
-	end)
-	add("Document colors quickfix", "Send LSP document colors to quickfix", ":AcpDocumentColorsQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_document_colors_quickfix()
-	end)
-	add("Clear document colors", "Clear LSP document-color swatches", ":AcpClearDocumentColors", "LSP", function()
-		focus_session(state)
-		M.clear_document_colors()
-	end)
-	add("Document links", "Pick LSP document links from the source buffer", ":AcpDocumentLinks", "LSP", function()
-		focus_session(state)
-		M.open_document_links()
-	end)
-	add("Document links quickfix", "Send LSP document links to quickfix", ":AcpDocumentLinksQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_document_links_quickfix()
-	end)
-	add("Clear document links", "Clear LSP document-link badges", ":AcpClearDocumentLinks", "LSP", function()
-		focus_session(state)
-		M.clear_document_links()
-	end)
-	add("Folding ranges", "Pick LSP folding ranges from the source buffer", ":AcpFoldingRanges", "LSP", function()
-		focus_session(state)
-		M.open_folding_ranges()
-	end)
-	add("Folding ranges quickfix", "Send LSP folding ranges to quickfix", ":AcpFoldingRangesQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_folding_ranges_quickfix()
-	end)
-	add("Clear folding ranges", "Clear LSP folding-range overlays", ":AcpClearFoldingRanges", "LSP", function()
-		focus_session(state)
-		M.clear_folding_ranges()
-	end)
-	add("Clear highlights", "Clear LSP highlight marks in the source buffer", ":AcpClearHighlights", "LSP", function()
-		focus_session(state)
-		M.clear_highlights()
-	end)
-	add("References", "Pick LSP references from the source cursor", "<leader>ar", "LSP", function()
-		focus_session(state)
-		M.open_references()
-	end)
-	add("References quickfix", "Send LSP references from the source cursor to quickfix", "<leader>aR", "LSP", function()
-		focus_session(state)
-		M.open_references_quickfix()
-	end)
-	add("Declarations", "Pick LSP declarations from the source cursor", "<leader>aC", "LSP", function()
-		focus_session(state)
-		M.open_declarations()
-	end)
-	add("Declarations quickfix", "Send LSP declarations from the source cursor to quickfix", ":AcpDeclarationsQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_declarations_quickfix()
-	end)
-	add("Definitions", "Pick LSP definitions from the source cursor", "<leader>aG", "LSP", function()
-		focus_session(state)
-		M.open_definitions()
-	end)
-	add("Definitions quickfix", "Send LSP definitions from the source cursor to quickfix", ":AcpDefinitionsQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_definitions_quickfix()
-	end)
-	add("Implementations", "Pick LSP implementations from the source cursor", "<leader>aI", "LSP", function()
-		focus_session(state)
-		M.open_implementations()
-	end)
-	add("Implementations quickfix", "Send LSP implementations from the source cursor to quickfix", ":AcpImplementationsQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_implementations_quickfix()
-	end)
-	add("Type definitions", "Pick LSP type definitions from the source cursor", "<leader>aT", "LSP", function()
-		focus_session(state)
-		M.open_type_definitions()
-	end)
-	add("Type definitions quickfix", "Send LSP type definitions from the source cursor to quickfix", ":AcpTypeDefinitionsQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_type_definitions_quickfix()
-	end)
-	add("Workspace symbols", "Search LSP workspace symbols from the source word", "<leader>aw", "LSP", function()
-		focus_session(state)
-		M.open_workspace_symbols()
-	end)
-	add("Workspace symbols quickfix", "Send LSP workspace symbols to quickfix", ":AcpWorkspaceSymbolsQuickfix", "LSP", function()
-		focus_session(state)
-		M.open_workspace_symbols_quickfix()
-	end)
-	add("Symbols", "Pick LSP document symbols from the source buffer", "<leader>al", "LSP", function()
-		focus_session(state)
-		M.open_symbols()
-	end)
-	add("Symbols quickfix", "Send LSP document symbols from the source buffer to quickfix", "<leader>aL", "LSP", function()
-		focus_session(state)
-		M.open_symbols_quickfix()
-	end)
-	add("Tree-sitter nodes", "Pick syntax-aware source context around the captured cursor", "<leader>at", "Tree-sitter", function()
-		focus_session(state)
-		M.open_treesitter()
-	end)
-	add("Search output", "Search the linked ACP transcript with previews", "<leader>ax", "output", function()
-		focus_session(state)
-		M.open_output_search()
-	end)
-	add("Output map", "Keep a live transcript map beside the linked output", "<leader>am", "output", function()
-		focus_session(state)
-		M.open_output_map()
-	end)
-	add("Output items", "Browse references, code blocks, and problems in the linked transcript", "<leader>aO", "output", function()
-		focus_session(state)
-		M.open_output_items()
-	end)
-
-	return items
-end
-
-local function open_source_actions(state)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_actions = actions.picker_lines(source_action_items(state))
-	local origin_win = vim.api.nvim_get_current_win()
-	picker.open({
-		name = ("ACP://%s/%d/source-actions"):format(state.adapter, state.id),
-		filetype = "acp-source-actions",
-		lines = lines,
-		title = " ACP source actions ",
-		title_icon = icons.source,
-		submit_desc = "Run ACP source action",
-		close_desc = "Close ACP source actions",
-		preview = actions.previewer(line_actions, function()
-			return source_preview(
-				state.source.bufnr,
-				source_range(state.source),
-				(" ACP source #%d "):format(state.id)
-			)
-		end),
-		on_submit = function(row, view)
-			local action = line_actions[row]
-			if not action then
-				return
-			end
-
-			view.close()
-			if valid_win(origin_win) then
-				vim.api.nvim_set_current_win(origin_win)
-			end
-			action.run()
-		end,
-	})
-	return true
-end
-
-local function session_picker_lines(list)
-	local chrome = require("acp.picker_chrome")
-	local icons = require("acp.icons")
-	local lines = { chrome.title(icons.session, "ACP Sessions"), "" }
-	local line_ids = {}
-	for index, session in ipairs(list) do
-		local model = session.model and session.model ~= "" and (" " .. session.model) or ""
-		table.insert(lines, chrome.row(index, icons.session, ("#%d %s%s"):format(session.id, session.adapter, model)))
-		line_ids[#lines] = session.id
-		table.insert(lines, chrome.detail(session.busy and icons.busy or icons.status, session_status(session)))
-		line_ids[#lines] = session.id
-	end
-
-	table.insert(lines, "")
-	table.insert(lines, chrome.footer("Press <Enter> to focus, or q/<Esc> to close."))
-	return lines, line_ids
-end
-
-local function session_picker_preview(state)
-	if not state then
-		return nil
-	end
-
-	local chrome = require("acp.picker_chrome")
-	local icons = require("acp.icons")
-	local lines = { chrome.title(icons.session, "ACP Session Preview"), "" }
-	table.insert(lines, ("Session: #%d %s %s"):format(state.id or 0, state.adapter or "?", icons.session))
-	table.insert(lines, ("Status: %s %s"):format(session_status(state), state.busy and icons.busy or icons.status))
-	if state.model and state.model ~= "" then
-		table.insert(lines, ("Model: %s %s"):format(state.model, icons.model))
-	end
-	if state.context_window then
-		table.insert(lines, ("Context window: %s %s"):format(format_count(state.context_window), icons.context))
-	end
-	local change_count = changes.count(state)
-	if change_count > 0 then
-		table.insert(lines, ("Changed files: %d %s"):format(change_count, icons.changes))
-	end
-
-	table.insert(lines, "")
-	table.insert(lines, chrome.title(icons.source, "Source"))
-	if state.source and valid_buf(state.source.bufnr) then
-		local name = vim.api.nvim_buf_get_name(state.source.bufnr)
-		local path = name ~= "" and vim.fn.fnamemodify(name, ":.") or "[No Name]"
-		table.insert(lines, ("File: %s %s"):format(path, icons.file))
-		if state.source.range then
-			table.insert(lines, ("Selection: lines %d-%d %s"):format(state.source.range.line1, state.source.range.line2, icons.scope))
-		elseif state.source.cursor then
-			table.insert(lines, ("Cursor: %d:%d %s"):format(state.source.cursor[1] or 1, (state.source.cursor[2] or 0) + 1, icons.location))
-		end
-	else
-		table.insert(lines, ("%s No source buffer"):format(icons.warning))
-	end
-
-	table.insert(lines, "")
-	table.insert(lines, chrome.title(icons.history, "Transcript"))
-	if valid_buf(state.output_buf) then
-		local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-		local tail = {}
-		for index = #output_lines, 1, -1 do
-			local line = output_lines[index]
-			if line and line ~= "" then
-				table.insert(tail, 1, line)
-				if #tail >= 12 then
-					break
-				end
-			end
-		end
-		if #tail > 0 then
-			vim.list_extend(lines, tail)
-		else
-			table.insert(lines, ("%s No transcript output yet"):format(icons.note))
-		end
-	else
-		table.insert(lines, ("%s No output buffer"):format(icons.warning))
-	end
-
-	return {
-		lines = lines,
-		filetype = "acp",
-		title = (" %s ACP session #%s "):format(icons.session, tostring(state.id or "?")),
-	}
-end
-
-local function open_session_picker()
-	local list = sorted_sessions()
-	if #list == 0 then
-		notify("No ACP sessions open", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_ids = session_picker_lines(list)
-	picker.open({
-		name = "ACP://sessions",
-		filetype = "acp-sessions",
-		lines = lines,
-		title = " ACP sessions ",
-		title_icon = icons.session,
-		submit_desc = "Focus ACP session",
-		close_desc = "Close ACP sessions",
-		preview = function(row)
-			return session_picker_preview(sessions[line_ids[row]])
-		end,
-		on_submit = function(row, view)
-			local id = line_ids[row]
-			view.close()
-			focus_session(sessions[id])
-		end,
-	})
-
-	return true
-end
-
-local function open_restore_picker(adapter_name, connection, list)
-	local lines, line_sessions = session_view.restore_lines(list)
-	picker.open({
-		name = ("ACP://%s/restore"):format(adapter_name),
-		filetype = "acp-sessions",
-		lines = lines,
-		title = " ACP restore ",
-		title_icon = icons.restore,
-		submit_desc = "Restore ACP adapter session",
-		close_desc = "Close ACP restore sessions",
-		preview = function(row)
-			return session_view.restore_preview(line_sessions[row])
-		end,
-		on_submit = function(row, view)
-			local session = line_sessions[row]
-			if not session then
-				return
-			end
-			view.close()
-			M.open(adapter_name, {
-				mode = config.default_mode,
-				connection = connection,
-				restore_session = session,
-			})
-		end,
-		on_cancel = function()
-			connection:stop()
-		end,
-	})
-
-	return true
-end
-
-local function open_command_picker(state)
-	local available_commands = state.available_commands or {}
-	if #available_commands == 0 then
-		notify("No ACP commands advertised for this session", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_commands = acp_commands.picker_lines(available_commands)
-	picker.open({
-		name = ("ACP://%s/%d/commands"):format(state.adapter, state.id),
-		filetype = "acp-sessions",
-		lines = lines,
-		title = " ACP commands ",
-		title_icon = icons.command,
-		submit_desc = "Draft ACP slash command",
-		close_desc = "Close ACP commands",
-		preview = function(row)
-			return acp_commands.preview(line_commands[row])
-		end,
-		on_submit = function(row, view)
-			local command = line_commands[row]
-			local text = acp_commands.slash_text(command)
-			if not text then
-				return
-			end
-			view.close()
-			set_input_text(state, text)
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	return true
-end
-
-local function open_diagnostics_quickfix(state, items)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	items = items or diagnostics.items(state.source.bufnr, {
-		range = state.source.range,
-	})
-	if #items == 0 then
-		notify("No diagnostics found for the source buffer or range", vim.log.levels.WARN)
-		return false
-	end
-
-	vim.fn.setqflist({}, " ", {
-		title = icons.quickfix_title(("ACP diagnostics #%s"):format(tostring(state.id or "?"))),
-		items = diagnostics.quickfix_items(state.source.bufnr, items),
-	})
-	vim.cmd("copen")
-	return true
-end
-
-local function open_diagnostic_picker(state)
-	local items = diagnostics.items(state.source and state.source.bufnr, {
-		range = state.source and state.source.range,
-	})
-	if #items == 0 then
-		notify("No diagnostics found for the source buffer or range", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_items = diagnostics.picker_lines(items)
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/diagnostics"):format(state.adapter, state.id),
-		filetype = "acp-diagnostics",
-		lines = lines,
-		title = " ACP diagnostics ",
-		title_icon = icons.diagnostics,
-		submit_desc = "Draft ACP diagnostic fix",
-		close_desc = "Close ACP diagnostics",
-		preview = function(row)
-			local item = line_items[row]
-			if not item then
-				return nil
-			end
-			return source_preview(
-				state.source.bufnr,
-				diagnostics.range(item),
-				(" Diagnostic %s "):format(diagnostics.severity_name(item.severity))
-			)
-		end,
-		on_submit = function(row, view)
-			local item = line_items[row]
-			if not item then
-				return
-			end
-			local prompt = diagnostic_item_prompt(state.source, item)
-			if not prompt then
-				notify("Failed to render diagnostic context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("diagnostic: %s"):format(diagnostics.severity_name(item.severity)))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		open_diagnostics_quickfix(state, items)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP diagnostics quickfix" })
-
-	return true
-end
-
-function M._open_workspace_diagnostics_quickfix(state, items)
-	items = items or diagnostics.workspace_items()
-	if #items == 0 then
-		notify("No diagnostics found in loaded project buffers", vim.log.levels.WARN)
-		return false
-	end
-
-	vim.fn.setqflist({}, " ", {
-		title = icons.quickfix_title(("ACP workspace diagnostics #%s"):format(tostring(state and state.id or "?"))),
-		items = diagnostics.quickfix_items(items),
-	})
-	vim.cmd("copen")
-	return true
-end
-
-function M._open_workspace_diagnostic_picker(state)
-	local items = diagnostics.workspace_items()
-	if #items == 0 then
-		notify("No diagnostics found in loaded project buffers", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_items = diagnostics.picker_lines(items)
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/workspace-diagnostics"):format(state.adapter, state.id),
-		filetype = "acp-workspace-diagnostics",
-		lines = lines,
-		title = " ACP workspace diagnostics ",
-		title_icon = icons.diagnostics,
-		submit_desc = "Draft ACP workspace diagnostic fix",
-		close_desc = "Close ACP workspace diagnostics",
-		preview = function(row)
-			local item = line_items[row]
-			if not (item and item.bufnr and valid_buf(item.bufnr)) then
-				return nil
-			end
-			return source_preview(
-				item.bufnr,
-				diagnostics.range(item),
-				(" Diagnostic %s "):format(diagnostics.severity_name(item.severity))
-			)
-		end,
-		on_submit = function(row, view)
-			local item = line_items[row]
-			if not (item and item.bufnr and valid_buf(item.bufnr)) then
-				return
-			end
-			local source = {
-				bufnr = item.bufnr,
-				winid = vim.fn.bufwinid(item.bufnr),
-			}
-			local prompt = diagnostic_item_prompt(source, item)
-			if not prompt then
-				notify("Failed to render diagnostic context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("workspace diagnostic: %s"):format(diagnostics.severity_name(item.severity)))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		M._open_workspace_diagnostics_quickfix(state, items)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP workspace diagnostics quickfix" })
-
-	return true
-end
-
-local function open_config_value_picker(state, option)
-	local lines, line_values = acp_config.value_lines(option)
-	picker.open({
-		name = ("ACP://%s/%d/config/%s"):format(state.adapter, state.id, option.id),
-		filetype = "acp-sessions",
-		lines = lines,
-		title = " ACP config value ",
-		title_icon = icons.config,
-		submit_desc = "Set ACP config option",
-		close_desc = "Close ACP config values",
-		preview = function(row)
-			return acp_config.value_preview(option, line_values[row])
-		end,
-		on_submit = function(row, view)
-			local choice = line_values[row]
-			if not choice then
-				return
-			end
-
-			view.close()
-			local option_name = acp_config.option_label(option)
-			local value_name = acp_config.value_label(option, choice.value)
-			set_run_status(state, ("setting config: %s"):format(option_name))
-			local ok = state.connection:set_config_option_async(option.id, choice.value, function(success, result_or_err)
-				if not success then
-					set_run_status(state, ("error: %s"):format(result_or_err))
-					return
-				end
-
-				if type(result_or_err) == "table" and type(result_or_err.configOptions) == "table" then
-					state.config_options = result_or_err.configOptions
-				end
-				set_run_status(state, ("config: %s = %s"):format(option_name, value_name))
-				refresh_session_panels()
-			end)
-
-			if not ok then
-				set_run_status(state, "error: failed to set config option")
-			end
-		end,
-	})
-
-	return true
-end
-
-local function open_config_picker(state)
-	if #acp_config.select_options(state.config_options) == 0 then
-		if not state.connection.session_id then
-			set_run_status(state, "loading config")
-			local ok = state.connection:ensure_session_async(function(success, result_or_err, session_result)
-				if not success then
-					set_run_status(state, ("error: %s"):format(result_or_err or "failed to load config"))
-					return
-				end
-				if type(session_result) == "table" and type(session_result.configOptions) == "table" then
-					state.config_options = session_result.configOptions
-				end
-				open_config_picker(state)
-			end)
-			if not ok then
-				set_run_status(state, "error: failed to load config")
-			end
-			return ok
-		end
-
-		notify("No ACP config options advertised for this session", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_options = acp_config.picker_lines(state.config_options)
-	picker.open({
-		name = ("ACP://%s/%d/config"):format(state.adapter, state.id),
-		filetype = "acp-sessions",
-		lines = lines,
-		title = " ACP config ",
-		title_icon = icons.config,
-		submit_desc = "Open ACP config values",
-		close_desc = "Close ACP config",
-		preview = function(row)
-			return acp_config.preview(line_options[row])
-		end,
-		on_submit = function(row, view)
-			local option = line_options[row]
-			if not option then
-				return
-			end
-			view.close()
-			open_config_value_picker(state, option)
-		end,
-	})
-
-	return true
-end
-
-local function open_code_action_picker(state, action_list)
-	if not action_list or #action_list == 0 then
-		notify("No LSP code actions found for the source range", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_actions = code_actions.picker_lines(action_list)
-	picker.open({
-		name = ("ACP://%s/%d/code-actions"):format(state.adapter, state.id),
-		filetype = "acp-code-actions",
-		lines = lines,
-		title = " ACP code actions ",
-		title_icon = icons.action,
-		submit_desc = "Draft ACP code action",
-		close_desc = "Close ACP code actions",
-		preview = function(row)
-			local action = line_actions[row]
-			if not action then
-				return nil
-			end
-			return source_preview(
-				state.source.bufnr,
-				source_range(state.source),
-				(" Code action %s "):format(action.title)
-			)
-		end,
-		on_submit = function(row, view)
-			local action = line_actions[row]
-			if not action then
-				return
-			end
-			local prompt = code_action_prompt(state.source, action)
-			if not prompt then
-				notify("Failed to render LSP code action context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("code action: %s"):format(action.title))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	return true
-end
-
-local function request_lsp_locations(source, method, callback, opts)
-	opts = opts or {}
-	if not vim.lsp or not vim.lsp.buf_request_all then
-		callback(nil, opts.unavailable or "Neovim LSP location requests are unavailable")
-		return false
-	end
-
-	local cursor = source.cursor or { 1, 0 }
-	local params = {
-		textDocument = {
-			uri = vim.uri_from_bufnr(source.bufnr),
-		},
-		position = {
-			line = math.max(0, (cursor[1] or 1) - 1),
-			character = math.max(0, cursor[2] or 0),
-		},
-	}
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, source.bufnr, method, params, function(results)
-		local raw_locations = {}
-		for _, response in pairs(results or {}) do
-			if type(response) == "table" then
-				vim.list_extend(raw_locations, references.flatten(response.result))
-			end
-		end
-		callback(raw_locations, nil)
-	end)
-
-	if not ok then
-		callback(nil, request_ids)
-		return false
-	end
-	if type(request_ids) == "table" and next(request_ids) == nil then
-		callback(nil, opts.unsupported or "No attached LSP client supports this location request")
-		return false
-	end
-	return true
-end
-
-local function request_lsp_symbols(bufnr, callback)
-	if not vim.lsp or not vim.lsp.buf_request_all then
-		callback(nil, "Neovim LSP document-symbol requests are unavailable")
-		return false
-	end
-
-	local params = {
-		textDocument = {
-			uri = vim.uri_from_bufnr(bufnr),
-		},
-	}
-	local ok, request_ids = pcall(vim.lsp.buf_request_all, bufnr, "textDocument/documentSymbol", params, function(results)
-		local raw_symbols = {}
-		for _, response in pairs(results or {}) do
-			if type(response) == "table" and type(response.result) == "table" then
-				vim.list_extend(raw_symbols, response.result)
-			end
-		end
-		callback(symbols.flatten(raw_symbols), nil)
-	end)
-
-	if not ok then
-		callback(nil, request_ids)
-		return false
-	end
-	if type(request_ids) == "table" and next(request_ids) == nil then
-		callback(nil, "No attached LSP client supports document symbols")
-		return false
-	end
-	return true
-end
-
-local function open_symbols_quickfix(state, symbol_list)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	local function open_items(list)
-		if not list or #list == 0 then
-			notify("No LSP symbols found for the source buffer", vim.log.levels.WARN)
-			return false
-		end
-
-		local items = symbols.quickfix_items(state.source.bufnr, list)
-		if #items == 0 then
-			notify("No quickfix-ready LSP symbols found", vim.log.levels.WARN)
-			return false
-		end
-
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP symbols #%s"):format(tostring(state.id or "?"))),
-			items = items,
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, "symbols quickfix")
-		end
-		return true
-	end
-
-	if symbol_list then
-		return open_items(symbol_list)
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading symbols quickfix")
-	end
-	request_lsp_symbols(state.source.bufnr, function(list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(list)
-	end)
-	return true
-end
-
-local function open_symbol_picker(state, symbol_list)
-	if not symbol_list or #symbol_list == 0 then
-		notify("No LSP symbols found for the source buffer", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_symbols = symbols.picker_lines(symbol_list)
-	local view = picker.open({
-		name = ("ACP://%s/%d/symbols"):format(state.adapter, state.id),
-		filetype = "acp-symbols",
-		lines = lines,
-		title = " ACP symbols ",
-		title_icon = icons.symbol,
-		submit_desc = "Add ACP symbol context",
-		close_desc = "Close ACP symbols",
-		preview = function(row)
-			local symbol = line_symbols[row]
-			if not symbol then
-				return nil
-			end
-			local line1, line2 = symbols.range_lines(symbol)
-			if not line1 then
-				return nil
-			end
-			return source_preview(
-				state.source.bufnr,
-				{ line1 = line1, line2 = line2 },
-				(" Symbol %s "):format(symbol.name)
-			)
-		end,
-		on_submit = function(row, view)
-			local symbol = line_symbols[row]
-			if not symbol then
-				return
-			end
-			local prompt = symbol_prompt(state.source, symbol)
-			if not prompt then
-				notify("Failed to render LSP symbol context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("symbol context: %s"):format(symbol.name))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		open_symbols_quickfix(state, symbol_list)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP symbols quickfix" })
-
-	return true
-end
-
-local function open_treesitter_picker(state, node_list)
-	if not node_list or #node_list == 0 then
-		notify("No Tree-sitter nodes found for the source cursor", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_nodes = treesitter.picker_lines(node_list)
-	picker.open({
-		name = ("ACP://%s/%d/treesitter"):format(state.adapter, state.id),
-		filetype = "acp-treesitter",
-		lines = lines,
-		title = " ACP Tree-sitter ",
-		title_icon = icons.treesitter,
-		submit_desc = "Add ACP Tree-sitter context",
-		close_desc = "Close ACP Tree-sitter nodes",
-		preview = function(row)
-			local item = line_nodes[row]
-			if not item then
-				return nil
-			end
-			local line1, line2 = treesitter.range_lines(item)
-			if not line1 then
-				return nil
-			end
-			return source_preview(
-				state.source.bufnr,
-				{ line1 = line1, line2 = line2 },
-				(" Tree-sitter %s "):format(item.type or "node")
-			)
-		end,
-		on_submit = function(row, view)
-			local item = line_nodes[row]
-			if not item then
-				return
-			end
-			local prompt = treesitter_prompt(state.source, item)
-			if not prompt then
-				notify("Failed to render Tree-sitter node context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("tree-sitter context: %s"):format(item.type or "node"))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	return true
-end
-
-local function open_references_quickfix(state, reference_list)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	local function open_items(list)
-		if not list or #list == 0 then
-			notify("No LSP references found for the source cursor", vim.log.levels.WARN)
-			return false
-		end
-
-		local items = references.quickfix_items(list)
-		if #items == 0 then
-			notify("No quickfix-ready LSP references found", vim.log.levels.WARN)
-			return false
-		end
-
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP references #%s"):format(tostring(state.id or "?"))),
-			items = items,
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, "references quickfix")
-		end
-		return true
-	end
-
-	if reference_list then
-		return open_items(reference_list)
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading references quickfix")
-	end
-	references.request(state.source, function(list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(list)
-	end)
-	return true
-end
-
-local function open_reference_picker(state, reference_list)
-	if not reference_list or #reference_list == 0 then
-		notify("No LSP references found for the source cursor", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_references = references.picker_lines(reference_list)
-	local view = picker.open({
-		name = ("ACP://%s/%d/references"):format(state.adapter, state.id),
-		filetype = "acp-references",
-		lines = lines,
-		title = " ACP references ",
-		title_icon = icons.reference,
-		submit_desc = "Add ACP reference context",
-		close_desc = "Close ACP references",
-		preview = function(row)
-			local reference = line_references[row]
-			if not reference then
-				return nil
-			end
-			local bufnr = references.bufnr(reference)
-			return source_preview(
-				bufnr,
-				references.range(reference),
-				(" Reference %s "):format(references.display_path(reference))
-			)
-		end,
-		on_submit = function(row, view)
-			local reference = line_references[row]
-			if not reference then
-				return
-			end
-			local prompt, err = reference_prompt(reference)
-			if not prompt then
-				notify(err or "Failed to render LSP reference context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, "reference context added")
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		open_references_quickfix(state, reference_list)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP references quickfix" })
-
-	return true
-end
-
-local function open_lsp_location_quickfix(state, spec, location_list)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	local function open_items(list)
-		if not list or #list == 0 then
-			notify(("No LSP %s found for the source cursor"):format(spec.plural), vim.log.levels.WARN)
-			return false
-		end
-
-		local items = references.quickfix_items(list, { label = spec.label })
-		if #items == 0 then
-			notify(("No quickfix-ready LSP %s found"):format(spec.plural), vim.log.levels.WARN)
-			return false
-		end
-
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP %s #%s"):format(spec.plural, tostring(state.id or "?"))),
-			items = items,
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, ("%s quickfix"):format(spec.plural))
-		end
-		return true
-	end
-
-	if location_list then
-		return open_items(location_list)
-	end
-
-	if not state.busy then
-		set_run_status(state, ("loading %s quickfix"):format(spec.plural))
-	end
-	request_lsp_locations(state.source, spec.method, function(list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(list)
-	end, {
-		unavailable = spec.unavailable,
-		unsupported = spec.unsupported,
-	})
-	return true
-end
-
-local function open_lsp_location_picker(state, spec, location_list)
-	if not location_list or #location_list == 0 then
-		notify(("No LSP %s found for the source cursor"):format(spec.plural), vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_locations = references.picker_lines(location_list, { title = spec.picker_title })
-	local view = picker.open({
-		name = ("ACP://%s/%d/%s"):format(state.adapter, state.id, spec.name_suffix),
-		filetype = spec.filetype,
-		lines = lines,
-		title = (" ACP %s "):format(spec.plural),
-		title_icon = icons.reference,
-		submit_desc = ("Add ACP %s context"):format(spec.noun:lower()),
-		close_desc = ("Close ACP %s"):format(spec.plural),
-		preview = function(row)
-			local location = line_locations[row]
-			if not location then
-				return nil
-			end
-			local bufnr = references.bufnr(location)
-			return source_preview(
-				bufnr,
-				references.range(location),
-				(" %s %s "):format(spec.noun, references.display_path(location))
-			)
-		end,
-		on_submit = function(row, view)
-			local location = line_locations[row]
-			if not location then
-				return
-			end
-			local prompt, err = location_prompt(location, spec)
-			if not prompt then
-				notify(err or spec.render_error, vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("%s context added"):format(spec.noun:lower()))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		open_lsp_location_quickfix(state, spec, location_list)
-	end, { buffer = view.bufnr, nowait = true, desc = ("Open ACP %s quickfix"):format(spec.plural) })
-
-	return true
-end
-
-function M.select_session()
-	local bufnr = vim.api.nvim_get_current_buf()
-	local line = vim.api.nvim_win_get_cursor(0)[1]
-	local id = session_panel_lines[bufnr] and session_panel_lines[bufnr][line]
-	if not id then
-		return
-	end
-
-	focus_session(sessions[id])
-end
-
-function M.close_selected_session()
-	local bufnr = vim.api.nvim_get_current_buf()
-	local line = vim.api.nvim_win_get_cursor(0)[1]
-	local id = session_panel_lines[bufnr] and session_panel_lines[bufnr][line]
-	if not id then
-		return
-	end
-
-	unregister(sessions[id])
-end
-
-function M.focus_sessions()
-	local state = states[vim.api.nvim_get_current_buf()]
-
-	if state and (state.mode ~= "tab" or not valid_win(state.session_panel_win)) then
-		if state.mode == "tab" then
-			apply_layout(state)
-		end
-	end
-
-	if state and state.mode == "tab" and valid_win(state.session_panel_win) then
-		vim.api.nvim_set_current_win(state.session_panel_win)
-		return
-	end
-
-	open_session_picker()
-end
-
-function M.open_actions()
-	open_action_palette(state_for_current_buffer(), vim.api.nvim_get_current_win())
-end
-
-function M.open_prompt_actions()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_prompt_actions(state)
-end
-
-function M.open_source_actions()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	open_source_actions(state)
-end
-
-function M.refresh_source(opts)
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	refresh_source_context(state, opts)
-end
-
-function M.close()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	unregister(state)
-end
-
-function M.close_all()
-	local list = sorted_sessions()
-	if #list == 0 then
-		notify("No ACP sessions open", vim.log.levels.WARN)
-		return
-	end
-
-	for _, state in ipairs(list) do
-		unregister(state)
-	end
-end
-
-function M.restore(adapter_name)
-	adapter_name = adapter_name or config.default_adapter
-	local adapter = config.adapters[adapter_name]
-	if not adapter then
-		notify(("Unknown ACP adapter: %s"):format(adapter_name), vim.log.levels.ERROR)
-		return
-	end
-
-	local connection = Connection.new({
-		adapter = adapter,
-		cwd = vim.fn.getcwd(),
-	})
-	notify(("Listing %s ACP sessions"):format(adapter_name))
-	connection:list_sessions_async(function(list, err)
-		if err then
-			connection:stop()
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		if not list or #list == 0 then
-			connection:stop()
-			notify("No adapter-backed ACP sessions found for this workspace", vim.log.levels.WARN)
-			return
-		end
-
-		open_restore_picker(adapter_name, connection, list)
-	end)
-end
-
-function M.add_context()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	local rendered = context.render(state.source)
-	if not rendered then
-		notify("No editor context is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	append_input_text(state, rendered)
-	if valid_win(state.input_win) then
-		vim.api.nvim_set_current_win(state.input_win)
-	end
-end
-
-function M.add_smart_context()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local smart_context = require("acp.smart_context")
-	if not state.busy then
-		set_run_status(state, "loading smart context")
-	end
-	smart_context.request(state.source, function(data, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-
-		local prompt = smart_context.prompt(state.source, data)
-		if not prompt then
-			notify("Failed to render smart editor context", vim.log.levels.ERROR)
-			return
-		end
-		append_input_text(state, prompt)
-		if not state.busy then
-			set_run_status(state, "smart context added")
-		end
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end)
-end
-
-function M.open_changes()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_changed_files(state)
-end
-
-function M.open_changes_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	if not changes.open_quickfix(state) then
-		notify("No ACP file changes recorded for this session", vim.log.levels.WARN)
-		return
-	end
-end
-
-function M.open_output()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_outline(state)
-end
-
-function M.open_output_map()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_map(state)
-end
-
-function M.open_output_search()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_search(state)
-end
-
-function M.open_output_items()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_items(state)
-end
-
-function M.open_output_items_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_item_quickfix(state)
-end
-
-function M.yank_output_section()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	yank_output_section(state)
-end
-
-function M.draft_output_section()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	draft_output_section(state)
-end
-
-function M.open_output_reference()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_reference_at_cursor(state)
-end
-
-function M.open_output_context()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_context_at_cursor(state)
-end
-
-function M.inspect_output()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	inspect_output_at_cursor(state)
-end
-
-function M.open_output_actions()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_actions(state)
-end
-
-function M.output_help_items(state)
-	local items = {}
-	if not state then
-		return items
-	end
-
-	add_action(items, "Cursor actions", "Open context-specific actions for the current output line", "?", "output", function()
-		open_output_actions(state)
-	end)
-	add_action(items, "Inspect item", "Preview the reference, code block, problem, or section under the cursor", "K", "output", function()
-		inspect_output_at_cursor(state)
-	end)
-	add_action(items, "Open item", "Open the local file reference or scratch code buffer under the cursor", "<Enter>", "output", function()
-		open_output_context_at_cursor(state)
-	end)
-	add_action(items, "Next item", "Jump to the next reference, code block, or problem", "]o", "output", function()
-		jump_output_item(state, 1)
-	end)
-	add_action(items, "Previous item", "Jump to the previous reference, code block, or problem", "[o", "output", function()
-		jump_output_item(state, -1)
-	end)
-	add_action(items, "Output search", "Search every non-empty transcript line with context preview", "<leader>ax", "output", function()
-		open_output_search(state)
-	end)
-	add_action(items, "Output map", "Open the live transcript map with preview and quickfix export", "<leader>am", "output", function()
-		open_output_map(state)
-	end)
-	add_action(items, "Output outline", "Jump across transcript sections", "<leader>av", "output", function()
-		open_output_outline(state)
-	end)
-	add_action(items, "Output items", "Browse references, code blocks, and problems together", "<leader>aO", "output", function()
-		open_output_items(state)
-	end)
-	add_action(items, "Output items quickfix", "Send references, code blocks, and problems to quickfix", ":AcpOutputItemsQuickfix", "output", function()
-		open_output_item_quickfix(state)
-	end)
-	add_action(items, "Code blocks", "Browse fenced code blocks with language previews", "<leader>ab", "output", function()
-		open_output_code_blocks(state)
-	end)
-	add_action(items, "Code blocks quickfix", "Send fenced code blocks to quickfix", ":AcpCodeBlocksQuickfix", "output", function()
-		local blocks = output.code_blocks(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false))
-		if #blocks == 0 then
-			notify("No ACP code blocks found in the output", vim.log.levels.WARN)
-			return
-		end
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP output code blocks #%s"):format(tostring(state.id or "?"))),
-			items = output.code_block_quickfix_items(blocks, state.output_buf),
-		})
-		vim.cmd("copen")
-	end)
-	add_action(items, "Draft code block", "Insert the fenced code block under the output cursor into the prompt", ":AcpCodeBlockDraft", "output", function()
-		M.draft_code_block()
-	end)
-	add_action(items, "Output locations", "Browse local file references from the transcript", "<leader>ag", "output", function()
-		open_output_locations(state)
-	end)
-	add_action(items, "Output locations quickfix", "Send transcript file references to quickfix", ":AcpOutputQuickfix", "output", function()
-		open_output_location_quickfix(state)
-	end)
-	add_action(items, "Output problems", "Open transcript errors and stderr in the location list", "<leader>ae", "output", function()
-		open_output_problems(state)
-	end)
-	add_action(items, "Draft section", "Insert the current output section as follow-up prompt context", "<leader>ai", "output", function()
-		draft_output_section(state)
-	end)
-	add_action(items, "Yank section", "Copy the current output section into the unnamed register", "<leader>ay", "output", function()
-		yank_output_section(state)
-	end)
-	add_action(items, "Yank code block", "Copy the fenced code block under the cursor without Markdown fences", "<leader>aY", "output", function()
-		yank_output_code_block(state)
-	end)
-	return items
-end
-
-function M.output_help_preview(state)
-	local lines = { icons.title("ACP Output Help", icons.help), "" }
-	if not state then
-		return {
-			lines = lines,
-			filetype = "acp",
-			title = (" %s ACP output help "):format(icons.help),
-		}
-	end
-
-	table.insert(lines, ("%s Session: #%s %s"):format(icons.session, tostring(state.id or "?"), state.adapter or "adapter"))
-	if state.model and state.model ~= "" then
-		table.insert(lines, ("%s Model: %s"):format(icons.model, state.model))
-	end
-
-	if valid_buf(state.output_buf) then
-		local output_lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-		local stats = output.transcript_stats(output_lines, {
-			change_count = changes.count(state),
-			cwd = state.cwd,
-			start_line = 1,
-		})
-		table.insert(
-			lines,
-			("%s Transcript: %d section%s | %d code | %d loc%s | %d change%s"):format(
-				icons.map,
-				stats.sections,
-				stats.sections == 1 and "" or "s",
-				stats.code_blocks,
-				stats.locations,
-				stats.locations == 1 and "" or "s",
-				stats.changes,
-				stats.changes == 1 and "" or "s"
-			)
-		)
-	end
-
-	table.insert(lines, "")
-	table.insert(lines, ("%s Navigation: ]] / [[ sections, ]o / [o items"):format(icons.jump))
-	table.insert(lines, ("%s Inspect/open: K preview, <Enter> open item, gf open reference"):format(icons.inspect))
-	table.insert(lines, ("%s Workflows: <leader>ax search, <leader>am map, <leader>aO items"):format(icons.search))
-	table.insert(lines, ("%s Code: <leader>ab blocks, <leader>aY yank block"):format(icons.code))
-	table.insert(lines, ("%s Problems: <leader>ae location list, quickfix rows use Q in pickers"):format(icons.error))
-	table.insert(lines, ("%s Context: <leader>ai draft section, <leader>ay yank section"):format(icons.edit))
-	return {
-		lines = lines,
-		filetype = "acp",
-		title = (" %s ACP output help "):format(icons.help),
-	}
-end
-
-function M.open_output_help()
-	local state = current_state()
-	if not state or not valid_buf(state.output_buf) then
-		notify("No ACP output buffer is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local items = M.output_help_items(state)
-	if #items == 0 then
-		notify("No ACP output workflows found", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_actions = actions.picker_lines(items)
-	local origin_win = valid_win(state.output_win) and state.output_win or vim.api.nvim_get_current_win()
-	picker.open({
-		name = ("ACP://%s/%d/output-help"):format(state.adapter, state.id),
-		filetype = "acp-output-help",
-		lines = lines,
-		title = " ACP output help ",
-		title_icon = icons.help,
-		submit_desc = "Run ACP output workflow",
-		close_desc = "Close ACP output help",
-		preview = actions.previewer(line_actions, function()
-			return M.output_help_preview(state)
-		end),
-		on_submit = function(row, view)
-			local action = line_actions[row]
-			if not action then
-				return
-			end
-
-			view.close()
-			if valid_win(origin_win) then
-				vim.api.nvim_set_current_win(origin_win)
-			end
-			action.run()
-		end,
-	})
-	return true
-end
-
-function M.next_output_item()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	jump_output_item(state, 1)
-end
-
-function M.previous_output_item()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	jump_output_item(state, -1)
-end
-
-function M.open_code_blocks()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_code_blocks(state)
-end
-
-function M.open_code_blocks_quickfix()
-	local state = current_state()
-	if not state or not valid_buf(state.output_buf) then
-		return
-	end
-
-	local blocks = output.code_blocks(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false))
-	if #blocks == 0 then
-		notify("No ACP code blocks found in the output", vim.log.levels.WARN)
-		return
-	end
-
-	vim.fn.setqflist({}, " ", {
-		title = icons.quickfix_title(("ACP output code blocks #%s"):format(tostring(state.id or "?"))),
-		items = output.code_block_quickfix_items(blocks, state.output_buf),
-	})
-	vim.cmd("copen")
-end
-
-function M.draft_code_block()
-	local state = current_state()
-	if not state or not valid_buf(state.output_buf) or not valid_buf(state.input_buf) then
-		notify("No ACP code block is available", vim.log.levels.WARN)
-		return false
-	end
-
-	local context_info = output_cursor_context(state)
-	if not context_info then
-		notify("ACP output window is not visible", vim.log.levels.WARN)
-		return false
-	end
-
-	local block = context_info.code_block
-	if not block then
-		notify("No ACP code block found under the cursor", vim.log.levels.WARN)
-		return false
-	end
-
-	local text = output.code_block_text(block)
-	if not text or text == "" then
-		notify("ACP code block under the cursor is empty", vim.log.levels.WARN)
-		return false
-	end
-
-	local language = tostring(block.language or block.filetype or "text"):gsub("%s+", "")
-	if language == "" then
-		language = "text"
-	end
-	append_input_text(
-		state,
-		table.concat({
-			"Use this ACP output code block as context for a follow-up.",
-			"",
-			("ACP output code block (%s, output lines %d-%d):"):format(
-				language,
-				block.start_line or 1,
-				block.end_line or block.start_line or 1
-			),
-			"",
-			("```%s"):format(language),
-			text,
-			"```",
-			"",
-			"Request:",
-		}, "\n")
-	)
-	pulse_output_section(state, {
-		line1 = block.start_line,
-		line2 = block.end_line,
-	})
-	if valid_win(state.input_win) then
-		vim.api.nvim_set_current_win(state.input_win)
-	end
-	local count = block.line_count or #block.lines
-	notify(
-		("Drafted ACP %s code block into prompt (%d line%s)"):format(language, count, count == 1 and "" or "s"),
-		vim.log.levels.INFO
-	)
-	return true
-end
-
-function M.yank_code_block()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	yank_output_code_block(state)
-end
-
-function M.open_output_locations()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_locations(state)
-end
-
-function M.open_output_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_location_quickfix(state)
-end
-
-function M.open_output_problems()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_output_problems(state)
-end
-
-function M.open_diagnostics()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	open_diagnostic_picker(state)
-end
-
-function M.open_diagnostics_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_diagnostics_quickfix(state)
-end
-
-function M.open_workspace_diagnostics()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	M._open_workspace_diagnostic_picker(state)
-end
-
-function M.open_workspace_diagnostics_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	M._open_workspace_diagnostics_quickfix(state)
-end
-
-function M.open_commands()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_command_picker(state)
-end
-
-function M.open_config()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_config_picker(state)
-end
-
-function M.open_code_actions()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading code actions")
-	end
-	code_actions.request(state.source, function(action_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_code_action_picker(state, action_list)
-	end)
-end
-
-function M._open_code_lens_picker(state, lens_list)
-	local code_lens = require("acp.code_lens")
-	if not lens_list or #lens_list == 0 then
-		notify("No LSP code lenses found for the source buffer", vim.log.levels.WARN)
-		return false
-	end
-
-	local lines, line_lenses = code_lens.picker_lines(lens_list)
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/code-lens"):format(state.adapter, state.id),
-		filetype = "acp-code-lens",
-		lines = lines,
-		title = " ACP code lens ",
-		title_icon = icons.code,
-		submit_desc = "Add ACP code-lens context",
-		close_desc = "Close ACP code lens",
-		preview = function(row)
-			local item = line_lenses[row]
-			if not item then
-				return nil
-			end
-			return source_preview(
-				state.source.bufnr,
-				code_lens.range(item),
-				(" Code lens %s "):format(code_lens.title(item))
-			)
-		end,
-		on_submit = function(row, view)
-			local item = line_lenses[row]
-			if not item then
-				return
-			end
-			local prompt, err = code_lens.prompt(state.source, item)
-			if not prompt then
-				notify(err or "Failed to render LSP code-lens context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("code lens: %s"):format(code_lens.title(item)))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		M._open_code_lens_quickfix(state, lens_list)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP code lens quickfix" })
-
-	return true
-end
-
-function M._open_code_lens_quickfix(state, lens_list)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	local code_lens = require("acp.code_lens")
-	local function open_items(items)
-		if not items or #items == 0 then
-			notify("No LSP code lenses found for the source buffer", vim.log.levels.WARN)
-			return false
-		end
-
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP code lens #%s"):format(tostring(state.id or "?"))),
-			items = code_lens.quickfix_items(state.source.bufnr, items),
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, "code lens quickfix")
-		end
-		return true
-	end
-
-	if lens_list then
-		return open_items(lens_list)
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading code lens quickfix")
-	end
-	code_lens.request(state.source, function(items, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(items)
-	end)
-	return true
-end
-
-function M.open_code_lens()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local code_lens = require("acp.code_lens")
-	if not state.busy then
-		set_run_status(state, "loading code lens")
-	end
-	code_lens.request(state.source, function(lens_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		M._open_code_lens_picker(state, lens_list)
-	end)
-end
-
-function M.open_code_lens_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	M._open_code_lens_quickfix(state)
-end
-
-function M._open_document_color_picker(state, color_list)
-	local document_colors = require("acp.document_colors")
-	if not color_list or #color_list == 0 then
-		notify("No LSP document colors found for the source buffer", vim.log.levels.WARN)
-		return false
-	end
-
-	state.source_colors = color_list
-	refresh_source_marks(state)
-
-	local lines, line_colors = document_colors.picker_lines(color_list)
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/document-colors"):format(state.adapter, state.id),
-		filetype = "acp-document-colors",
-		lines = lines,
-		title = " ACP document colors ",
-		title_icon = icons.color,
-		submit_desc = "Add ACP document-color context",
-		close_desc = "Close ACP document colors",
-		preview = function(row)
-			local item = line_colors[row]
-			if not item then
-				return nil
-			end
-			return source_preview(
-				state.source.bufnr,
-				document_colors.range(item),
-				(" Document color %s "):format(document_colors.label(item))
-			)
-		end,
-		on_submit = function(row, view)
-			local item = line_colors[row]
-			if not item then
-				return
-			end
-			local prompt, err = document_colors.prompt(state.source, item)
-			if not prompt then
-				notify(err or "Failed to render LSP document-color context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("document color: %s"):format(document_colors.label(item)))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		M._open_document_colors_quickfix(state, color_list)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP document colors quickfix" })
-
-	return true
-end
-
-function M._open_document_colors_quickfix(state, color_list)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	local document_colors = require("acp.document_colors")
-	local function open_items(items)
-		if not items or #items == 0 then
-			notify("No LSP document colors found for the source buffer", vim.log.levels.WARN)
-			return false
-		end
-
-		state.source_colors = items
-		refresh_source_marks(state)
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP document colors #%s"):format(tostring(state.id or "?"))),
-			items = document_colors.quickfix_items(state.source.bufnr, items),
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, "document colors quickfix")
-		end
-		return true
-	end
-
-	if color_list then
-		return open_items(color_list)
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading document colors quickfix")
-	end
-	document_colors.request(state.source, function(items, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(items)
-	end)
-	return true
-end
-
-function M.open_document_colors()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local document_colors = require("acp.document_colors")
-	if not state.busy then
-		set_run_status(state, "loading document colors")
-	end
-	document_colors.request(state.source, function(color_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		M._open_document_color_picker(state, color_list)
-	end)
-end
-
-function M.open_document_colors_quickfix()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	M._open_document_colors_quickfix(state)
-end
-
-function M.clear_document_colors()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	state.source_colors = nil
-	refresh_source_marks(state)
-	if not state.busy then
-		set_run_status(state, "document colors cleared")
-	end
-end
-
-function M._open_document_link_picker(state, link_list)
-	local document_links = require("acp.document_links")
-	if not link_list or #link_list == 0 then
-		notify("No LSP document links found for the source buffer", vim.log.levels.WARN)
-		return false
-	end
-
-	state.source_document_links = link_list
-	refresh_source_marks(state)
-
-	local lines, line_links = document_links.picker_lines(link_list)
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/document-links"):format(state.adapter, state.id),
-		filetype = "acp-document-links",
-		lines = lines,
-		title = " ACP document links ",
-		title_icon = icons.link,
-		submit_desc = "Add ACP document-link context",
-		close_desc = "Close ACP document links",
-		preview = function(row)
-			local item = line_links[row]
-			if not item then
-				return nil
-			end
-			return source_preview(
-				state.source.bufnr,
-				document_links.range(item),
-				(" Document link %s "):format(document_links.label(item))
-			)
-		end,
-		on_submit = function(row, view)
-			local item = line_links[row]
-			if not item then
-				return
-			end
-			local prompt, err = document_links.prompt(state.source, item)
-			if not prompt then
-				notify(err or "Failed to render LSP document-link context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("document link: %s"):format(document_links.label(item)))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		M._open_document_links_quickfix(state, link_list)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP document links quickfix" })
-
-	return true
-end
-
-function M._open_document_links_quickfix(state, link_list)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	local document_links = require("acp.document_links")
-	local function open_items(items)
-		if not items or #items == 0 then
-			notify("No LSP document links found for the source buffer", vim.log.levels.WARN)
-			return false
-		end
-
-		state.source_document_links = items
-		refresh_source_marks(state)
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP document links #%s"):format(tostring(state.id or "?"))),
-			items = document_links.quickfix_items(state.source.bufnr, items),
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, "document links quickfix")
-		end
-		return true
-	end
-
-	if link_list then
-		return open_items(link_list)
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading document links quickfix")
-	end
-	document_links.request(state.source, function(items, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(items)
-	end)
-	return true
-end
-
-function M.open_document_links()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local document_links = require("acp.document_links")
-	if not state.busy then
-		set_run_status(state, "loading document links")
-	end
-	document_links.request(state.source, function(link_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		M._open_document_link_picker(state, link_list)
-	end)
-end
-
-function M.open_document_links_quickfix()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	M._open_document_links_quickfix(state)
-end
-
-function M.clear_document_links()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	state.source_document_links = nil
-	refresh_source_marks(state)
-	if not state.busy then
-		set_run_status(state, "document links cleared")
-	end
-end
-
-function M._open_folding_range_picker(state, fold_list)
-	local folding_ranges = require("acp.folding_ranges")
-	if not fold_list or #fold_list == 0 then
-		notify("No LSP folding ranges found for the source buffer", vim.log.levels.WARN)
-		return false
-	end
-
-	state.source_folding_ranges = fold_list
-	refresh_source_marks(state)
-
-	local lines, line_folds = folding_ranges.picker_lines(fold_list)
-	local view
-	view = picker.open({
-		name = ("ACP://%s/%d/folding-ranges"):format(state.adapter, state.id),
-		filetype = "acp-folding-ranges",
-		lines = lines,
-		title = " ACP folding ranges ",
-		title_icon = icons.fold,
-		submit_desc = "Add ACP folding-range context",
-		close_desc = "Close ACP folding ranges",
-		preview = function(row)
-			local item = line_folds[row]
-			if not item then
-				return nil
-			end
-			return source_preview(
-				state.source.bufnr,
-				folding_ranges.range(item),
-				(" Folding range %s "):format(folding_ranges.label(item))
-			)
-		end,
-		on_submit = function(row, view)
-			local item = line_folds[row]
-			if not item then
-				return
-			end
-			local prompt, err = folding_ranges.prompt(state.source, item)
-			if not prompt then
-				notify(err or "Failed to render LSP folding-range context", vim.log.levels.ERROR)
-				return
-			end
-			view.close()
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("folding range: %s"):format(folding_ranges.label(item)))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end,
-	})
-
-	vim.keymap.set("n", "Q", function()
-		view.close()
-		M._open_folding_ranges_quickfix(state, fold_list)
-	end, { buffer = view.bufnr, nowait = true, desc = "Open ACP folding ranges quickfix" })
-
-	return true
-end
-
-function M._open_folding_ranges_quickfix(state, fold_list)
-	if not state or not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return false
-	end
-
-	local folding_ranges = require("acp.folding_ranges")
-	local function open_items(items)
-		if not items or #items == 0 then
-			notify("No LSP folding ranges found for the source buffer", vim.log.levels.WARN)
-			return false
-		end
-
-		state.source_folding_ranges = items
-		refresh_source_marks(state)
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("ACP folding ranges #%s"):format(tostring(state.id or "?"))),
-			items = folding_ranges.quickfix_items(state.source.bufnr, items),
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, "folding ranges quickfix")
-		end
-		return true
-	end
-
-	if fold_list then
-		return open_items(fold_list)
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading folding ranges quickfix")
-	end
-	folding_ranges.request(state.source, function(items, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(items)
-	end)
-	return true
-end
-
-function M.open_folding_ranges()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local folding_ranges = require("acp.folding_ranges")
-	if not state.busy then
-		set_run_status(state, "loading folding ranges")
-	end
-	folding_ranges.request(state.source, function(fold_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		M._open_folding_range_picker(state, fold_list)
-	end)
-end
-
-function M.open_folding_ranges_quickfix()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	M._open_folding_ranges_quickfix(state)
-end
-
-function M.clear_folding_ranges()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	state.source_folding_ranges = nil
-	refresh_source_marks(state)
-	if not state.busy then
-		set_run_status(state, "folding ranges cleared")
-	end
-end
-
-function M.rename_symbol()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local rename = require("acp.rename")
-	if not state.busy then
-		set_run_status(state, "preparing rename")
-	end
-	rename.request(state.source, function(item, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		if not item then
-			notify("No LSP prepare-rename result", vim.log.levels.WARN)
-			return
-		end
-
-		local current_name = item.placeholder or "symbol"
-		vim.ui.input({
-			prompt = ("Rename %s to: "):format(current_name),
-			default = current_name,
-		}, function(new_name)
-			if new_name == nil then
-				if not state.busy then
-					set_run_status(state, "rename cancelled")
-				end
-				return
-			end
-
-			local prompt, prompt_err = rename.prompt(state.source, item, new_name)
-			if not prompt then
-				notify(prompt_err or "Failed to render rename context", vim.log.levels.ERROR)
-				return
-			end
-			append_input_text(state, prompt)
-			if not state.busy then
-				set_run_status(state, ("rename: %s %s %s"):format(current_name, icons.arrow_right, new_name))
-			end
-			if valid_win(state.input_win) then
-				vim.api.nvim_set_current_win(state.input_win)
-			end
-		end)
-	end)
-end
-
-function M.add_hover()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading hover")
-	end
-	hover.request(state.source, function(hover_text, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		if not hover_text or hover_text == "" then
-			notify("No LSP hover documentation found for the source cursor", vim.log.levels.WARN)
-			return
-		end
-
-		local prompt = hover_prompt(state.source, hover_text)
-		if not prompt then
-			notify("Failed to render LSP hover context", vim.log.levels.ERROR)
-			return
-		end
-		append_input_text(state, prompt)
-		if not state.busy then
-			set_run_status(state, "hover context added")
-		end
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end)
-end
-
-function M.add_signature()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local signature = require("acp.signature")
-	if not state.busy then
-		set_run_status(state, "loading signature help")
-	end
-	signature.request(state.source, function(signature_text, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		if not signature_text or signature_text == "" then
-			notify("No LSP signature help found for the source cursor", vim.log.levels.WARN)
-			return
-		end
-
-		local prompt = signature.prompt(state.source, signature_text)
-		if not prompt then
-			notify("Failed to render LSP signature help context", vim.log.levels.ERROR)
-			return
-		end
-		append_input_text(state, prompt)
-		if not state.busy then
-			set_run_status(state, "signature help added")
-		end
-		if valid_win(state.input_win) then
-			vim.api.nvim_set_current_win(state.input_win)
-		end
-	end)
-end
-
-function M.open_inlay_hints()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local inlay_hints = require("acp.inlay_hints")
-	if not state.busy then
-		set_run_status(state, "loading inlay hints")
-	end
-	inlay_hints.request(state.source, function(items, err, range)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		if not items or #items == 0 then
-			notify("No LSP inlay hints found for the source range", vim.log.levels.WARN)
-			return
-		end
-
-		local lines, line_items = inlay_hints.picker_lines(items, {
-			bufnr = state.source.bufnr,
-			range = range,
-		})
-		picker.open({
-			name = ("ACP://%s/%d/inlay-hints"):format(state.adapter, state.id),
-			filetype = "acp-inlay-hints",
-			lines = lines,
-			title = " ACP inlay hints ",
-			title_icon = icons.hint,
-			submit_desc = "Add ACP inlay-hint context",
-			close_desc = "Close ACP inlay hints",
-			preview = function(row)
-				local item = line_items[row]
-				if not item then
-					return nil
-				end
-				return source_preview(
-					state.source.bufnr,
-					inlay_hints.range(item) or range,
-					item.all and " All inlay hints " or (" Inlay hint %s "):format(item.label or "hint")
-				)
-			end,
-			on_submit = function(row, view)
-				local item = line_items[row]
-				if not item then
-					return
-				end
-				local prompt = inlay_hints.prompt(state.source, item)
-				if not prompt then
-					notify("Failed to render LSP inlay-hint context", vim.log.levels.ERROR)
-					return
-				end
-				view.close()
-				append_input_text(state, prompt)
-				if not state.busy then
-					set_run_status(state, item.all and "inlay hints added" or ("inlay hint: %s"):format(item.label or "context"))
-				end
-				if valid_win(state.input_win) then
-					vim.api.nvim_set_current_win(state.input_win)
-				end
-			end,
-		})
-	end)
-end
-
-function M.open_selection_ranges()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local selection_ranges = require("acp.selection_ranges")
-	if not state.busy then
-		set_run_status(state, "loading selection ranges")
-	end
-	selection_ranges.request(state.source, function(items, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		if not items or #items == 0 then
-			notify("No LSP selection ranges found for the source cursor", vim.log.levels.WARN)
-			return
-		end
-
-		local lines, line_items = selection_ranges.picker_lines(items, {
-			bufnr = state.source.bufnr,
-		})
-		picker.open({
-			name = ("ACP://%s/%d/selection-ranges"):format(state.adapter, state.id),
-			filetype = "acp-selection-ranges",
-			lines = lines,
-			title = " ACP selection ranges ",
-			title_icon = icons.scope,
-			submit_desc = "Add ACP selection-range context",
-			close_desc = "Close ACP selection ranges",
-			preview = function(row)
-				local item = line_items[row]
-				if not item then
-					return nil
-				end
-				return source_preview(
-					state.source.bufnr,
-					selection_ranges.range(item),
-					(" Selection %s "):format(item.label or "range")
-				)
-			end,
-			on_submit = function(row, view)
-				local item = line_items[row]
-				if not item then
-					return
-				end
-				local prompt = selection_ranges.prompt(state.source, item)
-				if not prompt then
-					notify("Failed to render LSP selection-range context", vim.log.levels.ERROR)
-					return
-				end
-				view.close()
-				append_input_text(state, prompt)
-				if not state.busy then
-					set_run_status(state, ("selection range: %s"):format(item.label or "context"))
-				end
-				if valid_win(state.input_win) then
-					vim.api.nvim_set_current_win(state.input_win)
-				end
-			end,
-		})
-	end)
-end
-
-function M.open_call_hierarchy(direction)
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local call_hierarchy = require("acp.call_hierarchy")
-	local spec = direction == "outgoing" and {
-		status = "outgoing calls",
-		title = " ACP outgoing calls ",
-		filetype = "acp-callees",
-		suffix = "callees",
-		submit = "Add ACP callee context",
-		close = "Close ACP callees",
-		preview = "Callee",
-	} or {
-		status = "incoming calls",
-		title = " ACP incoming calls ",
-		filetype = "acp-callers",
-		suffix = "callers",
-		submit = "Add ACP caller context",
-		close = "Close ACP callers",
-		preview = "Caller",
-	}
-
-	if not state.busy then
-		set_run_status(state, ("loading %s"):format(spec.status))
-	end
-	call_hierarchy.request(state.source, direction, function(call_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		if not call_list or #call_list == 0 then
-			notify(("No LSP %s found for the source cursor"):format(spec.status), vim.log.levels.WARN)
-			return
-		end
-
-		local lines, line_calls = call_hierarchy.picker_lines(call_list, {
-			direction = direction,
-		})
-		local view = picker.open({
-			name = ("ACP://%s/%d/%s"):format(state.adapter, state.id, spec.suffix),
-			filetype = spec.filetype,
-			lines = lines,
-			title = spec.title,
-			title_icon = icons.call,
-			submit_desc = spec.submit,
-			close_desc = spec.close,
-			preview = function(row)
-				local call = line_calls[row]
-				if not call then
-					return nil
-				end
-				return source_preview(
-					call_hierarchy.bufnr(call),
-					call_hierarchy.range(call),
-					(" %s %s "):format(spec.preview, call.name)
-				)
-			end,
-			on_submit = function(row, view)
-				local call = line_calls[row]
-				if not call then
-					return
-				end
-				local prompt, prompt_err = call_hierarchy.prompt(call, direction)
-				if not prompt then
-					notify(prompt_err or "Failed to render LSP call hierarchy context", vim.log.levels.ERROR)
-					return
-				end
-				view.close()
-				append_input_text(state, prompt)
-				if not state.busy then
-					set_run_status(state, ("%s: %s"):format(spec.status, call.name))
-				end
-				if valid_win(state.input_win) then
-					vim.api.nvim_set_current_win(state.input_win)
-				end
-			end,
-		})
-
-		vim.keymap.set("n", "Q", function()
-			view.close()
-			M.open_call_hierarchy_quickfix(direction, call_list, state)
-		end, { buffer = view.bufnr, nowait = true, desc = ("Open ACP %s quickfix"):format(spec.status) })
-	end)
-end
-
-function M.open_call_hierarchy_quickfix(direction, call_list, state_override)
-	local state = state_override or current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local call_hierarchy = require("acp.call_hierarchy")
-	local label = direction == "outgoing" and "OUTGOING CALL" or "INCOMING CALL"
-	local title = direction == "outgoing" and "ACP outgoing calls" or "ACP incoming calls"
-
-	local function open_items(items)
-		if not items or #items == 0 then
-			notify(("No LSP %s found for the source cursor"):format(title:lower()), vim.log.levels.WARN)
-			return false
-		end
-
-		local qf_items = call_hierarchy.quickfix_items(items, {
-			direction = direction,
-			label = label,
-		})
-		if #qf_items == 0 then
-			notify(("No quickfix-ready LSP %s found"):format(title:lower()), vim.log.levels.WARN)
-			return false
-		end
-
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("%s #%s"):format(title, tostring(state.id or "?"))),
-			items = qf_items,
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, ("%s quickfix"):format(title:gsub("^ACP%s+", "")))
-		end
-		return true
-	end
-
-	if call_list then
-		open_items(call_list)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, ("loading %s quickfix"):format(title:lower()))
-	end
-	call_hierarchy.request(state.source, direction, function(items, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(items)
-	end)
-end
-
-function M.open_callers()
-	M.open_call_hierarchy("incoming")
-end
-
-function M.open_callers_quickfix()
-	M.open_call_hierarchy_quickfix("incoming")
-end
-
-function M.open_callees()
-	M.open_call_hierarchy("outgoing")
-end
-
-function M.open_callees_quickfix()
-	M.open_call_hierarchy_quickfix("outgoing")
-end
-
-function M.open_type_hierarchy(direction)
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local type_hierarchy = require("acp.type_hierarchy")
-	local spec = direction == "subtypes" and {
-		status = "subtypes",
-		title = " ACP subtypes ",
-		filetype = "acp-subtypes",
-		suffix = "subtypes",
-		submit = "Add ACP subtype context",
-		close = "Close ACP subtypes",
-		preview = "Subtype",
-	} or {
-		status = "supertypes",
-		title = " ACP supertypes ",
-		filetype = "acp-supertypes",
-		suffix = "supertypes",
-		submit = "Add ACP supertype context",
-		close = "Close ACP supertypes",
-		preview = "Supertype",
-	}
-
-	if not state.busy then
-		set_run_status(state, ("loading %s"):format(spec.status))
-	end
-	type_hierarchy.request(state.source, direction, function(type_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		if not type_list or #type_list == 0 then
-			notify(("No LSP %s found for the source cursor"):format(spec.status), vim.log.levels.WARN)
-			return
-		end
-
-		local lines, line_types = type_hierarchy.picker_lines(type_list, {
-			direction = direction,
-		})
-		local view = picker.open({
-			name = ("ACP://%s/%d/%s"):format(state.adapter, state.id, spec.suffix),
-			filetype = spec.filetype,
-			lines = lines,
-			title = spec.title,
-			title_icon = icons.type,
-			submit_desc = spec.submit,
-			close_desc = spec.close,
-			preview = function(row)
-				local item = line_types[row]
-				if not item then
-					return nil
-				end
-				return source_preview(
-					type_hierarchy.bufnr(item),
-					type_hierarchy.range(item),
-					(" %s %s "):format(spec.preview, item.name)
-				)
-			end,
-			on_submit = function(row, view)
-				local item = line_types[row]
-				if not item then
-					return
-				end
-				local prompt, prompt_err = type_hierarchy.prompt(item, direction)
-				if not prompt then
-					notify(prompt_err or "Failed to render LSP type hierarchy context", vim.log.levels.ERROR)
-					return
-				end
-				view.close()
-				append_input_text(state, prompt)
-				if not state.busy then
-					set_run_status(state, ("%s: %s"):format(spec.status, item.name))
-				end
-				if valid_win(state.input_win) then
-					vim.api.nvim_set_current_win(state.input_win)
-				end
-			end,
-		})
-
-		vim.keymap.set("n", "Q", function()
-			view.close()
-			M.open_type_hierarchy_quickfix(direction, type_list, state)
-		end, { buffer = view.bufnr, nowait = true, desc = ("Open ACP %s quickfix"):format(spec.status) })
-	end)
-end
-
-function M.open_type_hierarchy_quickfix(direction, type_list, state_override)
-	local state = state_override or current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local type_hierarchy = require("acp.type_hierarchy")
-	local label = direction == "subtypes" and "SUBTYPE" or "SUPERTYPE"
-	local title = direction == "subtypes" and "ACP subtypes" or "ACP supertypes"
-
-	local function open_items(items)
-		if not items or #items == 0 then
-			notify(("No LSP %s found for the source cursor"):format(title:lower()), vim.log.levels.WARN)
-			return false
-		end
-
-		local qf_items = type_hierarchy.quickfix_items(items, {
-			direction = direction,
-			label = label,
-		})
-		if #qf_items == 0 then
-			notify(("No quickfix-ready LSP %s found"):format(title:lower()), vim.log.levels.WARN)
-			return false
-		end
-
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(("%s #%s"):format(title, tostring(state.id or "?"))),
-			items = qf_items,
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, ("%s quickfix"):format(title:gsub("^ACP%s+", "")))
-		end
-		return true
-	end
-
-	if type_list then
-		open_items(type_list)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, ("loading %s quickfix"):format(title:lower()))
-	end
-	type_hierarchy.request(state.source, direction, function(items, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(items)
-	end)
-end
-
-function M.open_supertypes()
-	M.open_type_hierarchy("supertypes")
-end
-
-function M.open_supertypes_quickfix()
-	M.open_type_hierarchy_quickfix("supertypes")
-end
-
-function M.open_subtypes()
-	M.open_type_hierarchy("subtypes")
-end
-
-function M.open_subtypes_quickfix()
-	M.open_type_hierarchy_quickfix("subtypes")
-end
-
-function M.open_highlights()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading highlights")
-	end
-	require("acp.highlights").request(state.source, function(items, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-
-		state.source_highlights = items or {}
-		refresh_source_marks(state)
-		if #state.source_highlights == 0 then
-			if not state.busy then
-				set_run_status(state, "highlights: none")
-			end
-			notify("No LSP document highlights found for the source cursor", vim.log.levels.WARN)
-			return
-		end
-		if not state.busy then
-			set_run_status(state, ("highlights: %d"):format(#state.source_highlights))
-		end
-	end)
-end
-
-function M.clear_highlights()
-	local state = current_source_action_state()
-	if not state then
-		return
-	end
-
-	state.source_highlights = nil
-	refresh_source_marks(state)
-	if not state.busy then
-		set_run_status(state, "highlights cleared")
-	end
-end
-
-function M.open_references()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading references")
-	end
-	references.request(state.source, function(reference_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_reference_picker(state, reference_list)
-	end)
-end
-
-function M.open_references_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_references_quickfix(state)
-end
-
-function M.open_declarations()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading declarations")
-	end
-	local spec = lsp_location_specs.declaration
-	request_lsp_locations(state.source, spec.method, function(declaration_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_lsp_location_picker(state, spec, declaration_list)
-	end, {
-		unavailable = spec.unavailable,
-		unsupported = spec.unsupported,
-	})
-end
-
-function M.open_declarations_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_lsp_location_quickfix(state, lsp_location_specs.declaration)
-end
-
-function M.open_definitions()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading definitions")
-	end
-	local spec = lsp_location_specs.definition
-	request_lsp_locations(state.source, spec.method, function(definition_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_lsp_location_picker(state, spec, definition_list)
-	end, {
-		unavailable = spec.unavailable,
-		unsupported = spec.unsupported,
-	})
-end
-
-function M.open_definitions_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_lsp_location_quickfix(state, lsp_location_specs.definition)
-end
-
-function M.open_implementations()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading implementations")
-	end
-	local spec = lsp_location_specs.implementation
-	request_lsp_locations(state.source, spec.method, function(implementation_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_lsp_location_picker(state, spec, implementation_list)
-	end, {
-		unavailable = spec.unavailable,
-		unsupported = spec.unsupported,
-	})
-end
-
-function M.open_implementations_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_lsp_location_quickfix(state, lsp_location_specs.implementation)
-end
-
-function M.open_type_definitions()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading type definitions")
-	end
-	local spec = lsp_location_specs.type_definition
-	request_lsp_locations(state.source, spec.method, function(type_definition_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_lsp_location_picker(state, spec, type_definition_list)
-	end, {
-		unavailable = spec.unavailable,
-		unsupported = spec.unsupported,
-	})
-end
-
-function M.open_type_definitions_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_lsp_location_quickfix(state, lsp_location_specs.type_definition)
-end
-
-function M.open_workspace_symbols(query)
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local workspace_symbols = require("acp.workspace_symbols")
-	local resolved_query = workspace_symbols.default_query(state.source, query)
-	if not resolved_query or resolved_query == "" then
-		notify("No LSP workspace symbol query is available", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, ("loading workspace symbols: %s"):format(resolved_query))
-	end
-	workspace_symbols.request(state.source, resolved_query, function(symbol_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		if not symbol_list or #symbol_list == 0 then
-			notify("No LSP workspace symbols found", vim.log.levels.WARN)
-			return
-		end
-
-		local lines, line_symbols = workspace_symbols.picker_lines(symbol_list, {
-			title = ("ACP Workspace Symbols: %s"):format(resolved_query),
-		})
-		local view = picker.open({
-			name = ("ACP://%s/%d/workspace-symbols"):format(state.adapter, state.id),
-			filetype = "acp-workspace-symbols",
-			lines = lines,
-			title = " ACP workspace symbols ",
-			title_icon = icons.symbol,
-			submit_desc = "Add ACP workspace symbol context",
-			close_desc = "Close ACP workspace symbols",
-			preview = function(row)
-				local symbol = line_symbols[row]
-				if not symbol then
-					return nil
-				end
-				local bufnr = workspace_symbols.bufnr(symbol)
-				return source_preview(
-					bufnr,
-					workspace_symbols.range(symbol),
-					(" Workspace symbol %s "):format(symbol.name)
-				)
-			end,
-			on_submit = function(row, view)
-				local symbol = line_symbols[row]
-				if not symbol then
-					return
-				end
-				local prompt, err = workspace_symbols.prompt(symbol)
-				if not prompt then
-					notify(err or "Failed to render LSP workspace symbol context", vim.log.levels.ERROR)
-					return
-				end
-				view.close()
-				append_input_text(state, prompt)
-				if not state.busy then
-					set_run_status(state, ("workspace symbol: %s"):format(symbol.name))
-				end
-				if valid_win(state.input_win) then
-					vim.api.nvim_set_current_win(state.input_win)
-				end
-			end,
-		})
-
-		vim.keymap.set("n", "Q", function()
-			view.close()
-			M.open_workspace_symbols_quickfix(resolved_query, symbol_list, state)
-		end, { buffer = view.bufnr, nowait = true, desc = "Open ACP workspace symbols quickfix" })
-	end)
-end
-
-function M.open_workspace_symbols_quickfix(query, symbol_list, state_override)
-	local state = state_override or current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local workspace_symbols = require("acp.workspace_symbols")
-	local resolved_query = workspace_symbols.default_query(state.source, query)
-	if not resolved_query or resolved_query == "" then
-		notify("No LSP workspace symbol query is available", vim.log.levels.WARN)
-		return
-	end
-
-	local function open_items(items)
-		if not items or #items == 0 then
-			notify("No LSP workspace symbols found", vim.log.levels.WARN)
-			return false
-		end
-
-		local qf_items = workspace_symbols.quickfix_items(items)
-		if #qf_items == 0 then
-			notify("No quickfix-ready LSP workspace symbols found", vim.log.levels.WARN)
-			return false
-		end
-
-		vim.fn.setqflist({}, " ", {
-			title = icons.quickfix_title(
-				("ACP workspace symbols #%s: %s"):format(tostring(state.id or "?"), resolved_query)
-			),
-			items = qf_items,
-		})
-		vim.cmd("copen")
-		if not state.busy then
-			set_run_status(state, "workspace symbols quickfix")
-		end
-		return true
-	end
-
-	if symbol_list then
-		open_items(symbol_list)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, ("loading workspace symbols quickfix: %s"):format(resolved_query))
-	end
-	workspace_symbols.request(state.source, resolved_query, function(items, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
-			end
-			notify(err, vim.log.levels.WARN)
-			return
-		end
-		open_items(items)
-	end)
-end
-
-function M.open_symbols()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	if not state.busy then
-		set_run_status(state, "loading symbols")
-	end
-	request_lsp_symbols(state.source.bufnr, function(symbol_list, err)
-		if err then
-			if not state.busy then
-				set_run_status(state, ("error: %s"):format(err))
+		local buffers = { state.input_buf, state.output_buf }
+		M.close()
+		for _, bufnr in ipairs(buffers) do
+			if valid_buf(bufnr) then
+				pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
 			end
-			notify(err, vim.log.levels.WARN)
-			return
 		end
-		open_symbol_picker(state, symbol_list)
-	end)
-end
-
-function M.open_symbols_quickfix()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	open_symbols_quickfix(state)
-end
-
-function M.open_treesitter()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if not state.source or not valid_buf(state.source.bufnr) then
-		notify("No source buffer is available for this ACP session", vim.log.levels.WARN)
-		return
-	end
-
-	local node_list, err = treesitter.nodes(state.source.bufnr, state.source.cursor or { 1, 0 })
-	if err then
-		notify(err, vim.log.levels.WARN)
-		return
-	end
-	open_treesitter_picker(state, node_list)
-end
-
-function M.handle_prompt_completion_action(state_id, completed_item)
-	local state = sessions[state_id]
-	if not (state and valid_buf(state.input_buf) and valid_win(state.input_win)) then
-		return
-	end
-
-	local prompt_completion = require("acp.prompt_completion")
-	local item = completed_item or {}
-	local action_id = prompt_completion.action_id(item)
-	if not action_id then
-		return
-	end
-
-	vim.api.nvim_set_current_win(state.input_win)
-	prompt_completion.remove_completed_word(state.input_buf, state.input_win, item.word)
-	refresh_prompt_hints(state)
-
-	local runners = {
-		context = function()
-			M.add_context()
-		end,
-		smart_context = function()
-			M.add_smart_context()
-		end,
-		diagnostics = function()
-			M.open_diagnostics()
-		end,
-		workspace_diagnostics = function()
-			M.open_workspace_diagnostics()
-		end,
-		code_actions = function()
-			M.open_code_actions()
-		end,
-		code_lens = function()
-			M.open_code_lens()
-		end,
-		document_colors = function()
-			M.open_document_colors()
-		end,
-		document_links = function()
-			M.open_document_links()
-		end,
-		folding_ranges = function()
-			M.open_folding_ranges()
-		end,
-		rename = function()
-			M.rename_symbol()
-		end,
-		hover = function()
-			M.add_hover()
-		end,
-		signature = function()
-			M.add_signature()
-		end,
-		inlay_hints = function()
-			M.open_inlay_hints()
-		end,
-		selection = function()
-			M.open_selection_ranges()
-		end,
-		references = function()
-			M.open_references()
-		end,
-		callers = function()
-			M.open_callers()
-		end,
-		callees = function()
-			M.open_callees()
-		end,
-		supertypes = function()
-			M.open_supertypes()
-		end,
-		subtypes = function()
-			M.open_subtypes()
-		end,
-		symbols = function()
-			M.open_symbols()
-		end,
-		workspace = function()
-			M.open_workspace_symbols()
-		end,
-		treesitter = function()
-			M.open_treesitter()
-		end,
-		output = function()
-			M.draft_output_section()
-		end,
-	}
-
-	local runner = runners[action_id]
-	if runner then
-		runner()
-	end
-end
-
-function M.prompt_completion_start(line, cursor_col)
-	return require("acp.prompt_completion").start(line, cursor_col)
-end
-
-function M.prompt_completion_items(bufnr, base)
-	local state = states[bufnr]
-	if not state then
-		return {}
-	end
-
-	return require("acp.prompt_completion").items(state.available_commands, base)
-end
-
-function M.prompt_completion_state_id(bufnr)
-	local state = states[bufnr]
-	return state and state.id or nil
-end
-
-function M.prompt_previous()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	recall_prompt(state, -1)
-end
-
-function M.prompt_next()
-	local state = current_state()
-	if not state then
-		return
-	end
-
-	recall_prompt(state, 1)
-end
-
-function M.send()
-	local state = current_state()
-	if not state then
-		return
-	end
-	if state.busy then
-		notify("ACP agent is still responding", vim.log.levels.WARN)
-		return
-	end
-
-	local prompt = input_prompt(state)
-	if not prompt then
-		notify("Prompt is empty", vim.log.levels.WARN)
-		return
-	end
-
-	record_prompt(state, prompt)
-	state.busy = true
-	state.streaming = false
-	state.run_status = nil
-	output_status.clear(state)
-
-	clear_input(state)
-	append_lines(state, { "", "You", "" })
-	append_lines(state, vim.split(prompt, "\n", { plain = true }))
-	append_lines(state, { "", "Agent", "" })
-	state.stream_role = "Agent"
-	set_run_status(state, "connecting")
-	pcall(vim.cmd, "redraw")
-
-	local ok = state.connection:prompt_async(prompt, chat_handlers(state))
-
-	if not ok then
-		state.busy = false
-		set_run_status(state, "error: failed to start session")
-	end
-end
-
-function M.health(adapter_name)
-	health.notify(config, adapter_name or config.default_adapter, notify)
-end
-
-function M.stop()
-	local state = current_state()
-	if not state then
-		return
-	end
-	state.connection:stop()
-	state.busy = false
-	set_run_status(state, "stopped")
-	notify("Stopped ACP agent")
-end
-
-function M.tabline()
-	local parts = {}
-	local current = vim.api.nvim_get_current_tabpage()
-
-	for index, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
-		local highlight = tabpage == current and "%#TabLineSel#" or "%#TabLine#"
-		local title = escape_tabline(tab_title(tabpage))
-		table.insert(parts, ("%s%%%dT %d:%s "):format(highlight, index, index, title))
-	end
-
-	table.insert(parts, "%#TabLineFill#%T")
-	return table.concat(parts)
-end
-
-function _G.acp_nvim_output_foldexpr()
-	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, 0, -1, false)
-	if not ok then
-		return "0"
-	end
-	return require("acp.output").fold_level(lines, vim.v.lnum)
-end
-
-function _G.acp_nvim_output_foldtext()
-	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, 0, -1, false)
-	if not ok then
-		return ""
 	end
-	return require("acp.output").fold_text(lines, vim.v.foldstart, vim.v.foldend)
+	state = nil
+	client = nil
 end
 
 return M

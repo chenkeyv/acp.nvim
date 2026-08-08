@@ -8,39 +8,47 @@ M.errors = {
 	internal_error = -32603,
 }
 
-local function normalize_params(params)
-	if not params or vim.tbl_isempty(params) then
+local function params_or_empty(params)
+	if params == nil or params == vim.NIL then
 		return vim.empty_dict()
 	end
 	return params
 end
 
+-- Codex app-server uses JSON-RPC semantics but intentionally omits the
+-- `jsonrpc = "2.0"` field on the wire.
 function M.request(id, method, params)
 	return {
-		jsonrpc = "2.0",
 		id = id,
 		method = method,
-		params = normalize_params(params),
+		params = params_or_empty(params),
 	}
+end
+
+function M.notification(method, params)
+	local message = { method = method }
+	if params ~= nil and params ~= vim.NIL then
+		message.params = params
+	end
+	return message
 end
 
 function M.result(id, result)
 	return {
-		jsonrpc = "2.0",
 		id = id,
-		result = result == nil and vim.NIL or result,
+		result = result == nil and vim.empty_dict() or result,
 	}
 end
 
-function M.error(id, message, code)
-	return {
-		jsonrpc = "2.0",
-		id = id,
-		error = {
-			code = code or M.errors.internal_error,
-			message = message,
-		},
+function M.error(id, message, code, data)
+	local err = {
+		code = code or M.errors.internal_error,
+		message = message,
 	}
+	if data ~= nil then
+		err.data = data
+	end
+	return { id = id, error = err }
 end
 
 function M.decode(line)
@@ -48,7 +56,7 @@ function M.decode(line)
 	if not ok or type(message) ~= "table" then
 		return nil, message
 	end
-	return message, nil
+	return message
 end
 
 local LineBuffer = {}
@@ -64,7 +72,6 @@ function LineBuffer:push(data, callback)
 	end
 
 	self.data = self.data .. data
-
 	while true do
 		local newline = self.data:find("\n", 1, true)
 		if not newline then
@@ -73,11 +80,14 @@ function LineBuffer:push(data, callback)
 
 		local line = self.data:sub(1, newline - 1):gsub("\r$", "")
 		self.data = self.data:sub(newline + 1)
-
 		if line ~= "" then
 			callback(line)
 		end
 	end
+end
+
+function LineBuffer:reset()
+	self.data = ""
 end
 
 M.LineBuffer = LineBuffer

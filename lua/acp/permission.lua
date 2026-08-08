@@ -1,10 +1,15 @@
 local M = {}
-local chrome = require("acp.picker_chrome")
-local icons = require("acp.icons")
 
 local permission_ns = vim.api.nvim_create_namespace("acp.nvim.permission")
 
+local function title(text)
+	return ("! %s"):format(text)
+end
+
 local function clean(value)
+	if type(value) == "table" then
+		value = vim.inspect(value)
+	end
 	return tostring(value or ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
@@ -12,12 +17,11 @@ local function option_label(option)
 	return clean(option.name or option.kind or option.optionId or "option")
 end
 
-local function append_field(lines, label, value, icon)
+local function append_field(lines, label, value)
 	if value == nil or value == "" or value == vim.NIL then
 		return
 	end
-	local suffix = icon and (" " .. icon) or ""
-	table.insert(lines, ("%s: %s%s"):format(label, clean(value), suffix))
+	table.insert(lines, ("%s: %s"):format(label, clean(value)))
 end
 
 local function append_details(lines, details)
@@ -29,10 +33,10 @@ local function append_details(lines, details)
 	for _, detail in ipairs(details) do
 		if type(detail) == "table" and detail.value ~= nil and detail.value ~= "" and detail.value ~= vim.NIL then
 			if not added then
-				table.insert(lines, chrome.title(icons.inspect, "Details"))
+				table.insert(lines, title("Details"))
 				added = true
 			end
-			append_field(lines, detail.label or detail.name or "Detail", detail.value, detail.icon or icons.note)
+			append_field(lines, detail.label or detail.name or "Detail", detail.value)
 		end
 	end
 
@@ -51,10 +55,10 @@ function M.option_labels(options)
 end
 
 function M.define_highlights()
-	vim.api.nvim_set_hl(0, "AcpPermissionHeader", { fg = "#e0af68", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "AcpPermissionField", { fg = "#7aa2f7", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "AcpPermissionOption", { fg = "#9ece6a", bold = true, default = true })
-	vim.api.nvim_set_hl(0, "AcpPermissionKey", { fg = "#e0af68", bold = true, default = true })
+	vim.api.nvim_set_hl(0, "AcpPermissionHeader", { link = "WarningMsg", default = true })
+	vim.api.nvim_set_hl(0, "AcpPermissionField", { link = "Identifier", default = true })
+	vim.api.nvim_set_hl(0, "AcpPermissionOption", { link = "String", default = true })
+	vim.api.nvim_set_hl(0, "AcpPermissionKey", { link = "Special", default = true })
 	vim.api.nvim_set_hl(0, "AcpPermissionFooter", { link = "Comment", default = true })
 end
 
@@ -81,7 +85,7 @@ local function apply_highlights(bufnr, lines)
 	for index, line in ipairs(lines or {}) do
 		local row = index - 1
 		if
-			line:find("Permission request", 1, true)
+			line:find("permission request", 1, true)
 			or line:find("Details", 1, true)
 			or line:find("Options", 1, true)
 		then
@@ -118,16 +122,16 @@ function M.lines(params)
 	local options = params.options or {}
 	local tool = params.toolCall or {}
 	local lines = {
-		chrome.title(icons.warning, "Permission request"),
+		title("Codex permission request"),
 		"",
 	}
 
-	append_field(lines, "Tool", tool.title or tool.name, icons.tool)
-	append_field(lines, "Kind", tool.kind, icons.type)
-	append_field(lines, "Status", tool.status, icons.status)
-	append_field(lines, "Description", tool.description, icons.note)
-	append_field(lines, "Location", tool.location or tool.path, icons.location)
-	append_field(lines, "Request", params.title or params.description or params.prompt, icons.prompt)
+	append_field(lines, "Tool", tool.title or tool.name)
+	append_field(lines, "Kind", tool.kind)
+	append_field(lines, "Status", tool.status)
+	append_field(lines, "Description", tool.description)
+	append_field(lines, "Location", tool.location or tool.path)
+	append_field(lines, "Request", params.title or params.description or params.prompt)
 
 	if #lines > 2 then
 		table.insert(lines, "")
@@ -135,26 +139,24 @@ function M.lines(params)
 
 	append_details(lines, params.details)
 
-	table.insert(lines, chrome.title(icons.action, "Options"))
+	table.insert(lines, title("Options"))
 	for index, option in ipairs(options) do
 		local key = index <= 9 and tostring(index) or "-"
-		table.insert(lines, ("  %s. %s %s"):format(key, option_label(option), icons.action))
-		append_field(lines, "     Outcome", option.optionId, icons.status)
-		append_field(lines, "     Kind", option.kind, icons.type)
-		append_field(lines, "     Description", option.description, icons.note)
+		table.insert(lines, ("  %s. %s"):format(key, option_label(option)))
+		append_field(lines, "     Outcome", option.optionId)
+		append_field(lines, "     Kind", option.kind)
+		append_field(lines, "     Description", option.description)
 	end
 
 	table.insert(lines, "")
-	table.insert(lines, chrome.footer("Press 1-9 to choose, <CR> for the first option, or q/<Esc> to cancel."))
+	table.insert(lines, "Press 1-9 to choose, <CR> for the first option, or q/<Esc> to cancel.")
 	return lines
 end
 
 local function permission_winbar(options)
 	local count = #(options or {})
 	local noun = count == 1 and "option" or "options"
-	return (" %s ACP permission  %s %d %s  %s 1-9 choose  %s <CR> default  %s q cancel ")
-		:format(icons.warning, icons.action, count, noun, icons.key, icons.key, icons.key)
-		:gsub("%%", "%%%%")
+	return (" Codex permission  %d %s  1-9 choose  <CR> default  q cancel "):format(count, noun):gsub("%%", "%%%%")
 end
 
 local function close_window(winid, bufnr)
@@ -182,7 +184,7 @@ local function window_config(lines)
 		height = height,
 		style = "minimal",
 		border = "rounded",
-		title = (" %s ACP permission "):format(icons.warning),
+		title = " Codex permission ",
 		title_pos = "left",
 		zindex = 70,
 	}
@@ -194,7 +196,7 @@ function M.select(params, callback)
 	local lines = M.lines(params)
 	M.define_highlights()
 	local bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(bufnr, "ACP://permission")
+	vim.api.nvim_buf_set_name(bufnr, ("acp://codex/permission/%s"):format(vim.uv.hrtime()))
 	vim.bo[bufnr].buftype = "nofile"
 	vim.bo[bufnr].bufhidden = "wipe"
 	vim.bo[bufnr].filetype = "acp-permission"
@@ -219,21 +221,32 @@ function M.select(params, callback)
 		close_window(winid, bufnr)
 		callback(option)
 	end
+	vim.api.nvim_create_autocmd("BufWipeout", {
+		buffer = bufnr,
+		once = true,
+		callback = function()
+			if not done then
+				done = true
+				close_window(winid, nil)
+				callback(nil)
+			end
+		end,
+	})
 
 	vim.keymap.set("n", "<CR>", function()
 		finish(options[1])
-	end, { buffer = bufnr, nowait = true, desc = "Choose first ACP permission option" })
+	end, { buffer = bufnr, nowait = true, desc = "Choose first Codex permission option" })
 
 	for index = 1, math.min(#options, 9) do
 		vim.keymap.set("n", tostring(index), function()
 			finish(options[index])
-		end, { buffer = bufnr, nowait = true, desc = ("Choose ACP permission option %d"):format(index) })
+		end, { buffer = bufnr, nowait = true, desc = ("Choose Codex permission option %d"):format(index) })
 	end
 
 	for _, key in ipairs({ "q", "<Esc>" }) do
 		vim.keymap.set("n", key, function()
 			finish(nil)
-		end, { buffer = bufnr, nowait = true, desc = "Cancel ACP permission request" })
+		end, { buffer = bufnr, nowait = true, desc = "Cancel Codex permission request" })
 	end
 
 	return bufnr, winid
