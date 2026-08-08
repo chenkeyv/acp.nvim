@@ -15,6 +15,7 @@ phase.
 
 - one long-lived `codex app-server` process per Neovim instance
 - new, recent, and resumed Codex threads, including VS Code-created threads
+- a persistent left sessions split with the current chat pinned at the top
 - streamed agent messages and plans
 - command, tool, and file-change summaries
 - model and reasoning-effort selectors from the server catalog
@@ -62,16 +63,21 @@ Or call setup explicitly from another plugin manager:
 require("acp").setup({
 	command = { "codex", "app-server" },
 	auto_context = true,
-	follow_up = "queue", -- "queue" or "steer"
-	thread_sources = { "appServer", "vscode" },
+	follow_up = "queue", -- busy-turn delivery for <C-CR> and :AcpSend: "queue" or "steer"
+	thread_sources = { "cli", "vscode", "appServer" },
 	window = {
 		input_height = 6,
+		sessions_width = 30,
 	},
 })
 ```
 
 `command = "codex"` is also accepted and expands to the default app-server
 command. A command table is used exactly as supplied.
+
+The sessions split is scoped to the current working directory, like
+`codex resume` without `--all`. It includes the CLI and VS Code interactive
+sources plus `appServer`, so chats created by acp.nvim remain resumable too.
 
 Useful optional overrides:
 
@@ -93,7 +99,8 @@ require("acp").setup({
 | --- | --- |
 | `:AcpChat [prompt]` | Open the dedicated Codex tab; a range adds the selected lines as context |
 | `:AcpNew [prompt]` | Start a fresh chat |
-| `:AcpThreads` | Select and resume a recent thread (`:AcpSessions` is an alias) |
+| `:AcpThreads` | Select and resume a recent thread |
+| `:AcpSessions` | Focus or restore the left sessions split |
 | `:AcpAddContext` | Add the current file or selected range |
 | `:AcpAddFile` | Add the current file |
 | `:AcpModel` | Choose a model advertised by app-server |
@@ -112,10 +119,13 @@ The prompt also accepts `/model`, `/reasoning`, `/review`, `/compact`,
 
 Codex tab keymaps:
 
-- `<C-s>` or `<C-CR>` sends from the prompt
+- `<C-s>` starts a turn when idle or steers the active turn
+- `<C-CR>` sends from the prompt, using `follow_up` when a turn is active
 - `i` focuses the prompt from output
-- `n`, `t`, `d`, `m`, `r`, and `s` select new chat, threads, diff, model,
+- `n`, `t`, `d`, `m`, `r`, and `s` select new chat, sessions, diff, model,
   reasoning, and stop from output
+- in the sessions split, `<Enter>` resumes a session, `r` refreshes the list,
+  `n` starts a new chat, and `i` focuses the prompt
 - `q` closes the Codex tab and returns to the source tab
 
 ## Hot reload during development

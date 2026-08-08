@@ -18,10 +18,11 @@ local defaults = {
 	auto_context = true,
 	follow_up = "queue",
 	review_delivery = "inline",
-	thread_sources = { "appServer", "vscode" },
+	thread_sources = { "cli", "vscode", "appServer" },
 	max_threads = 100,
 	window = {
 		input_height = 6,
+		sessions_width = 30,
 	},
 }
 
@@ -34,6 +35,7 @@ local state
 local select_model
 local select_reasoning
 local open_threads
+local refresh_threads
 local start_review
 local compact_thread
 local show_status
@@ -97,6 +99,10 @@ local function fresh_state(cwd)
 		plan_item = nil,
 		models = nil,
 		threads = nil,
+		threads_error = nil,
+		threads_loading = false,
+		thread_waiters = {},
+		thread_rows = {},
 		tokens = nil,
 	}
 end
@@ -198,6 +204,64 @@ local function set_input(text)
 	vim.bo[state.input_buf].modifiable = true
 end
 
+local function set_sessions(lines)
+	if not state or not valid_buf(state.sessions_buf) then
+		return
+	end
+	with_modifiable(state.sessions_buf, function()
+		vim.api.nvim_buf_set_lines(state.sessions_buf, 0, -1, false, lines)
+	end)
+end
+
+local function session_entries()
+	local entries = {}
+	local listed_current
+	for _, thread in ipairs(state.threads or {}) do
+		if state.thread_id and thread.id == state.thread_id then
+			listed_current = thread
+		else
+			table.insert(entries, { thread = thread, current = false })
+		end
+	end
+
+	local current
+	if state.thread_id then
+		current = vim.tbl_extend(
+			"force",
+			{},
+			state.current_thread or {},
+			listed_current or {},
+			{ id = state.thread_id, cwd = state.cwd }
+		)
+		if
+			(not present(current.name) or current.name == "")
+			and (not present(current.preview) or current.preview == "")
+		then
+			current.preview = "Current session"
+		end
+	else
+		current = { preview = "New chat", cwd = state.cwd }
+	end
+	table.insert(entries, 1, { thread = current, current = true })
+	return entries
+end
+
+local function render_sessions()
+	if not state or not valid_buf(state.sessions_buf) then
+		return
+	end
+	local lines = {}
+	local rows = {}
+	for _, entry in ipairs(session_entries()) do
+		local marker = entry.current and "*" or " "
+		table.insert(lines, ("%s %s"):format(marker, render.thread_label(entry.thread)))
+		rows[#lines] = entry
+	end
+	state.thread_rows = rows
+	state.sessions_count = #rows
+	set_sessions(lines)
+end
+
 local function update_chrome()
 	if not state then
 		return
@@ -218,8 +282,18 @@ local function update_chrome()
 		local context_count = #(state.contexts or {})
 		local queued = #state.queue > 0 and (" · %d queued"):format(#state.queue) or ""
 		vim.wo[state.input_win].winbar = escaped_winbar(
-			(" Prompt · %d context%s%s · <C-s> send "):format(context_count, context_count == 1 and "" or "s", queued)
+			(" Prompt · %d context%s%s · <C-s> steer · <C-CR> send "):format(
+				context_count,
+				context_count == 1 and "" or "s",
+				queued
+			)
 		)
+	end
+	if valid_win(state.sessions_win) then
+		local count = state.sessions_count or 1
+		local loading = state.threads_loading and " · loading" or ""
+		vim.wo[state.sessions_win].winbar =
+			escaped_winbar((" Sessions · %d%s "):format(count, loading))
 	end
 end
 
@@ -266,6 +340,7 @@ function M.close()
 	local return_win = chat_tab == current_tab and state.origin_win or current_win
 	if not close_tab(chat_tab, return_win) then
 		close_window(state.input_win)
+		close_window(state.sessions_win)
 		if valid_win(state.output_win) then
 			local output_tab = vim.api.nvim_win_get_tabpage(state.output_win)
 			if #vim.api.nvim_list_tabpages() == 1 and #vim.api.nvim_tabpage_list_wins(output_tab) == 1 then
@@ -277,6 +352,7 @@ function M.close()
 		end
 	end
 	state.input_win = nil
+	state.sessions_win = nil
 	state.output_win = nil
 	state.tabpage = nil
 	if valid_win(return_win) then
@@ -288,6 +364,17 @@ end
 
 local function create_buffers()
 	local created = false
+	if not valid_buf(state.sessions_buf) then
+		created = true
+		state.sessions_buf = vim.api.nvim_create_buf(false, true)
+		pcall(vim.api.nvim_buf_set_name, state.sessions_buf, "acp://codex/sessions")
+		vim.bo[state.sessions_buf].buftype = "nofile"
+		vim.bo[state.sessions_buf].bufhidden = "hide"
+		vim.bo[state.sessions_buf].swapfile = false
+		vim.bo[state.sessions_buf].filetype = "acp-sessions"
+		vim.bo[state.sessions_buf].modifiable = false
+		render_sessions()
+	end
 	if not valid_buf(state.output_buf) then
 		created = true
 		state.output_buf = vim.api.nvim_create_buf(false, true)
@@ -336,17 +423,29 @@ local function configure_window(winid, output)
 	end
 end
 
+local function configure_sessions_window(winid)
+	configure_window(winid, false)
+	vim.wo[winid].wrap = false
+	vim.wo[winid].linebreak = false
+	vim.wo[winid].winfixwidth = true
+end
+
 local function open_layout()
 	if
 		valid_win(state.output_win)
 		and valid_win(state.input_win)
+		and valid_win(state.sessions_win)
 		and vim.api.nvim_win_get_tabpage(state.output_win) == vim.api.nvim_win_get_tabpage(state.input_win)
+		and vim.api.nvim_win_get_tabpage(state.output_win) == vim.api.nvim_win_get_tabpage(state.sessions_win)
 	then
 		state.tabpage = vim.api.nvim_win_get_tabpage(state.output_win)
 		vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
 		vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
+		vim.api.nvim_win_set_buf(state.sessions_win, state.sessions_buf)
 		configure_window(state.output_win, true)
 		configure_window(state.input_win, false)
+		configure_sessions_window(state.sessions_win)
+		render_sessions()
 		update_chrome()
 		focus_input(false)
 		return
@@ -354,6 +453,7 @@ local function open_layout()
 
 	local previous_output = state.output_win
 	local previous_input = state.input_win
+	local previous_sessions = state.sessions_win
 	local tabpage = valid_tab(state.tabpage) and state.tabpage or nil
 	if not tabpage then
 		vim.cmd("tabnew")
@@ -363,14 +463,14 @@ local function open_layout()
 	end
 
 	local output_win
-	for _, winid in ipairs({ previous_output, previous_input }) do
+	for _, winid in ipairs({ previous_output, previous_input, previous_sessions }) do
 		if valid_win(winid) and vim.api.nvim_win_get_tabpage(winid) == tabpage then
 			output_win = winid
 			break
 		end
 	end
 	output_win = output_win or vim.api.nvim_tabpage_list_wins(tabpage)[1]
-	for _, winid in ipairs({ previous_output, previous_input }) do
+	for _, winid in ipairs({ previous_output, previous_input, previous_sessions }) do
 		if valid_win(winid) and winid ~= output_win then
 			close_window(winid)
 		end
@@ -379,14 +479,24 @@ local function open_layout()
 	state.tabpage = tabpage
 	state.output_win = output_win
 	state.input_win = nil
+	state.sessions_win = nil
 	vim.api.nvim_set_current_win(state.output_win)
 	vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
 	configure_window(state.output_win, true)
+
+	local sessions_width = math.max(16, tonumber(config.window.sessions_width) or 30)
+	vim.cmd(("topleft %dvsplit"):format(sessions_width))
+	state.sessions_win = vim.api.nvim_get_current_win()
+	vim.api.nvim_win_set_buf(state.sessions_win, state.sessions_buf)
+	configure_sessions_window(state.sessions_win)
+	pcall(vim.api.nvim_win_set_width, state.sessions_win, sessions_width)
+	vim.api.nvim_set_current_win(state.output_win)
 
 	vim.cmd(("belowright %dsplit"):format(math.max(3, tonumber(config.window.input_height) or 6)))
 	state.input_win = vim.api.nvim_get_current_win()
 	vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
 	configure_window(state.input_win, false)
+	render_sessions()
 	update_chrome()
 	focus_input(false)
 end
@@ -468,6 +578,21 @@ local function apply_thread_response(result)
 	state.busy = turn ~= nil
 	set_output(render.thread(thread, state.cwd))
 	set_status(state.busy and "running" or "ready")
+	local found = false
+	local current_thread = thread
+	for index, listed in ipairs(state.threads or {}) do
+		if listed.id == thread.id then
+			current_thread = vim.tbl_extend("force", listed, thread)
+			state.threads[index] = current_thread
+			found = true
+			break
+		end
+	end
+	if state.threads and not found then
+		table.insert(state.threads, 1, thread)
+	end
+	state.current_thread = current_thread
+	render_sessions()
 	return true
 end
 
@@ -564,13 +689,13 @@ local function start_envelope(envelope)
 	end)
 end
 
-local function dispatch_prompt(envelope)
+local function dispatch_prompt(envelope, follow_up)
 	ensure_thread(function(ok)
 		if not ok then
 			return
 		end
 		if state.busy then
-			if config.follow_up == "steer" and state.turn_id then
+			if (follow_up or config.follow_up) == "steer" and state.turn_id then
 				append_user(envelope, " (steer)")
 				set_status("steering")
 				client:steer_turn(state.thread_id, state.turn_id, envelope.payload, function(_, err)
@@ -633,7 +758,7 @@ local function local_command(text)
 	return true
 end
 
-function M.send()
+local function submit_prompt(follow_up)
 	if not state then
 		M.open()
 	end
@@ -650,12 +775,25 @@ function M.send()
 	state.contexts = {}
 	set_input("")
 	update_chrome()
-	dispatch_prompt(envelope)
+	dispatch_prompt(envelope, follow_up)
+end
+
+function M.send()
+	submit_prompt()
+end
+
+function M.steer()
+	submit_prompt("steer")
 end
 
 local function set_buffer_keymaps()
 	local opts = { buffer = state.input_buf, silent = true }
-	vim.keymap.set({ "n", "i" }, "<C-s>", M.send, vim.tbl_extend("force", opts, { desc = "Send Codex prompt" }))
+	vim.keymap.set(
+		{ "n", "i" },
+		"<C-s>",
+		M.steer,
+		vim.tbl_extend("force", opts, { desc = "Steer active Codex turn" })
+	)
 	vim.keymap.set({ "n", "i" }, "<C-CR>", M.send, vim.tbl_extend("force", opts, { desc = "Send Codex prompt" }))
 	vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "Close Codex tab" }))
 
@@ -666,8 +804,8 @@ local function set_buffer_keymaps()
 	end, vim.tbl_extend("force", output_opts, { desc = "Focus Codex prompt" }))
 	vim.keymap.set("n", "n", M.new_chat, vim.tbl_extend("force", output_opts, { desc = "New Codex chat" }))
 	vim.keymap.set("n", "t", function()
-		open_threads()
-	end, vim.tbl_extend("force", output_opts, { desc = "Open Codex threads" }))
+		M.focus_sessions()
+	end, vim.tbl_extend("force", output_opts, { desc = "Focus Codex sessions" }))
 	vim.keymap.set("n", "d", M.open_diff, vim.tbl_extend("force", output_opts, { desc = "Open Codex diff" }))
 	vim.keymap.set("n", "m", function()
 		select_model()
@@ -676,6 +814,21 @@ local function set_buffer_keymaps()
 		select_reasoning()
 	end, vim.tbl_extend("force", output_opts, { desc = "Select Codex reasoning" }))
 	vim.keymap.set("n", "s", M.stop, vim.tbl_extend("force", output_opts, { desc = "Stop Codex turn" }))
+
+	if valid_buf(state.sessions_buf) then
+		local sessions_opts = { buffer = state.sessions_buf, silent = true }
+		vim.keymap.set("n", "<CR>", function()
+			M.select_session()
+		end, vim.tbl_extend("force", sessions_opts, { desc = "Resume Codex session" }))
+		vim.keymap.set("n", "r", function()
+			refresh_threads()
+		end, vim.tbl_extend("force", sessions_opts, { desc = "Refresh Codex sessions" }))
+		vim.keymap.set("n", "n", M.new_chat, vim.tbl_extend("force", sessions_opts, { desc = "New Codex chat" }))
+		vim.keymap.set("n", "i", function()
+			focus_input(true)
+		end, vim.tbl_extend("force", sessions_opts, { desc = "Focus Codex prompt" }))
+		vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", sessions_opts, { desc = "Close Codex tab" }))
+	end
 end
 
 function M.open(opts)
@@ -715,6 +868,9 @@ function M.open(opts)
 		state.keymaps_set = true
 	end
 	open_layout()
+	if state.threads == nil and not state.threads_loading then
+		refresh_threads()
+	end
 	if opts.prompt and opts.prompt ~= "" then
 		set_input(opts.prompt)
 		M.send()
@@ -732,8 +888,10 @@ function M.new_chat(opts)
 		state = fresh_state(current_cwd())
 	else
 		local windows = {
+			sessions_buf = state.sessions_buf,
 			output_buf = state.output_buf,
 			input_buf = state.input_buf,
+			sessions_win = state.sessions_win,
 			output_win = state.output_win,
 			input_win = state.input_win,
 			tabpage = state.tabpage,
@@ -742,6 +900,7 @@ function M.new_chat(opts)
 			source_buf = state.source_buf,
 			source_win = state.source_win,
 			keymaps_set = state.keymaps_set,
+			threads = state.threads,
 		}
 		state = vim.tbl_extend("force", fresh_state(current_cwd()), windows)
 	end
@@ -758,6 +917,7 @@ function M.new_chat(opts)
 	if valid_buf(state.input_buf) then
 		set_input("")
 	end
+	render_sessions()
 	update_chrome()
 	if not opts.keep_layout then
 		M.open()
@@ -789,25 +949,52 @@ local function resume_thread(thread)
 	end)
 end
 
-local function refresh_threads(callback)
-	set_status("loading threads")
+refresh_threads = function(callback)
+	if not state or not client then
+		if callback then
+			callback(nil)
+		end
+		return
+	end
+	state.thread_waiters = state.thread_waiters or {}
+	if callback then
+		table.insert(state.thread_waiters, callback)
+	end
+	if state.threads_loading then
+		return
+	end
+	state.threads_loading = true
+	state.threads_error = nil
+	render_sessions()
+	update_chrome()
+	local request_state = state
 	client:list_threads({
 		cwd = state.cwd,
 		source_kinds = config.thread_sources,
 		max_threads = config.max_threads,
 	}, function(threads, err)
+		if state ~= request_state then
+			return
+		end
+		state.threads_loading = false
+		local waiters = state.thread_waiters or {}
+		state.thread_waiters = {}
 		if err then
-			set_status(state.busy and "running" or "ready")
+			state.threads_error = err
+			render_sessions()
+			update_chrome()
 			notify(err, vim.log.levels.ERROR)
-			if callback then
-				callback(nil)
+			for _, waiter in ipairs(waiters) do
+				waiter(nil)
 			end
 			return
 		end
 		state.threads = threads
-		set_status(state.busy and "running" or "ready")
-		if callback then
-			callback(threads)
+		state.threads_error = nil
+		render_sessions()
+		update_chrome()
+		for _, waiter in ipairs(waiters) do
+			waiter(threads)
 		end
 	end)
 end
@@ -830,6 +1017,39 @@ open_threads = function()
 			end
 		end)
 	end)
+end
+
+function M.select_session()
+	if not state or not valid_win(state.sessions_win) then
+		return
+	end
+	local line = vim.api.nvim_win_get_cursor(state.sessions_win)[1]
+	local entry = state.thread_rows and state.thread_rows[line]
+	if not entry then
+		return
+	end
+	if entry.current then
+		focus_input(false)
+		return
+	end
+	resume_thread(entry.thread)
+end
+
+function M.focus_sessions()
+	if not state then
+		M.open()
+	else
+		create_buffers()
+		if not state.keymaps_set then
+			set_buffer_keymaps()
+			state.keymaps_set = true
+		end
+		open_layout()
+	end
+	if valid_win(state.sessions_win) then
+		vim.api.nvim_set_current_win(state.sessions_win)
+	end
+	refresh_threads()
 end
 
 local function model_by_id(id)
@@ -1302,7 +1522,7 @@ local function register_commands()
 		M.open({ new = true, prompt = command.args ~= "" and command.args or nil, range = command_range(command) })
 	end, { nargs = "*", range = true })
 	create_command("AcpThreads", open_threads)
-	create_command("AcpSessions", open_threads)
+	create_command("AcpSessions", M.focus_sessions)
 	create_command("AcpAddContext", function(command)
 		if not state then
 			M.open()
@@ -1347,10 +1567,15 @@ local function register_runtime()
 	register_commands()
 	register_autocmds()
 	if state and valid_buf(state.input_buf) and valid_buf(state.output_buf) then
+		create_buffers()
 		set_buffer_keymaps()
 		state.keymaps_set = true
+		open_layout()
 	end
 	if state then
+		if valid_win(state.sessions_win) then
+			configure_sessions_window(state.sessions_win)
+		end
 		if valid_win(state.output_win) then
 			configure_window(state.output_win, true)
 		end
@@ -1433,7 +1658,7 @@ function M._reset()
 		client:stop()
 	end
 	if state then
-		local buffers = { state.input_buf, state.output_buf }
+		local buffers = { state.sessions_buf, state.input_buf, state.output_buf }
 		M.close()
 		for _, bufnr in ipairs(buffers) do
 			if valid_buf(bufnr) then

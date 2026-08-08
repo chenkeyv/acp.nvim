@@ -444,6 +444,17 @@ end)
 test("Codex chat uses a dedicated tab and preserves the source layout", function()
 	ui._reset()
 	ui.setup({ auto_context = false, command = { "missing-codex" } })
+	local fake = { stopped = false }
+	function fake:set_handlers(handlers)
+		self.handlers = handlers
+	end
+	function fake:list_threads(_, callback)
+		callback({})
+	end
+	function fake:stop()
+		self.stopped = true
+	end
+	ui._set_client(fake)
 	vim.cmd("enew!")
 	local origin_tab = vim.api.nvim_get_current_tabpage()
 	local origin_win = vim.api.nvim_get_current_win()
@@ -458,9 +469,19 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(state.tabpage, chat_tab)
 		eq(#vim.api.nvim_list_tabpages(), tab_count + 1)
 		eq(vim.api.nvim_tabpage_list_wins(origin_tab), origin_windows)
-		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 2)
+		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 3)
+		eq(vim.bo[state.sessions_buf].filetype, "acp-sessions")
+		eq(vim.fn.winlayout(), {
+			"row",
+			{
+				{ "leaf", state.sessions_win },
+				{ "col", { { "leaf", state.output_win }, { "leaf", state.input_win } } },
+			},
+		})
+		eq(vim.api.nvim_win_get_position(state.sessions_win)[2], 0)
 		eq(vim.api.nvim_win_get_tabpage(state.output_win), chat_tab)
 		eq(vim.api.nvim_win_get_tabpage(state.input_win), chat_tab)
+		eq(vim.api.nvim_win_get_tabpage(state.sessions_win), chat_tab)
 
 		vim.api.nvim_win_close(state.input_win, true)
 		ui.open()
@@ -468,8 +489,15 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.api.nvim_get_current_tabpage(), chat_tab)
 		eq(state.tabpage, chat_tab)
 		eq(#vim.api.nvim_list_tabpages(), tab_count + 1)
-		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 2)
+		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 3)
 		eq(vim.api.nvim_tabpage_list_wins(origin_tab), origin_windows)
+
+		vim.api.nvim_win_close(state.sessions_win, true)
+		vim.cmd("AcpSessions")
+		state = ui._state()
+		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 3)
+		eq(vim.api.nvim_get_current_win(), state.sessions_win)
+		eq(vim.api.nvim_win_get_position(state.sessions_win)[2], 0)
 
 		local chat_windows = vim.api.nvim_tabpage_list_wins(chat_tab)
 		state.thread_id = "thread-1"
@@ -488,6 +516,75 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.api.nvim_get_current_win(), origin_win)
 		eq(#vim.api.nvim_list_tabpages(), tab_count)
 		eq(vim.api.nvim_tabpage_list_wins(origin_tab), origin_windows)
+	end)
+	ui._reset()
+	eq(fake.stopped, true)
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("sessions split lists and resumes Codex threads", function()
+	ui._reset()
+	ui.setup({ auto_context = false, command = { "missing-codex" } })
+	local fake = {
+		threads = {
+			{ id = "thread-a", preview = "First session", cwd = "/tmp/project" },
+			{ id = "thread-b", preview = "Second session", cwd = "/tmp/project" },
+		},
+	}
+
+	function fake:set_handlers(handlers)
+		self.handlers = handlers
+	end
+
+	function fake:list_threads(opts, callback)
+		self.list_opts = opts
+		callback(vim.deepcopy(self.threads))
+	end
+
+	function fake:resume_thread(thread_id, opts, callback)
+		self.resumed = { thread_id = thread_id, opts = opts }
+		callback({
+			thread = { id = thread_id, cwd = opts.cwd, turns = {} },
+			cwd = opts.cwd,
+		})
+	end
+
+	function fake:stop() end
+
+	ui._set_client(fake)
+	local passed, err = pcall(function()
+		ui.open()
+		local state = ui._state()
+		eq(fake.list_opts.cwd, vim.fs.normalize(vim.fn.getcwd()))
+		eq(fake.list_opts.source_kinds, { "cli", "vscode", "appServer" })
+		eq(vim.api.nvim_buf_get_lines(state.sessions_buf, 0, -1, false), {
+			"* New chat",
+			"  First session",
+			"  Second session",
+		})
+
+		vim.api.nvim_set_current_win(state.sessions_win)
+		vim.api.nvim_win_set_cursor(state.sessions_win, { 1, 0 })
+		ui.select_session()
+		eq(fake.resumed, nil)
+		eq(vim.api.nvim_get_current_win(), state.input_win)
+
+		vim.api.nvim_set_current_win(state.sessions_win)
+		vim.api.nvim_win_set_cursor(state.sessions_win, { 3, 0 })
+		ui.select_session()
+
+		eq(fake.resumed.thread_id, "thread-b")
+		eq(state.thread_id, "thread-b")
+		eq(vim.api.nvim_get_current_win(), state.input_win)
+		local lines = vim.api.nvim_buf_get_lines(state.sessions_buf, 0, -1, false)
+		eq(lines, { "* Second session", "  First session" })
+
+		fake.threads = { fake.threads[1] }
+		vim.cmd("AcpSessions")
+		lines = vim.api.nvim_buf_get_lines(state.sessions_buf, 0, -1, false)
+		eq(lines, { "* Second session", "  First session" })
 	end)
 	ui._reset()
 	if not passed then
@@ -591,6 +688,70 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 	eq(fake.stopped, true)
 end)
 
+test("control-s steers the active turn instead of queueing", function()
+	ui._reset()
+	ui.setup({ auto_context = false, follow_up = "queue", command = { "missing-codex" } })
+	local fake = { turns = {}, steers = {} }
+
+	function fake:set_handlers(handlers)
+		self.handlers = handlers
+	end
+
+	function fake:start_thread(opts, callback)
+		callback({
+			thread = { id = "thread-steer", cwd = opts.cwd, turns = {} },
+			cwd = opts.cwd,
+		})
+	end
+
+	function fake:start_turn(thread_id, payload, callback)
+		table.insert(self.turns, { thread_id = thread_id, payload = payload })
+		callback({ turn = { id = "turn-steer", status = "inProgress" } })
+	end
+
+	function fake:steer_turn(thread_id, turn_id, payload, callback)
+		table.insert(self.steers, { thread_id = thread_id, turn_id = turn_id, payload = payload })
+		callback({})
+	end
+
+	function fake:list_threads(_, callback)
+		callback({})
+	end
+
+	function fake:stop() end
+
+	ui._set_client(fake)
+	local passed, err = pcall(function()
+		ui.open()
+		local state = ui._state()
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Start the implementation" })
+		ui.send()
+		eq(state.turn_id, "turn-steer")
+		eq(#fake.turns, 1)
+
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Keep the public API unchanged" })
+		vim.api.nvim_set_current_win(state.input_win)
+		local control_s = vim.api.nvim_replace_termcodes("<C-s>", true, false, true)
+		vim.api.nvim_feedkeys(control_s, "x", false)
+
+		eq(#fake.steers, 1)
+		eq(fake.steers[1].thread_id, "thread-steer")
+		eq(fake.steers[1].turn_id, "turn-steer")
+		eq(fake.steers[1].payload.input[1].text, "Keep the public API unchanged")
+		eq(#state.queue, 0)
+		contains(table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n"), "## You (steer)")
+
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Run the tests afterward" })
+		ui.send()
+		eq(#fake.steers, 1)
+		eq(#state.queue, 1)
+	end)
+	ui._reset()
+	if not passed then
+		error(err, 2)
+	end
+end)
+
 test("health reports the direct app-server architecture", function()
 	ui.setup({ command = "sh" })
 	local reports = {}
@@ -651,6 +812,8 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 	vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "preserve this draft" })
 
 	local tabpage = state.tabpage
+	local sessions_buf = state.sessions_buf
+	local sessions_win = state.sessions_win
 	local output_buf = state.output_buf
 	local input_buf = state.input_buf
 	local process_client = ui._client()
@@ -695,6 +858,8 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 		eq(state.turn_id, "turn-hot-reload")
 		eq(state.busy, true)
 		eq(state.tabpage, tabpage)
+		eq(state.sessions_buf, sessions_buf)
+		eq(state.sessions_win, sessions_win)
 		eq(state.output_buf, output_buf)
 		eq(state.input_buf, input_buf)
 		eq(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), { "preserve this draft" })
