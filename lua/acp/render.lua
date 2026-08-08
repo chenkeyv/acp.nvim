@@ -114,12 +114,8 @@ local function user_message(item)
 	return lines
 end
 
-function M.thread(thread, cwd)
-	local lines = {
-		"# Codex",
-		"",
-		("Working directory: `%s`"):format(clean(cwd or thread.cwd)),
-	}
+function M.thread(thread, _)
+	local lines = {}
 	for _, turn in ipairs(thread.turns or {}) do
 		for _, item in ipairs(turn.items or {}) do
 			if item.type == "userMessage" then
@@ -132,7 +128,9 @@ function M.thread(thread, cwd)
 			end
 		end
 	end
-	table.insert(lines, "")
+	if #lines == 0 or lines[#lines] ~= "" then
+		table.insert(lines, "")
+	end
 	return lines
 end
 

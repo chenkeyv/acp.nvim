@@ -16,6 +16,7 @@ phase.
 - one long-lived `codex app-server` process per Neovim instance
 - new, recent, and resumed Codex threads, including VS Code-created threads
 - a persistent left sessions split with the current chat pinned at the top
+- an inset floating prompt with role, status, and tool-aware chat styling
 - streamed agent messages and plans
 - command, tool, and file-change summaries
 - model and reasoning-effort selectors from the server catalog
@@ -67,6 +68,7 @@ require("acp").setup({
 	thread_sources = { "cli", "vscode", "appServer" },
 	window = {
 		input_height = 6,
+		input_padding = 2,
 		sessions_width = 30,
 	},
 })
@@ -74,6 +76,10 @@ require("acp").setup({
 
 `command = "codex"` is also accepted and expands to the default app-server
 command. A command table is used exactly as supplied.
+
+The prompt floats over reserved blank rows at the bottom of the chat, so it
+does not cover the latest response. `input_height` includes the frame and
+`input_padding` controls its inset from the chat text area.
 
 The sessions split is scoped to the current working directory, like
 `codex resume` without `--all`. It includes the CLI and VS Code interactive

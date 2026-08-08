@@ -3,6 +3,7 @@ local context = require("acp.context")
 local reloader = require("acp.reload")
 local render = require("acp.render")
 local requests = require("acp.requests")
+local view = require("acp.view")
 
 local M = {}
 
@@ -22,6 +23,7 @@ local defaults = {
 	max_threads = 100,
 	window = {
 		input_height = 6,
+		input_padding = 2,
 		sessions_width = 30,
 	},
 }
@@ -40,6 +42,7 @@ local start_review
 local compact_thread
 local show_status
 local drain_queue
+local position_prompt
 
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -59,10 +62,6 @@ end
 
 local function notify(message, level)
 	vim.notify(message, level or vim.log.levels.INFO, { title = "Codex" })
-end
-
-local function escaped_winbar(text)
-	return tostring(text or ""):gsub("%%", "%%%%")
 end
 
 local function current_cwd()
@@ -103,6 +102,10 @@ local function fresh_state(cwd)
 		threads_loading = false,
 		thread_waiters = {},
 		thread_rows = {},
+		prompt_reserved_rows = 0,
+		prompt_spacer_rows = 0,
+		prompt_chrome_key = nil,
+		prompt_layout_pending = false,
 		tokens = nil,
 	}
 end
@@ -132,19 +135,79 @@ local function with_modifiable(bufnr, callback)
 	end
 end
 
+local function strip_prompt_space()
+	if not state or not valid_buf(state.output_buf) then
+		return
+	end
+	local rows = math.max(0, tonumber(state.prompt_spacer_rows) or 0)
+	if rows == 0 then
+		return
+	end
+	local count = vim.api.nvim_buf_line_count(state.output_buf)
+	local start = math.max(0, count - rows)
+	vim.api.nvim_buf_set_lines(state.output_buf, start, -1, false, {})
+	state.prompt_spacer_rows = 0
+end
+
+local function restore_prompt_space()
+	if not state or not valid_buf(state.output_buf) then
+		return
+	end
+	local rows = math.max(0, tonumber(state.prompt_reserved_rows) or 0)
+	if rows == 0 then
+		state.prompt_spacer_rows = 0
+		return
+	end
+	local blanks = {}
+	for _ = 1, rows do
+		table.insert(blanks, "")
+	end
+	vim.api.nvim_buf_set_lines(state.output_buf, -1, -1, false, blanks)
+	state.prompt_spacer_rows = rows
+end
+
+local function set_prompt_reserved_rows(rows)
+	if not state or not valid_buf(state.output_buf) then
+		return
+	end
+	rows = math.max(0, math.floor(tonumber(rows) or 0))
+	with_modifiable(state.output_buf, function()
+		strip_prompt_space()
+		state.prompt_reserved_rows = rows
+		restore_prompt_space()
+	end)
+end
+
+local function output_content_line_count()
+	if not state or not valid_buf(state.output_buf) then
+		return 1
+	end
+	return math.max(
+		1,
+		vim.api.nvim_buf_line_count(state.output_buf) - math.max(0, tonumber(state.prompt_spacer_rows) or 0)
+	)
+end
+
 local function at_output_bottom()
 	if not state or not valid_win(state.output_win) or not valid_buf(state.output_buf) then
 		return false
 	end
 	local cursor = vim.api.nvim_win_get_cursor(state.output_win)[1]
-	return cursor >= vim.api.nvim_buf_line_count(state.output_buf) - 2
+	return cursor >= output_content_line_count() - 2
 end
 
 local function follow_output(was_at_bottom)
 	if not was_at_bottom or not valid_win(state.output_win) or not valid_buf(state.output_buf) then
 		return
 	end
-	pcall(vim.api.nvim_win_set_cursor, state.output_win, { vim.api.nvim_buf_line_count(state.output_buf), 0 })
+	pcall(vim.api.nvim_win_set_cursor, state.output_win, { output_content_line_count(), 0 })
+end
+
+local function refresh_output_view(start_row)
+	if not state or not valid_buf(state.output_buf) then
+		return
+	end
+	view.refresh_transcript(state.output_buf, start_row)
 end
 
 local function set_output(lines)
@@ -152,8 +215,11 @@ local function set_output(lines)
 		return
 	end
 	with_modifiable(state.output_buf, function()
+		state.prompt_spacer_rows = 0
 		vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, lines)
+		restore_prompt_space()
 	end)
+	refresh_output_view(0)
 	follow_output(true)
 end
 
@@ -162,13 +228,18 @@ local function append_lines(lines)
 		return
 	end
 	local follow = at_output_bottom()
+	local start_row
 	local values = {}
 	for _, line in ipairs(lines) do
 		table.insert(values, tostring(line or ""))
 	end
 	with_modifiable(state.output_buf, function()
+		strip_prompt_space()
+		start_row = vim.api.nvim_buf_line_count(state.output_buf)
 		vim.api.nvim_buf_set_lines(state.output_buf, -1, -1, false, values)
+		restore_prompt_space()
 	end)
+	refresh_output_view(start_row)
 	follow_output(follow)
 end
 
@@ -178,12 +249,17 @@ local function append_text(text)
 	end
 	local follow = at_output_bottom()
 	local parts = vim.split(text, "\n", { plain = true })
+	local start_row
 	with_modifiable(state.output_buf, function()
+		strip_prompt_space()
 		local count = vim.api.nvim_buf_line_count(state.output_buf)
+		start_row = math.max(0, count - 1)
 		local last = vim.api.nvim_buf_get_lines(state.output_buf, count - 1, count, false)[1] or ""
 		parts[1] = last .. parts[1]
 		vim.api.nvim_buf_set_lines(state.output_buf, count - 1, count, false, parts)
+		restore_prompt_space()
 	end)
+	refresh_output_view(start_row)
 	follow_output(follow)
 end
 
@@ -266,34 +342,15 @@ local function update_chrome()
 	if not state then
 		return
 	end
-	local model = state.model or "default model"
-	local effort = state.effort and (" · " .. state.effort) or ""
-	local usage = ""
-	if state.tokens then
-		local total = state.tokens.totalTokens or 0
-		local window = state.tokens.modelContextWindow
-		usage = window and (" · %d/%d tokens"):format(total, window) or (" · %d tokens"):format(total)
-	end
 	if valid_win(state.output_win) then
-		vim.wo[state.output_win].winbar =
-			escaped_winbar((" Codex · %s%s · %s%s "):format(model, effort, state.status or "idle", usage))
+		vim.wo[state.output_win].winbar = view.chat_winbar(state)
 	end
-	if valid_win(state.input_win) then
-		local context_count = #(state.contexts or {})
-		local queued = #state.queue > 0 and (" · %d queued"):format(#state.queue) or ""
-		vim.wo[state.input_win].winbar = escaped_winbar(
-			(" Prompt · %d context%s%s · <C-s> steer · <C-CR> send "):format(
-				context_count,
-				context_count == 1 and "" or "s",
-				queued
-			)
-		)
+	if valid_win(state.input_win) and position_prompt then
+		position_prompt()
 	end
 	if valid_win(state.sessions_win) then
 		local count = state.sessions_count or 1
-		local loading = state.threads_loading and " · loading" or ""
-		vim.wo[state.sessions_win].winbar =
-			escaped_winbar((" Sessions · %d%s "):format(count, loading))
+		vim.wo[state.sessions_win].winbar = view.sessions_winbar(count, state.threads_loading, state.cwd)
 	end
 end
 
@@ -419,7 +476,7 @@ local function configure_window(winid, output)
 	vim.wo[winid].linebreak = true
 	vim.wo[winid].cursorline = not output
 	if output then
-		vim.wo[winid].conceallevel = 2
+		view.configure_output_window(winid, state and state.prompt_reserved_rows)
 	end
 end
 
@@ -430,11 +487,61 @@ local function configure_sessions_window(winid)
 	vim.wo[winid].winfixwidth = true
 end
 
+local function prompt_config()
+	return view.prompt_config(state.output_win, state, config.window)
+end
+
+local function open_prompt_window()
+	local desired, reserved_rows, chrome_key = prompt_config()
+	if not desired then
+		return false
+	end
+	state.input_win = vim.api.nvim_open_win(state.input_buf, true, desired)
+	set_prompt_reserved_rows(reserved_rows)
+	state.prompt_chrome_key = chrome_key
+	view.configure_prompt_window(state.input_win)
+	view.configure_output_window(state.output_win, reserved_rows)
+	return true
+end
+
+position_prompt = function()
+	if
+		not state
+		or not valid_win(state.output_win)
+		or not valid_win(state.input_win)
+		or not view.is_floating(state.input_win)
+	then
+		return false
+	end
+	local desired, reserved_rows, chrome_key = prompt_config()
+	if not desired then
+		return false
+	end
+	local current = vim.api.nvim_win_get_config(state.input_win)
+	if not view.same_prompt_geometry(current, desired) or state.prompt_chrome_key ~= chrome_key then
+		vim.api.nvim_win_set_config(state.input_win, desired)
+		state.prompt_chrome_key = chrome_key
+	end
+	view.configure_prompt_window(state.input_win)
+	view.configure_output_window(state.output_win, reserved_rows)
+	if state.prompt_reserved_rows ~= reserved_rows then
+		set_prompt_reserved_rows(reserved_rows)
+	end
+	return true
+end
+
+local function normal_window_in_tab(winid, tabpage)
+	return valid_win(winid)
+		and vim.api.nvim_win_get_tabpage(winid) == tabpage
+		and not view.is_floating(winid)
+end
+
 local function open_layout()
 	if
 		valid_win(state.output_win)
 		and valid_win(state.input_win)
 		and valid_win(state.sessions_win)
+		and view.is_floating(state.input_win)
 		and vim.api.nvim_win_get_tabpage(state.output_win) == vim.api.nvim_win_get_tabpage(state.input_win)
 		and vim.api.nvim_win_get_tabpage(state.output_win) == vim.api.nvim_win_get_tabpage(state.sessions_win)
 	then
@@ -443,9 +550,10 @@ local function open_layout()
 		vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
 		vim.api.nvim_win_set_buf(state.sessions_win, state.sessions_buf)
 		configure_window(state.output_win, true)
-		configure_window(state.input_win, false)
+		view.configure_prompt_window(state.input_win)
 		configure_sessions_window(state.sessions_win)
 		render_sessions()
+		refresh_output_view(0)
 		update_chrome()
 		focus_input(false)
 		return
@@ -462,14 +570,18 @@ local function open_layout()
 		vim.api.nvim_set_current_tabpage(tabpage)
 	end
 
-	local output_win
-	for _, winid in ipairs({ previous_output, previous_input, previous_sessions }) do
-		if valid_win(winid) and vim.api.nvim_win_get_tabpage(winid) == tabpage then
-			output_win = winid
-			break
+	local output_win = normal_window_in_tab(previous_output, tabpage) and previous_output or nil
+	if not output_win then
+		for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
+			if normal_window_in_tab(winid, tabpage) then
+				output_win = winid
+				break
+			end
 		end
 	end
-	output_win = output_win or vim.api.nvim_tabpage_list_wins(tabpage)[1]
+	if not output_win then
+		error("Codex tab has no normal window for the chat buffer")
+	end
 	for _, winid in ipairs({ previous_output, previous_input, previous_sessions }) do
 		if valid_win(winid) and winid ~= output_win then
 			close_window(winid)
@@ -483,6 +595,7 @@ local function open_layout()
 	vim.api.nvim_set_current_win(state.output_win)
 	vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
 	configure_window(state.output_win, true)
+	vim.wo[state.output_win].winbar = view.chat_winbar(state)
 
 	local sessions_width = math.max(16, tonumber(config.window.sessions_width) or 30)
 	vim.cmd(("topleft %dvsplit"):format(sessions_width))
@@ -490,13 +603,15 @@ local function open_layout()
 	vim.api.nvim_win_set_buf(state.sessions_win, state.sessions_buf)
 	configure_sessions_window(state.sessions_win)
 	pcall(vim.api.nvim_win_set_width, state.sessions_win, sessions_width)
+	vim.wo[state.sessions_win].winbar =
+		view.sessions_winbar(state.sessions_count or 1, state.threads_loading, state.cwd)
 	vim.api.nvim_set_current_win(state.output_win)
 
-	vim.cmd(("belowright %dsplit"):format(math.max(3, tonumber(config.window.input_height) or 6)))
-	state.input_win = vim.api.nvim_get_current_win()
-	vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
-	configure_window(state.input_win, false)
+	if not open_prompt_window() then
+		error("Could not create the Codex prompt window")
+	end
 	render_sessions()
+	refresh_output_view(0)
 	update_chrome()
 	focus_input(false)
 end
@@ -1514,6 +1629,26 @@ local function create_command(name, callback, opts)
 	vim.api.nvim_create_user_command(name, callback, opts)
 end
 
+local function schedule_prompt_position()
+	if
+		not state
+		or state.prompt_layout_pending
+		or not valid_win(state.output_win)
+		or not valid_win(state.input_win)
+	then
+		return
+	end
+	local request_state = state
+	state.prompt_layout_pending = true
+	vim.schedule(function()
+		if state ~= request_state then
+			return
+		end
+		state.prompt_layout_pending = false
+		position_prompt()
+	end)
+end
+
 local function register_commands()
 	create_command("AcpChat", function(command)
 		M.open({ prompt = command.args ~= "" and command.args or nil, range = command_range(command) })
@@ -1553,6 +1688,18 @@ end
 
 local function register_autocmds()
 	local group = vim.api.nvim_create_augroup("acp.nvim", { clear = true })
+	vim.api.nvim_create_autocmd({ "VimResized", "WinResized" }, {
+		group = group,
+		callback = schedule_prompt_position,
+	})
+	vim.api.nvim_create_autocmd("ColorScheme", {
+		group = group,
+		callback = function()
+			view.define_highlights()
+			refresh_output_view(0)
+			update_chrome()
+		end,
+	})
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		group = group,
 		callback = function()
@@ -1564,6 +1711,7 @@ local function register_autocmds()
 end
 
 local function register_runtime()
+	view.define_highlights()
 	register_commands()
 	register_autocmds()
 	if state and valid_buf(state.input_buf) and valid_buf(state.output_buf) then
@@ -1580,8 +1728,9 @@ local function register_runtime()
 			configure_window(state.output_win, true)
 		end
 		if valid_win(state.input_win) then
-			configure_window(state.input_win, false)
+			view.configure_prompt_window(state.input_win)
 		end
+		refresh_output_view(0)
 		update_chrome()
 	end
 end

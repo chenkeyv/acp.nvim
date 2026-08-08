@@ -7,6 +7,7 @@ local permission = require("acp.permission")
 local render = require("acp.render")
 local requests = require("acp.requests")
 local ui = require("acp.ui")
+local view = require("acp.view")
 
 local tests = {}
 
@@ -41,6 +42,14 @@ local function count(text, fragment)
 		total = total + 1
 		start = last + 1
 	end
+end
+
+local function chunks_text(chunks)
+	local values = {}
+	for _, chunk in ipairs(chunks or {}) do
+		table.insert(values, type(chunk) == "table" and (chunk[1] or "") or tostring(chunk))
+	end
+	return table.concat(values)
 end
 
 local function fake_process()
@@ -284,7 +293,6 @@ test("thread renderer reconstructs history and diffs", function()
 		},
 	}
 	local text = table.concat(render.thread(thread, "/tmp/project"), "\n")
-	contains(text, "# Codex")
 	contains(text, "## You")
 	contains(text, "Please fix it")
 	contains(text, "nvim --headless")
@@ -292,8 +300,61 @@ test("thread renderer reconstructs history and diffs", function()
 	contains(text, "lua/acp/ui.lua")
 	contains(text, "## Codex")
 	contains(text, "Done.")
+	ok(not text:find("Working directory:", 1, true), "working-directory metadata belongs in window chrome")
 	eq(render.thread_diff(thread), "--- a\n+++ b")
 	contains(render.thread_label(thread), "Fix the parser")
+end)
+
+test("chat view keeps the prompt inset and styles transcript roles", function()
+	eq(view.prompt_geometry({ row = 1, col = 31, width = 89, height = 30 }, {
+		input_height = 6,
+		input_padding = 2,
+	}), {
+		row = 23,
+		col = 33,
+		width = 83,
+		height = 4,
+		outer_width = 85,
+		outer_height = 6,
+		reserved_rows = 8,
+	})
+
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+		"## You",
+		"Use `turn/steer`.",
+		"## Codex",
+		"> Command completed: `nvim --headless`",
+		"```lua",
+	})
+	view.define_highlights()
+	view.refresh_transcript(bufnr, 0)
+	local marks = vim.api.nvim_buf_get_extmarks(bufnr, view.transcript_namespace, 0, -1, { details = true })
+	local groups = {}
+	local concealed = false
+	for _, extmark in ipairs(marks) do
+		local details = extmark[4] or {}
+		if details.hl_group then
+			groups[details.hl_group] = true
+		end
+		if details.conceal == "" then
+			concealed = true
+		end
+	end
+	ok(groups.AcpUserHeader)
+	ok(groups.AcpAgentHeader)
+	ok(groups.AcpTranscriptTool)
+	ok(groups.AcpCodeFence)
+	ok(groups.AcpInlineCode)
+	ok(concealed, "expected Markdown role prefixes to be visually concealed")
+	local evaluated = vim.api.nvim_eval_statusline(view.chat_winbar({
+		status = "running command",
+		busy = true,
+		tokens = { totalTokens = 42000, modelContextWindow = 272000 },
+	}), { maxwidth = 49 })
+	ok(evaluated.str:find("^ Codex", 1, false), "chat title should survive narrow-window truncation")
+	contains(evaluated.str, "running command")
+	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
 test("approval requests return Codex decision payloads", function()
@@ -475,9 +536,23 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 			"row",
 			{
 				{ "leaf", state.sessions_win },
-				{ "col", { { "leaf", state.output_win }, { "leaf", state.input_win } } },
+				{ "leaf", state.output_win },
 			},
 		})
+		local prompt = vim.api.nvim_win_get_config(state.input_win)
+		eq(prompt.relative, "editor")
+		eq(prompt.zindex, 50)
+		contains(chunks_text(prompt.title), "Prompt")
+		contains(chunks_text(prompt.footer), "<C-s> steer")
+		contains(chunks_text(prompt.footer), "<C-CR> send")
+		local output_position = vim.api.nvim_win_get_position(state.output_win)
+		local output_info = vim.fn.getwininfo(state.output_win)[1]
+		eq(prompt.col, output_position[2] + output_info.textoff + 2)
+		ok(prompt.width < vim.api.nvim_win_get_width(state.output_win))
+		ok(vim.wo[state.output_win].scrolloff > 0)
+		eq(vim.wo[state.output_win].fillchars, "eob: ")
+		eq(vim.wo[state.input_win].fillchars, "eob: ")
+		contains(vim.wo[state.input_win].winhighlight, "AcpPromptBorder")
 		eq(vim.api.nvim_win_get_position(state.sessions_win)[2], 0)
 		eq(vim.api.nvim_win_get_tabpage(state.output_win), chat_tab)
 		eq(vim.api.nvim_win_get_tabpage(state.input_win), chat_tab)
@@ -490,6 +565,7 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(state.tabpage, chat_tab)
 		eq(#vim.api.nvim_list_tabpages(), tab_count + 1)
 		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 3)
+		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
 		eq(vim.api.nvim_tabpage_list_wins(origin_tab), origin_windows)
 
 		vim.api.nvim_win_close(state.sessions_win, true)
@@ -498,6 +574,14 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 3)
 		eq(vim.api.nvim_get_current_win(), state.sessions_win)
 		eq(vim.api.nvim_win_get_position(state.sessions_win)[2], 0)
+		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
+
+		local old_prompt_width = vim.api.nvim_win_get_config(state.input_win).width
+		vim.api.nvim_win_set_width(state.sessions_win, 20)
+		vim.api.nvim_exec_autocmds("WinResized", {})
+		ok(vim.wait(100, function()
+			return vim.api.nvim_win_get_config(state.input_win).width > old_prompt_width
+		end), "expected the floating prompt to follow chat-window resizing")
 
 		local chat_windows = vim.api.nvim_tabpage_list_wins(chat_tab)
 		state.thread_id = "thread-1"
@@ -651,6 +735,22 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			itemId = "message-1",
 			delta = "Implemented.",
 		})
+		local detail_lines = {}
+		for index = 1, 40 do
+			table.insert(detail_lines, ("Detail line %d"):format(index))
+		end
+		fake.handlers.on_notification("item/agentMessage/delta", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			itemId = "message-1",
+			delta = "\n" .. table.concat(detail_lines, "\n"),
+		})
+		local content_line = vim.api.nvim_buf_line_count(state.output_buf) - state.prompt_spacer_rows
+		vim.cmd("redraw")
+		local last_position = vim.fn.screenpos(state.output_win, content_line, 1)
+		local prompt_top = vim.api.nvim_win_get_config(state.input_win).row + 1
+		ok(last_position.row > 0, "expected the latest response line to remain visible")
+		ok(last_position.row < prompt_top, "the floating prompt must not cover the latest response")
 		fake.handlers.on_notification("item/completed", {
 			threadId = "thread-1",
 			turnId = "turn-1",
@@ -816,6 +916,7 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 	local sessions_win = state.sessions_win
 	local output_buf = state.output_buf
 	local input_buf = state.input_buf
+	local input_win = state.input_win
 	local process_client = ui._client()
 	local reload = require("acp.reload")
 	local current_ui = ui
@@ -862,6 +963,8 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 		eq(state.sessions_win, sessions_win)
 		eq(state.output_buf, output_buf)
 		eq(state.input_buf, input_buf)
+		eq(state.input_win, input_win)
+		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
 		eq(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), { "preserve this draft" })
 
 		live_client.on_notification("item/agentMessage/delta", {
