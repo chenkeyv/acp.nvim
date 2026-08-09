@@ -838,11 +838,14 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 		},
 	}, 52, 4)
 	eq(#instruction_block.lines, 4)
-	eq(instruction_block.lines[1], "")
+	eq(instruction_block.lines[1], string.rep(" ", 52))
 	contains(instruction_block.lines[2], icons.get("send") .. " steer")
 	contains(instruction_block.lines[2], "Keep the public API unchanged")
 	contains(instruction_block.lines[3], icons.get("history") .. " queued")
 	contains(instruction_block.lines[4], icons.get("busy") .. " responding")
+	for _, line in ipairs(instruction_block.lines) do
+		eq(vim.fn.strdisplaywidth(line), 52)
+	end
 	local prompt_title = chunks_text(view.prompt_title({
 		pending_instructions = {
 			{ kind = "steer", text = "Keep the public API unchanged" },
@@ -872,11 +875,21 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	eq(vim.fn.strdisplaywidth(narrow_footer), 20)
 	contains(narrow_footer, "Prompt")
 	local idle_block = view.instruction_block({ status = "ready" }, 28, 4)
-	eq(#idle_block.lines, 4)
-	eq(idle_block.lines[1], "")
-	eq(idle_block.lines[2], "")
-	eq(idle_block.lines[3], "")
-	contains(idle_block.lines[4], icons.get("idle") .. " ready")
+	eq(#idle_block.lines, 2)
+	eq(idle_block.lines[1], string.rep(" ", 28))
+	contains(idle_block.lines[2], icons.get("idle") .. " ready")
+	eq(vim.fn.strdisplaywidth(idle_block.lines[2]), 28)
+	local default_height_block = view.instruction_block({
+		status = "running command",
+		busy = true,
+		pending_instructions = {
+			{ id = "queue-default", kind = "queued", text = "Run the tests" },
+		},
+	}, 28)
+	eq(#default_height_block.lines, 3)
+	eq(default_height_block.lines[1], string.rep(" ", 28))
+	contains(default_height_block.lines[2], icons.get("history") .. " queued")
+	contains(default_height_block.lines[3], icons.get("busy") .. " running command")
 	local clipped_instructions = view.instruction_block({
 		status = "running",
 		busy = true,
@@ -885,10 +898,13 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 			{ id = "queue-2", kind = "queued", text = "second" },
 			{ id = "queue-3", kind = "queued", text = "third" },
 		},
-	}, 28, 2)
-	eq(#clipped_instructions.lines, 2)
-	contains(clipped_instructions.lines[1], "+3 pending instructions")
-	contains(clipped_instructions.lines[2], icons.get("busy") .. " running")
+	}, 28, 3)
+	eq(#clipped_instructions.lines, 3)
+	eq(clipped_instructions.lines[1], string.rep(" ", 28))
+	contains(clipped_instructions.lines[2], "+3 pending instructions")
+	contains(clipped_instructions.lines[3], icons.get("busy") .. " running")
+	eq(vim.fn.strdisplaywidth(clipped_instructions.lines[2]), 28)
+	eq(vim.fn.strdisplaywidth(clipped_instructions.lines[3]), 28)
 
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	local direct_lines = {
@@ -1374,7 +1390,7 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(turn_panel.width, prompt.width)
 		eq(turn_panel.row + turn_panel.height, prompt.row)
 		eq(turn_panel.border, "none")
-		eq(turn_panel.height, 4)
+		eq(turn_panel.height, 2)
 		contains(table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n"), "new chat")
 		local output_position = vim.api.nvim_win_get_position(state.output_win)
 		local output_info = vim.fn.getwininfo(state.output_win)[1]
@@ -1602,6 +1618,17 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(fake.turns[1].thread_id, "thread-1")
 		eq(fake.turns[1].payload.input[1].text, "Simplify this plugin")
 		eq(state.busy, true)
+		local stable_prompt_width = vim.api.nvim_win_get_config(state.input_win).width
+		local stable_instruction_width = vim.api.nvim_win_get_config(state.instruction_win).width
+		local function assert_action_status_width()
+			eq(vim.api.nvim_win_get_config(state.input_win).width, stable_prompt_width)
+			eq(vim.api.nvim_win_get_config(state.instruction_win).width, stable_instruction_width)
+			eq(stable_instruction_width, stable_prompt_width)
+			for _, line in ipairs(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false)) do
+				eq(vim.fn.strdisplaywidth(line), stable_instruction_width)
+			end
+		end
+		assert_action_status_width()
 		fake.handlers.on_notification("item/started", {
 			threadId = "thread-1",
 			turnId = "turn-1",
@@ -1612,6 +1639,7 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 				status = "inProgress",
 			},
 		})
+		assert_action_status_width()
 		local command_output = {}
 		for index = 1, 10 do
 			table.insert(command_output, ("match %d"):format(index))
@@ -1623,6 +1651,7 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			itemId = "command-1",
 			delta = table.concat(command_output, "\n"),
 		})
+		assert_action_status_width()
 		eq(vim.api.nvim_buf_get_changedtick(state.output_buf), action_tick)
 		ok(
 			vim.wait(250, function()
@@ -1669,12 +1698,14 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 				status = "inProgress",
 			},
 		})
+		assert_action_status_width()
 		fake.handlers.on_notification("item/mcpToolCall/progress", {
 			threadId = "thread-1",
 			turnId = "turn-1",
 			itemId = "tool-1",
 			message = "Inspecting action cells",
 		})
+		assert_action_status_width()
 		contains(table.concat(state.chat.by_id["tool-1"].lines, "\n"), "Inspecting action cells")
 		fake.handlers.on_notification("item/completed", {
 			threadId = "thread-1",
@@ -2007,16 +2038,33 @@ test("control-s steers the active turn instead of queueing", function()
 			}
 		end
 		local stable_prompt_geometry = geometry(state.input_win)
-		local stable_instruction_geometry = geometry(state.instruction_win)
-		local stable_reserved_rows = state.prompt_reserved_rows
-		local stable_spacer_rows = state.prompt_spacer_rows
-		eq(stable_instruction_geometry.height, 4)
-		local function assert_stable_prompt_stack()
+		local initial_instruction_geometry = geometry(state.instruction_win)
+		local base_reserved_rows = state.prompt_reserved_rows - initial_instruction_geometry.height
+		local base_spacer_rows = state.prompt_spacer_rows - initial_instruction_geometry.height
+		eq(initial_instruction_geometry.height, 2)
+		local function assert_prompt_stack(height)
 			eq(geometry(state.input_win), stable_prompt_geometry)
-			eq(geometry(state.instruction_win), stable_instruction_geometry)
-			eq(state.prompt_reserved_rows, stable_reserved_rows)
-			eq(state.prompt_spacer_rows, stable_spacer_rows)
+			local instruction_geometry = geometry(state.instruction_win)
+			eq(instruction_geometry.relative, initial_instruction_geometry.relative)
+			eq(instruction_geometry.col, initial_instruction_geometry.col)
+			eq(instruction_geometry.width, initial_instruction_geometry.width)
+			eq(instruction_geometry.height, height)
+			eq(instruction_geometry.row + instruction_geometry.height, stable_prompt_geometry.row)
+			eq(state.prompt_reserved_rows, base_reserved_rows + height)
+			eq(state.prompt_spacer_rows, base_spacer_rows + height)
+			local lines = vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false)
+			eq(#lines, height)
+			for _, line in ipairs(lines) do
+				eq(vim.fn.strdisplaywidth(line), instruction_geometry.width)
+			end
 		end
+		assert_prompt_stack(2)
+		fake.handlers.on_notification("item/reasoning/textDelta", {
+			threadId = "thread-steer",
+			turnId = "turn-steer",
+			delta = "Checking the implementation.",
+		})
+		assert_prompt_stack(2)
 
 		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Keep the public API unchanged" })
 		vim.api.nvim_set_current_win(state.input_win)
@@ -2040,7 +2088,7 @@ test("control-s steers the active turn instead of queueing", function()
 		eq(instruction_config.width, prompt_config.width)
 		eq(instruction_config.row + instruction_config.height, prompt_config.row)
 		eq(instruction_config.border, "none")
-		assert_stable_prompt_stack()
+		assert_prompt_stack(3)
 		local instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
 		contains(instruction_text, "steer")
 		contains(instruction_text, "Keep the public API unchanged")
@@ -2050,8 +2098,9 @@ test("control-s steers the active turn instead of queueing", function()
 			delta = "Still finishing the previous thought.",
 		})
 		eq(#state.pending_instructions, 1)
+		assert_prompt_stack(3)
 		fake.steer_callback({})
-		assert_stable_prompt_stack()
+		assert_prompt_stack(3)
 		instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
 		contains(instruction_text, "steered")
 		contains(instruction_text, "sent")
@@ -2068,7 +2117,7 @@ test("control-s steers the active turn instead of queueing", function()
 		})
 		eq(#state.pending_instructions, 0)
 		ok(vim.api.nvim_win_is_valid(state.instruction_win))
-		assert_stable_prompt_stack()
+		assert_prompt_stack(2)
 		instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
 		contains(instruction_text, "responding")
 		ok(not instruction_text:find("Keep the public API unchanged", 1, true))
@@ -2093,7 +2142,7 @@ test("control-s steers the active turn instead of queueing", function()
 		eq(#state.pending_instructions, 1)
 		eq(state.pending_instructions[1].kind, "queued")
 		ok(vim.api.nvim_win_is_valid(state.instruction_win))
-		assert_stable_prompt_stack()
+		assert_prompt_stack(3)
 		instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
 		contains(instruction_text, "queued")
 		contains(instruction_text, "Run the tests afterward")
@@ -2113,7 +2162,7 @@ test("control-s steers the active turn instead of queueing", function()
 		eq(fake.turns[2].payload.input[1].text, "Run the tests afterward")
 		eq(#state.pending_instructions, 0)
 		ok(vim.api.nvim_win_is_valid(state.instruction_win))
-		assert_stable_prompt_stack()
+		assert_prompt_stack(2)
 	end)
 	ui._reset()
 	if not passed then

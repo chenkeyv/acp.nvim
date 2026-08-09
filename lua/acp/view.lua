@@ -297,6 +297,12 @@ local function truncate_display(value, width)
 	return vim.fn.strcharpart(value, 0, low) .. suffix
 end
 
+local function fit_display(value, width)
+	width = math.max(1, math.floor(tonumber(width) or 1))
+	value = truncate_display(value, width)
+	return value .. string.rep(" ", math.max(0, width - vim.fn.strdisplaywidth(value)))
+end
+
 local function ordered_instructions(instructions)
 	local ordered = {}
 	for _, kind in ipairs({ "steer", "queued" }) do
@@ -313,15 +319,16 @@ function M.instruction_block(state, width, max_height)
 	state = state or {}
 	local instructions = type(state.pending_instructions) == "table" and state.pending_instructions or {}
 	width = math.max(1, math.floor(tonumber(width) or 1))
-	max_height = math.max(1, math.floor(tonumber(max_height) or (#instructions + 1)))
+	max_height = math.max(1, math.floor(tonumber(max_height) or (#instructions + 2)))
 	local status = one_line(state.status)
 	if status == "" then
 		status = (state.busy or state.starting) and "working" or "ready"
 	end
-	local status_line = truncate_display(("%s %s"):format(status_icon(state), status), width)
+	local status_line = fit_display(("%s %s"):format(status_icon(state), status), width)
 	local lines = {}
 	local ordered = ordered_instructions(instructions)
-	local capacity = math.max(0, max_height - 1)
+	local has_top_spacer = max_height > 1
+	local capacity = math.max(0, max_height - 1 - (has_top_spacer and 1 or 0))
 	local visible = math.min(#ordered, capacity)
 	if #ordered > capacity then
 		visible = math.max(0, capacity - 1)
@@ -331,40 +338,25 @@ function M.instruction_block(state, width, max_height)
 		local steering = instruction.kind == "steer"
 		local icon = icons.get(steering and "send" or "history")
 		local label = steering and (instruction.accepted and "sent" or "steer") or "queued"
-		table.insert(lines, truncate_display(("%s %-6s %s"):format(icon, label, one_line(instruction.text)), width))
+		table.insert(lines, fit_display(("%s %-6s %s"):format(icon, label, one_line(instruction.text)), width))
 	end
 	if #ordered > visible and capacity > 0 then
 		local remaining = #ordered - visible
 		table.insert(
 			lines,
-			truncate_display(
+			fit_display(
 				("%s +%d pending instruction%s"):format(icons.get("history"), remaining, remaining == 1 and "" or "s"),
 				width
 			)
 		)
 	end
-	while #lines < capacity do
-		table.insert(lines, 1, "")
+	if has_top_spacer then
+		table.insert(lines, 1, string.rep(" ", width))
 	end
 	table.insert(lines, status_line)
 	return {
 		lines = lines,
-		key = table.concat({
-			tostring(state.status or ""),
-			tostring(state.busy == true),
-			tostring(state.starting == true),
-			table.concat(
-				vim.tbl_map(function(instruction)
-					return table.concat({
-						tostring(instruction.id or ""),
-						tostring(instruction.kind or ""),
-						tostring(instruction.accepted == true),
-						tostring(instruction.text or ""),
-					}, "\0")
-				end, ordered),
-				"\1"
-			),
-		}, "\2"),
+		key = table.concat(lines, "\0"),
 	}
 end
 
@@ -444,13 +436,13 @@ function M.prompt_config(output_win, state, opts)
 		instruction = M.instruction_block(state, geometry.width, instruction_height)
 	end
 	if instruction then
-		local attached_rows = instruction_height
+		local attached_rows = #instruction.lines
 		instruction_config = {
 			relative = "editor",
 			row = geometry.row - attached_rows,
 			col = geometry.col + 1,
 			width = geometry.width,
-			height = instruction_height,
+			height = attached_rows,
 			style = "minimal",
 			border = "none",
 			focusable = false,
