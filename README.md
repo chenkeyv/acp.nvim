@@ -93,13 +93,13 @@ The prompt floats over reserved blank rows at the bottom of the chat, so it
 does not cover the latest response. `input_height` includes the frame and
 `input_padding` controls its inset from the chat text area. Prompt, model,
 reasoning, and context metadata sit on the lower-left border, while the send and
-steer hints remain on the lower-right. A compact read-only turn panel is always
-attached above the prompt. It shows the current status and fills a stable
-`instruction_height` frame with steer and queued follow-ups, so streaming
-updates do not resize the prompt stack. Queued entries disappear when their
-turn starts, while steer entries disappear when the continuation begins
-producing output. Transient status and queue details stay in this panel instead
-of being repeated elsewhere.
+steer hints remain on the lower-right. A compact borderless read-only turn panel
+is always attached above the prompt. It anchors the current status to the bottom
+of a stable `instruction_height` area, with steer and queued follow-ups filling
+upward immediately above it. Streaming updates therefore do not resize the
+prompt stack. Queued entries disappear when their turn starts, while steer
+entries disappear when the continuation begins producing output. Transient
+status and queue details stay in this panel instead of being repeated elsewhere.
 
 The chat transcript uses the custom `acp` filetype rather than Markdown, while
 the editable prompt uses `acp-prompt`. This keeps their styling and filetype

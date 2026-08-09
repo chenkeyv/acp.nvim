@@ -19,17 +19,6 @@ local prompt_border = {
 	{ "│", "AcpPromptBorder" },
 }
 
-local instruction_border = {
-	{ "╭", "AcpInstructionBorder" },
-	{ "─", "AcpInstructionBorder" },
-	{ "╮", "AcpInstructionBorder" },
-	{ "│", "AcpInstructionBorder" },
-	{ "┤", "AcpInstructionBorder" },
-	{ "─", "AcpInstructionBorder" },
-	{ "├", "AcpInstructionBorder" },
-	{ "│", "AcpInstructionBorder" },
-}
-
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
 end
@@ -82,8 +71,6 @@ function M.define_highlights()
 		AcpPromptKey = { fg = "#e0af68", bold = true },
 		AcpPromptHint = { link = "Comment" },
 		AcpInstructionFloat = { link = "NormalFloat" },
-		AcpInstructionBorder = { fg = "#e0af68" },
-		AcpInstructionTitle = { fg = "#e0af68", bold = true },
 		AcpChatTitle = { fg = "#7aa2f7", bold = true },
 		AcpChatMeta = { link = "Comment" },
 		AcpChatSeparator = { link = "Comment" },
@@ -331,7 +318,8 @@ function M.instruction_block(state, width, max_height)
 	if status == "" then
 		status = (state.busy or state.starting) and "working" or "ready"
 	end
-	local lines = { truncate_display(("%s %s"):format(status_icon(state), status), width) }
+	local status_line = truncate_display(("%s %s"):format(status_icon(state), status), width)
+	local lines = {}
 	local ordered = ordered_instructions(instructions)
 	local capacity = math.max(0, max_height - 1)
 	local visible = math.min(#ordered, capacity)
@@ -355,9 +343,12 @@ function M.instruction_block(state, width, max_height)
 			)
 		)
 	end
+	while #lines < capacity do
+		table.insert(lines, 1, "")
+	end
+	table.insert(lines, status_line)
 	return {
 		lines = lines,
-		title = { { " Turn ", "AcpInstructionTitle" } },
 		key = table.concat({
 			tostring(state.status or ""),
 			tostring(state.busy == true),
@@ -446,24 +437,22 @@ function M.prompt_config(output_win, state, opts)
 	local reserved_rows = geometry.reserved_rows
 	local instruction
 	local instruction_config
-	local available_instruction_height = math.max(0, math.floor(geometry.row - bounds.row - 1))
+	local available_instruction_height = math.max(0, math.floor(geometry.row - bounds.row))
 	local requested_instruction_height = math.max(1, math.floor(tonumber(opts.instruction_height) or 4))
 	local instruction_height = math.min(available_instruction_height, requested_instruction_height)
 	if instruction_height > 0 then
 		instruction = M.instruction_block(state, geometry.width, instruction_height)
 	end
 	if instruction then
-		local attached_rows = instruction_height + 1
+		local attached_rows = instruction_height
 		instruction_config = {
 			relative = "editor",
 			row = geometry.row - attached_rows,
-			col = geometry.col,
+			col = geometry.col + 1,
 			width = geometry.width,
 			height = instruction_height,
 			style = "minimal",
-			border = vim.deepcopy(instruction_border),
-			title = instruction.title,
-			title_pos = "left",
+			border = "none",
 			focusable = false,
 			zindex = 51,
 		}
@@ -531,8 +520,7 @@ function M.configure_instruction_window(winid)
 	vim.wo[winid].cursorline = false
 	vim.wo[winid].winbar = ""
 	vim.wo[winid].fillchars = "eob: "
-	vim.wo[winid].winhighlight =
-		"NormalFloat:AcpInstructionFloat,FloatBorder:AcpInstructionBorder,FloatTitle:AcpInstructionTitle"
+	vim.wo[winid].winhighlight = "NormalFloat:AcpInstructionFloat"
 end
 
 function M.configure_output_window(winid, reserved_rows)
