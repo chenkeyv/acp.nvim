@@ -1,23 +1,7 @@
-local view = require("acp.view")
-
 local M = {}
 
 local function present(value)
 	return value ~= nil and value ~= vim.NIL
-end
-
-local function valid_buf(bufnr)
-	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
-end
-
-local function valid_win(winid)
-	return winid and vim.api.nvim_win_is_valid(winid)
-end
-
-local function close_window(winid)
-	if valid_win(winid) then
-		pcall(vim.api.nvim_win_close, winid, true)
-	end
 end
 
 function M.normalize(state)
@@ -196,58 +180,6 @@ function M.sync_spinner(state, active, refresh)
 			end
 		end)
 	)
-end
-
-local function ensure_buffer(state)
-	if valid_buf(state.instruction_buf) then
-		return state.instruction_buf
-	end
-	state.instruction_buf = vim.api.nvim_create_buf(false, true)
-	state.instruction_content_key = nil
-	pcall(vim.api.nvim_buf_set_name, state.instruction_buf, "acp://codex/instructions")
-	vim.bo[state.instruction_buf].buftype = "nofile"
-	vim.bo[state.instruction_buf].bufhidden = "hide"
-	vim.bo[state.instruction_buf].swapfile = false
-	vim.bo[state.instruction_buf].undolevels = -1
-	vim.bo[state.instruction_buf].filetype = "acp-instructions"
-	vim.bo[state.instruction_buf].modifiable = false
-	return state.instruction_buf
-end
-
-function M.close_window(state)
-	close_window(state and state.instruction_win)
-	if state then
-		state.instruction_win = nil
-	end
-end
-
-function M.sync_window(state, output_win, desired, lines, content_key)
-	if not desired or type(lines) ~= "table" or #lines == 0 then
-		M.close_window(state)
-		return
-	end
-	local bufnr = ensure_buffer(state)
-	if state.instruction_content_key ~= content_key then
-		local modifiable = vim.bo[bufnr].modifiable
-		vim.bo[bufnr].modifiable = true
-		local ok, err = pcall(vim.api.nvim_buf_set_lines, bufnr, 0, -1, false, lines)
-		vim.bo[bufnr].modifiable = modifiable
-		if not ok then
-			error(err)
-		end
-		state.instruction_content_key = content_key
-	end
-	local current_tab = valid_win(output_win) and vim.api.nvim_win_get_tabpage(output_win) or nil
-	if valid_win(state.instruction_win) and vim.api.nvim_win_get_tabpage(state.instruction_win) ~= current_tab then
-		M.close_window(state)
-	end
-	if not valid_win(state.instruction_win) then
-		state.instruction_win = vim.api.nvim_open_win(bufnr, false, desired)
-	elseif not view.same_prompt_geometry(vim.api.nvim_win_get_config(state.instruction_win), desired) then
-		vim.api.nvim_win_set_config(state.instruction_win, desired)
-	end
-	vim.api.nvim_win_set_buf(state.instruction_win, bufnr)
-	view.configure_instruction_window(state.instruction_win)
 end
 
 return M

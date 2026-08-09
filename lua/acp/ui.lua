@@ -1,6 +1,7 @@
 local Codex = require("acp.codex").Client
 local action = require("acp.action")
 local blocks = require("acp.blocks")
+local composer = require("acp.composer")
 local context = require("acp.context")
 local instructions = require("acp.instructions")
 local output_ui = require("acp.output_ui")
@@ -54,8 +55,8 @@ local start_review
 local compact_thread
 local show_status
 local drain_queue
-local position_prompt
-local refresh_instruction_window
+local sync_composer
+local refresh_composer
 local flush_output_text
 local flush_action_output
 
@@ -124,7 +125,7 @@ local function fresh_state(cwd)
 		prompt_reserved_rows = 0,
 		prompt_spacer_rows = 0,
 		prompt_chrome_key = nil,
-		prompt_layout_pending = false,
+		composer_layout_pending = false,
 		pending_output_text = nil,
 		output_text_scheduled = false,
 		output_text_generation = 0,
@@ -151,6 +152,8 @@ local function apply_state_defaults(value)
 			value[key] = default
 		end
 	end
+	value.prompt_layout_pending = nil
+	value._position_prompt = nil
 	return instructions.normalize(value)
 end
 
@@ -597,10 +600,10 @@ local function update_chrome()
 		and (state.busy or state.starting or status == "stopping")
 		and not status:find("error", 1, true)
 		and status ~= "disconnected"
-	instructions.sync_spinner(state, spinner_active, refresh_instruction_window)
+	instructions.sync_spinner(state, spinner_active, refresh_composer)
 	update_output_winbar()
-	if valid_win(state.input_win) and position_prompt then
-		position_prompt()
+	if composer.is_open(state, state.output_win) and sync_composer then
+		sync_composer()
 	end
 	if valid_win(state.sessions_win) then
 		local count = state.sessions_count or 1
@@ -690,9 +693,8 @@ function M.close()
 	local chat_tab = valid_tab(state.tabpage) and state.tabpage or nil
 	local return_win = chat_tab == current_tab and state.origin_win or current_win
 	instructions.stop_spinner(state)
-	instructions.close_window(state)
+	composer.close(state)
 	if not close_tab(chat_tab, return_win) then
-		close_window(state.input_win)
 		close_window(state.sessions_win)
 		if valid_win(state.output_win) then
 			local output_tab = vim.api.nvim_win_get_tabpage(state.output_win)
@@ -704,8 +706,6 @@ function M.close()
 			end
 		end
 	end
-	state.input_win = nil
-	state.instruction_win = nil
 	state.sessions_win = nil
 	state.output_win = nil
 	state.tabpage = nil
@@ -792,71 +792,43 @@ local function configure_sessions_window(winid)
 	vim.wo[winid].winfixwidth = true
 end
 
-local function prompt_config()
-	return view.prompt_config(state.output_win, state, config.window)
-end
-
-local function sync_instruction_window(desired, lines, chrome_key)
-	instructions.sync_window(state, state.output_win, desired, lines, chrome_key)
-end
-
-refresh_instruction_window = function()
-	if not state or not valid_win(state.output_win) or not valid_win(state.input_win) then
-		instructions.stop_spinner(state)
-		return
-	end
-	local _, _, _, instruction, instruction_lines, instruction_key = prompt_config()
-	if not instruction then
-		instructions.stop_spinner(state)
-	end
-	sync_instruction_window(instruction, instruction_lines, instruction_key)
-end
-
-local function open_prompt_window()
-	local desired, reserved_rows, chrome_key, instruction, instruction_lines, instruction_key = prompt_config()
-	if not desired then
+local function apply_composer_result(result)
+	if not result then
 		return false
 	end
-	state.input_win = vim.api.nvim_open_win(state.input_buf, true, desired)
-	set_prompt_reserved_rows(reserved_rows)
-	state.prompt_chrome_key = chrome_key
-	view.configure_prompt_window(state.input_win)
-	sync_instruction_window(instruction, instruction_lines, instruction_key)
-	view.configure_output_window(state.output_win, reserved_rows)
-	if state.output_position_mode == "center" then
-		center_output_position()
-	end
-	return true
-end
-
-position_prompt = function()
-	if
-		not state
-		or not valid_win(state.output_win)
-		or not valid_win(state.input_win)
-		or not view.is_floating(state.input_win)
-	then
-		return false
-	end
-	local desired, reserved_rows, chrome_key, instruction, instruction_lines, instruction_key = prompt_config()
-	if not desired then
-		return false
-	end
-	local current = vim.api.nvim_win_get_config(state.input_win)
-	local geometry_changed = not view.same_prompt_geometry(current, desired)
-	if geometry_changed or state.prompt_chrome_key ~= chrome_key then
-		vim.api.nvim_win_set_config(state.input_win, desired)
-		state.prompt_chrome_key = chrome_key
-	end
-	view.configure_prompt_window(state.input_win)
-	sync_instruction_window(instruction, instruction_lines, instruction_key)
+	local reserved_rows = result.layout.reserved_rows
 	view.configure_output_window(state.output_win, reserved_rows)
 	local reserved_rows_changed = state.prompt_reserved_rows ~= reserved_rows
 	if reserved_rows_changed then
 		set_prompt_reserved_rows(reserved_rows)
 	end
-	if state.output_position_mode == "center" and (geometry_changed or reserved_rows_changed) then
+	if state.output_position_mode == "center" and (result.geometry_changed or reserved_rows_changed) then
 		center_output_position()
+	end
+	return true
+end
+
+sync_composer = function()
+	if not state or not valid_win(state.output_win) or not composer.is_open(state, state.output_win) then
+		return nil
+	end
+	local result = composer.sync(state, state.output_win, config.window)
+	if not apply_composer_result(result) then
+		return nil
+	end
+	return result
+end
+
+refresh_composer = function()
+	if not composer.refresh_turn(state, state and state.output_win, config.window) then
+		instructions.stop_spinner(state)
+	end
+end
+
+local function open_composer()
+	local result = composer.open(state, state.output_win, config.window)
+	if not apply_composer_result(result) then
+		return false
 	end
 	return true
 end
@@ -866,13 +838,11 @@ local function normal_window_in_tab(winid, tabpage)
 end
 
 local function open_layout()
-	state._position_prompt = position_prompt
+	state._sync_composer = sync_composer
 	if
 		valid_win(state.output_win)
-		and valid_win(state.input_win)
+		and composer.is_open(state, state.output_win)
 		and valid_win(state.sessions_win)
-		and view.is_floating(state.input_win)
-		and vim.api.nvim_win_get_tabpage(state.output_win) == vim.api.nvim_win_get_tabpage(state.input_win)
 		and vim.api.nvim_win_get_tabpage(state.output_win) == vim.api.nvim_win_get_tabpage(state.sessions_win)
 	then
 		state.tabpage = vim.api.nvim_win_get_tabpage(state.output_win)
@@ -880,7 +850,6 @@ local function open_layout()
 		vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
 		vim.api.nvim_win_set_buf(state.sessions_win, state.sessions_buf)
 		configure_window(state.output_win, true)
-		view.configure_prompt_window(state.input_win)
 		configure_sessions_window(state.sessions_win)
 		render_sessions()
 		refresh_output_view(0)
@@ -891,9 +860,8 @@ local function open_layout()
 	end
 
 	local previous_output = state.output_win
-	local previous_input = state.input_win
-	local previous_instruction = state.instruction_win
 	local previous_sessions = state.sessions_win
+	composer.close(state)
 	local tabpage = valid_tab(state.tabpage) and state.tabpage or nil
 	if not tabpage then
 		vim.cmd("tabnew")
@@ -914,7 +882,7 @@ local function open_layout()
 	if not output_win then
 		error("Codex tab has no normal window for the chat buffer")
 	end
-	for _, winid in pairs({ previous_output, previous_input, previous_instruction, previous_sessions }) do
+	for _, winid in pairs({ previous_output, previous_sessions }) do
 		if valid_win(winid) and winid ~= output_win then
 			close_window(winid)
 		end
@@ -922,8 +890,6 @@ local function open_layout()
 
 	state.tabpage = tabpage
 	state.output_win = output_win
-	state.input_win = nil
-	state.instruction_win = nil
 	state.sessions_win = nil
 	vim.api.nvim_set_current_win(state.output_win)
 	vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
@@ -940,8 +906,8 @@ local function open_layout()
 		view.sessions_winbar(state.sessions_count or 1, state.threads_loading, state.cwd)
 	vim.api.nvim_set_current_win(state.output_win)
 
-	if not open_prompt_window() then
-		error("Could not create the Codex prompt window")
+	if not open_composer() then
+		error("Could not create the Codex composer")
 	end
 	render_sessions()
 	refresh_output_view(0)
@@ -2145,23 +2111,23 @@ local function create_command(name, callback, opts)
 	vim.api.nvim_create_user_command(name, callback, opts)
 end
 
-local function schedule_prompt_position()
+local function schedule_composer_sync()
 	if
 		not state
-		or state.prompt_layout_pending
+		or state.composer_layout_pending
 		or not valid_win(state.output_win)
-		or not valid_win(state.input_win)
+		or not composer.is_open(state, state.output_win)
 	then
 		return
 	end
 	local request_state = state
-	state.prompt_layout_pending = true
+	state.composer_layout_pending = true
 	vim.schedule(function()
 		if state ~= request_state then
 			return
 		end
-		state.prompt_layout_pending = false
-		position_prompt()
+		state.composer_layout_pending = false
+		sync_composer()
 	end)
 end
 
@@ -2270,7 +2236,15 @@ local function register_autocmds()
 	local group = vim.api.nvim_create_augroup("acp.nvim", { clear = true })
 	vim.api.nvim_create_autocmd({ "VimResized", "WinResized" }, {
 		group = group,
-		callback = schedule_prompt_position,
+		callback = schedule_composer_sync,
+	})
+	vim.api.nvim_create_autocmd("WinClosed", {
+		group = group,
+		callback = function(event)
+			if composer.handle_win_closed(state, event.match) == "prompt" then
+				instructions.stop_spinner(state)
+			end
+		end,
 	})
 	vim.api.nvim_create_autocmd("ColorScheme", {
 		group = group,
@@ -2334,9 +2308,6 @@ local function register_runtime()
 		end
 		if valid_win(state.output_win) then
 			configure_window(state.output_win, true)
-		end
-		if valid_win(state.input_win) then
-			view.configure_prompt_window(state.input_win)
 		end
 		refresh_output_view(0)
 		update_chrome()

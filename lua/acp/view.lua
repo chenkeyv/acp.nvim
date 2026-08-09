@@ -383,7 +383,7 @@ local function output_bounds(winid)
 	}
 end
 
-function M.prompt_config(output_win, state, opts)
+function M.composer_layout(output_win, state, opts)
 	opts = opts or {}
 	local bounds = output_bounds(output_win)
 	if not bounds then
@@ -416,9 +416,9 @@ function M.prompt_config(output_win, state, opts)
 	if instruction then
 		local attached_rows = #instruction.lines
 		instruction_config = {
-			relative = "editor",
-			row = geometry.row - attached_rows,
-			col = geometry.col + 1,
+			relative = "win",
+			row = -attached_rows - 1,
+			col = 0,
 			width = geometry.width,
 			height = attached_rows,
 			style = "minimal",
@@ -428,12 +428,14 @@ function M.prompt_config(output_win, state, opts)
 		}
 		reserved_rows = math.min(bounds.height - 1, reserved_rows + attached_rows)
 	end
-	return prompt,
-		reserved_rows,
-		footer_key,
-		instruction_config,
-		instruction and instruction.lines or nil,
-		instruction and instruction.key or nil
+	return {
+		prompt = prompt,
+		prompt_key = footer_key,
+		turn = instruction_config,
+		turn_lines = instruction and instruction.lines or nil,
+		turn_key = instruction and instruction.key or nil,
+		reserved_rows = reserved_rows,
+	}
 end
 
 local function numeric(value)
@@ -443,11 +445,13 @@ local function numeric(value)
 	return tonumber(value) or 0
 end
 
-function M.same_prompt_geometry(current, desired)
+function M.same_float_geometry(current, desired)
 	if type(current) ~= "table" or type(desired) ~= "table" then
 		return false
 	end
 	return current.relative == desired.relative
+		and current.anchor == (desired.anchor or "NW")
+		and (desired.relative ~= "win" or current.win == desired.win)
 		and numeric(current.row) == numeric(desired.row)
 		and numeric(current.col) == numeric(desired.col)
 		and current.width == desired.width

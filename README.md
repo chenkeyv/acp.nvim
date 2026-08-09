@@ -16,8 +16,8 @@ phase.
 - one long-lived `codex app-server` process per Neovim instance
 - new, recent, and resumed Codex threads, including VS Code-created threads
 - a persistent left sessions split with the current chat pinned at the top
-- an inset floating prompt with an always-attached turn panel and tool-aware
-  chat styling and icons
+- one inset composer built from a floating prompt and its attached turn panel,
+  with tool-aware chat styling and icons
 - streamed agent messages and plans
 - Codex CLI-style command, tool, exploration, and file-change cells
 - model and reasoning-effort selectors from the server catalog
@@ -89,15 +89,17 @@ require("acp").setup({
 `command = "codex"` is also accepted and expands to the default app-server
 command. A command table is used exactly as supplied.
 
-The prompt floats over reserved blank rows at the bottom of the chat, so it
-does not cover the latest response. `input_height` includes the frame and
-`input_padding` controls its inset from the chat text area. Prompt, model,
-reasoning, and context metadata sit on the lower-left border, while the send and
-steer hints remain on the lower-right. A compact borderless read-only turn panel
-is always attached above the prompt. A blank top row separates it from the chat,
-while the current status stays anchored to the bottom and steer or queued
-follow-ups fill upward immediately above it. The panel grows with its content up
-to `instruction_height`, including the spacer and status rows; pending entries
+The composer floats over reserved blank rows at the bottom of the chat, so it
+does not cover the latest response. Its two visually separate floats share one
+geometry and lifecycle: the compact borderless turn panel is positioned relative
+to the prompt window, and follows it automatically when the chat moves or
+resizes. `input_height` includes the prompt frame and `input_padding` controls
+its inset from the chat text area. Prompt, model, reasoning, and context metadata
+sit on the lower-left border, while the send and steer hints remain on the
+lower-right. A blank top row separates the turn panel from the chat, while the
+current status stays anchored to the bottom and steer or queued follow-ups fill
+upward immediately above it. The panel grows with its content up to
+`instruction_height`, including the spacer and status rows; pending entries
 expand and collapse it without changing its width. The active status icon spins
 in place during a turn and stops on completion, error, close, or reload. Queued
 entries disappear when their turn starts, while steer entries disappear when the

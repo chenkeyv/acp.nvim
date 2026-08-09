@@ -765,8 +765,8 @@ local function close_map(state)
 	end
 	state.output_map_win = nil
 	pcall(vim.cmd, "redraw")
-	if type(state._position_prompt) == "function" then
-		state._position_prompt()
+	if type(state._sync_composer) == "function" then
+		state._sync_composer()
 	end
 end
 
@@ -881,8 +881,8 @@ function M.open_map(state)
 	vim.wo[state.output_map_win].cursorline = true
 	vim.wo[state.output_map_win].wrap = false
 	pcall(vim.cmd, "redraw")
-	if type(state._position_prompt) == "function" then
-		state._position_prompt()
+	if type(state._sync_composer) == "function" then
+		state._sync_composer()
 	end
 	return true
 end
@@ -1161,8 +1161,8 @@ function M.close(state)
 		vim.api.nvim_buf_clear_namespace(state.output_buf, current_ns, 0, -1)
 		vim.api.nvim_buf_clear_namespace(state.output_buf, pulse_ns, 0, -1)
 	end
-	if type(state._position_prompt) == "function" then
-		state._position_prompt()
+	if type(state._sync_composer) == "function" then
+		state._sync_composer()
 	end
 end
 
