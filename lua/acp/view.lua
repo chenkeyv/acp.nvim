@@ -136,16 +136,6 @@ local function current_section(state)
 	return output.current_section(lines, cursor[1])
 end
 
-local function status_highlight(state)
-	local status = tostring(state.status or "idle"):lower()
-	if status:find("error", 1, true) or status == "disconnected" then
-		return "AcpChatStatusError"
-	elseif state.busy or state.starting or status == "stopping" then
-		return "AcpChatStatusActive"
-	end
-	return "AcpChatStatusOk"
-end
-
 local function status_icon(state)
 	local status = tostring(state.status or "idle"):lower()
 	if status:find("error", 1, true) or status == "disconnected" then
@@ -159,11 +149,6 @@ end
 function M.chat_winbar(state)
 	state = state or {}
 	local chunks = { statusline_chunk((" %s Codex "):format(icons.get("agent")), "AcpChatTitle") }
-	table.insert(chunks, separator())
-	table.insert(
-		chunks,
-		statusline_chunk(("%s %s"):format(status_icon(state), state.status or "idle"), status_highlight(state))
-	)
 	table.insert(chunks, "%<")
 	local section = current_section(state)
 	if section then
@@ -225,24 +210,6 @@ function M.prompt_title(state)
 			"AcpPromptTitleContext"
 		)
 	end
-	local queued = 0
-	local steering = 0
-	for _, instruction in ipairs(state.pending_instructions or {}) do
-		if instruction.kind == "steer" then
-			steering = steering + 1
-		elseif instruction.kind == "queued" then
-			queued = queued + 1
-		end
-	end
-	if queued == 0 and #(state.pending_instructions or {}) == 0 then
-		queued = #(state.queue or {})
-	end
-	if steering > 0 then
-		add_title_chunk(chunks, ("%d steer"):format(steering), "AcpChatStatusActive")
-	end
-	if queued > 0 then
-		add_title_chunk(chunks, ("%d queued"):format(queued), "AcpChatStatusActive")
-	end
 	return chunks
 end
 
@@ -291,66 +258,70 @@ local function truncate_display(value, width)
 	return vim.fn.strcharpart(value, 0, low) .. suffix
 end
 
-local function instruction_counts(instructions)
-	local counts = { queued = 0, steer = 0 }
-	for _, instruction in ipairs(instructions or {}) do
-		if counts[instruction.kind] ~= nil then
-			counts[instruction.kind] = counts[instruction.kind] + 1
+local function ordered_instructions(instructions)
+	local ordered = {}
+	for _, kind in ipairs({ "steer", "queued" }) do
+		for _, instruction in ipairs(instructions or {}) do
+			if instruction.kind == kind then
+				table.insert(ordered, instruction)
+			end
 		end
 	end
-	return counts
+	return ordered
 end
 
 function M.instruction_block(state, width, max_height)
-	local instructions = state and state.pending_instructions or {}
-	if type(instructions) ~= "table" or #instructions == 0 then
-		return nil
-	end
+	state = state or {}
+	local instructions = type(state.pending_instructions) == "table" and state.pending_instructions or {}
 	width = math.max(1, math.floor(tonumber(width) or 1))
-	max_height = math.max(1, math.floor(tonumber(max_height) or #instructions))
-	local lines = {}
-	local visible = math.min(#instructions, max_height)
-	if #instructions > max_height then
-		visible = math.max(0, max_height - 1)
+	max_height = math.max(1, math.floor(tonumber(max_height) or (#instructions + 1)))
+	local status = one_line(state.status)
+	if status == "" then
+		status = (state.busy or state.starting) and "working" or "ready"
+	end
+	local lines = { truncate_display(("%s %s"):format(status_icon(state), status), width) }
+	local ordered = ordered_instructions(instructions)
+	local capacity = math.max(0, max_height - 1)
+	local visible = math.min(#ordered, capacity)
+	if #ordered > capacity then
+		visible = math.max(0, capacity - 1)
 	end
 	for index = 1, visible do
-		local instruction = instructions[index]
+		local instruction = ordered[index]
 		local steering = instruction.kind == "steer"
 		local icon = icons.get(steering and "send" or "history")
-		local label = steering and "STEER" or "QUEUED"
+		local label = steering and (instruction.accepted and "sent" or "steer") or "queued"
 		table.insert(lines, truncate_display(("%s %-6s %s"):format(icon, label, one_line(instruction.text)), width))
 	end
-	if #instructions > visible then
-		local remaining = #instructions - visible
+	if #ordered > visible and capacity > 0 then
+		local remaining = #ordered - visible
 		table.insert(
 			lines,
 			truncate_display(
-				("%s +%d more instruction%s"):format(icons.get("history"), remaining, remaining == 1 and "" or "s"),
+				("%s +%d pending instruction%s"):format(icons.get("history"), remaining, remaining == 1 and "" or "s"),
 				width
 			)
 		)
 	end
-	local counts = instruction_counts(instructions)
-	local title = { { " Instructions ", "AcpInstructionTitle" } }
-	if counts.steer > 0 then
-		table.insert(title, { (" %d steer "):format(counts.steer), "AcpChatStatusActive" })
-	end
-	if counts.queued > 0 then
-		table.insert(title, { (" %d queued "):format(counts.queued), "AcpChatStatusActive" })
-	end
 	return {
 		lines = lines,
-		title = title,
-		key = table.concat(
-			vim.tbl_map(function(instruction)
-				return table.concat({
-					tostring(instruction.id or ""),
-					tostring(instruction.kind or ""),
-					tostring(instruction.text or ""),
-				}, "\0")
-			end, instructions),
-			"\1"
-		),
+		title = { { " Turn ", "AcpInstructionTitle" } },
+		key = table.concat({
+			tostring(state.status or ""),
+			tostring(state.busy == true),
+			tostring(state.starting == true),
+			table.concat(
+				vim.tbl_map(function(instruction)
+					return table.concat({
+						tostring(instruction.id or ""),
+						tostring(instruction.kind or ""),
+						tostring(instruction.accepted == true),
+						tostring(instruction.text or ""),
+					}, "\0")
+				end, ordered),
+				"\1"
+			),
+		}, "\2"),
 	}
 end
 
@@ -430,14 +401,13 @@ function M.prompt_config(output_win, state, opts)
 		instruction = M.instruction_block(state, geometry.width, instruction_height)
 	end
 	if instruction then
-		local height = #instruction.lines
-		local attached_rows = height + 1
+		local attached_rows = instruction_height + 1
 		instruction_config = {
 			relative = "editor",
 			row = geometry.row - attached_rows,
 			col = geometry.col,
 			width = geometry.width,
-			height = height,
+			height = instruction_height,
 			style = "minimal",
 			border = vim.deepcopy(instruction_border),
 			title = instruction.title,
@@ -531,6 +501,25 @@ function M.configure_output_window(winid, reserved_rows)
 	vim.wo[winid].statuscolumn = "%C "
 	vim.wo[winid].scrolloff = math.max(0, tonumber(reserved_rows) or 0)
 	vim.wo[winid].fillchars = "eob: "
+end
+
+function M.center_output(winid, line, reserved_rows)
+	if not valid_win(winid) then
+		return nil
+	end
+	local bufnr = vim.api.nvim_win_get_buf(winid)
+	line = math.max(1, math.min(math.floor(tonumber(line) or 1), vim.api.nvim_buf_line_count(bufnr)))
+	local ok, saved_view = pcall(vim.api.nvim_win_call, winid, function()
+		vim.api.nvim_win_set_cursor(winid, { line, 0 })
+		vim.cmd("normal! zz")
+		local offset = math.ceil(math.max(0, tonumber(reserved_rows) or 0) / 2)
+		if offset > 0 then
+			local scroll_down = vim.api.nvim_replace_termcodes("<C-e>", true, false, true)
+			vim.cmd(("normal! %d%s"):format(offset, scroll_down))
+		end
+		return vim.fn.winsaveview()
+	end)
+	return ok and saved_view or nil
 end
 
 local function mark(bufnr, row, col, opts)

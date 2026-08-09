@@ -10,6 +10,7 @@ local output_ui = require("acp.output_ui")
 local permission = require("acp.permission")
 local render = require("acp.render")
 local requests = require("acp.requests")
+local server_log = require("acp.server_log")
 local transcript = require("acp.transcript")
 local ui = require("acp.ui")
 local view = require("acp.view")
@@ -55,6 +56,16 @@ local function chunks_text(chunks)
 		table.insert(values, type(chunk) == "table" and (chunk[1] or "") or tostring(chunk))
 	end
 	return table.concat(values)
+end
+
+local function server_error_stderr()
+	return table.concat({
+		"\27[2m2026-08-08T23:36:02.598319Z\27[0m ",
+		"\27[31mERROR\27[0m ",
+		"\27[2mcodex_core::tools::router\27[0m\27[2m:\27[0m ",
+		"\27[3merror\27[0m\27[2m=\27[0m",
+		[=[exec_command failed for `/bin/zsh -lc 'git ls-remote origin refs/heads/main'`: CreateProcess { message: "Rejected(\"This action was rejected due to unacceptable risk.\\nReason: Automatic approval review failed: stream disconnected before completion.\\nProceed only with a materially safer alternative.\")" }]=],
+	})
 end
 
 local function fake_process()
@@ -117,6 +128,33 @@ test("line buffer emits complete non-empty JSONL records", function()
 	eq(lines, { '{"one":1}', '{"two":2}' })
 	buffer:reset()
 	eq(buffer.data, "")
+end)
+
+test("Codex server logs become native transcript notices", function()
+	local notices = server_log.parse(server_error_stderr())
+	eq(#notices, 1)
+	local notice = notices[1]
+	eq(notice.kind, "error")
+	eq(notice.metadata.server_log.level, "ERROR")
+	eq(notice.metadata.server_log.source, "codex_core::tools::router")
+	eq(notice.metadata.server_log.timestamp, "2026-08-08T23:36:02.598319Z")
+	local text = table.concat(notice.lines, "\n")
+	contains(text, transcript.line("error", "Codex server · tools/router"))
+	contains(text, "exec_command failed for `/bin/zsh -lc 'git ls-remote origin refs/heads/main'`")
+	contains(text, "Rejected: This action was rejected due to unacceptable risk.")
+	contains(text, "\n  Reason: Automatic approval review failed")
+	contains(text, "\n  Proceed only with a materially safer alternative.")
+	ok(not text:find("\27", 1, true), "ANSI escapes must not reach the transcript")
+	ok(not text:find("2026-08-08", 1, true), "transport timestamps should stay in metadata")
+	ok(not text:find("CreateProcess", 1, true), "Rust debug wrappers should be unwrapped")
+	ok(not text:find("\\n", 1, true), "escaped newlines should become native buffer lines")
+
+	local plain = server_log.parse("\27[33mconnection warning\27[0m\n")
+	eq(#plain, 1)
+	eq(plain[1].kind, "warning")
+	contains(table.concat(plain[1].lines, "\n"), transcript.line("warning", "Codex server"))
+	contains(table.concat(plain[1].lines, "\n"), "connection warning")
+	eq(server_log.parse("could not create PATH aliases\n"), {})
 end)
 
 test("client performs the app-server handshake in order", function()
@@ -557,18 +595,34 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 		}
 	)
 	local instruction_block = view.instruction_block({
+		status = "responding",
+		busy = true,
 		pending_instructions = {
 			{ id = "steer-1", kind = "steer", text = "Keep the public API unchanged" },
 			{ id = "queue-1", kind = "queued", text = "Run the tests afterward" },
 		},
 	}, 52, 4)
-	eq(#instruction_block.lines, 2)
-	contains(instruction_block.lines[1], icons.get("send") .. " STEER")
-	contains(instruction_block.lines[1], "Keep the public API unchanged")
-	contains(instruction_block.lines[2], icons.get("history") .. " QUEUED")
-	contains(chunks_text(instruction_block.title), "1 steer")
-	contains(chunks_text(instruction_block.title), "1 queued")
+	eq(#instruction_block.lines, 3)
+	contains(instruction_block.lines[1], icons.get("busy") .. " responding")
+	contains(instruction_block.lines[2], icons.get("send") .. " steer")
+	contains(instruction_block.lines[2], "Keep the public API unchanged")
+	contains(instruction_block.lines[3], icons.get("history") .. " queued")
+	eq(chunks_text(instruction_block.title), " Turn ")
+	local prompt_title = chunks_text(view.prompt_title({
+		pending_instructions = {
+			{ kind = "steer", text = "Keep the public API unchanged" },
+			{ kind = "queued", text = "Run the tests afterward" },
+		},
+	}))
+	ok(not prompt_title:find("steer", 1, true))
+	ok(not prompt_title:find("queued", 1, true))
+	local idle_block = view.instruction_block({ status = "ready" }, 28, 4)
+	eq(#idle_block.lines, 1)
+	contains(idle_block.lines[1], icons.get("idle") .. " ready")
+	contains(chunks_text(idle_block.title), "Turn")
 	local clipped_instructions = view.instruction_block({
+		status = "running",
+		busy = true,
 		pending_instructions = {
 			{ id = "queue-1", kind = "queued", text = "first" },
 			{ id = "queue-2", kind = "queued", text = "second" },
@@ -576,7 +630,7 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 		},
 	}, 28, 2)
 	eq(#clipped_instructions.lines, 2)
-	contains(clipped_instructions.lines[2], "+2 more instructions")
+	contains(clipped_instructions.lines[2], "+3 pending instructions")
 
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	local direct_lines = {
@@ -630,7 +684,7 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 		{ maxwidth = 49 }
 	)
 	contains(evaluated.str, icons.get("agent") .. " Codex")
-	contains(evaluated.str, "running command")
+	ok(not evaluated.str:find("running command", 1, true), "turn status should live in the attached panel")
 	local previous_have_nerd_font = vim.g.have_nerd_font
 	vim.g.have_nerd_font = false
 	eq(icons.get("user"), "U")
@@ -993,7 +1047,7 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(state.tabpage, chat_tab)
 		eq(#vim.api.nvim_list_tabpages(), tab_count + 1)
 		eq(vim.api.nvim_tabpage_list_wins(origin_tab), origin_windows)
-		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 3)
+		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 4)
 		eq(vim.bo[state.sessions_buf].filetype, "acp-sessions")
 		eq(vim.bo[state.output_buf].filetype, "acp")
 		eq(vim.bo[state.input_buf].filetype, "acp-prompt")
@@ -1013,6 +1067,7 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 			output_keymaps[keymap.desc] = true
 		end
 		for _, description in ipairs({
+			"Center active Codex response or redraw",
 			"Next Codex output section",
 			"Previous Codex output item",
 			"Inspect Codex output item",
@@ -1038,11 +1093,21 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 			},
 		})
 		local prompt = vim.api.nvim_win_get_config(state.input_win)
+		local turn_panel = vim.api.nvim_win_get_config(state.instruction_win)
 		eq(prompt.relative, "editor")
 		eq(prompt.zindex, 50)
 		contains(chunks_text(prompt.title), "Prompt")
 		contains(chunks_text(prompt.footer), "<C-s> steer")
 		contains(chunks_text(prompt.footer), "<C-CR> send")
+		eq(turn_panel.relative, "editor")
+		eq(turn_panel.focusable, false)
+		eq(turn_panel.col, prompt.col)
+		eq(turn_panel.width, prompt.width)
+		eq(turn_panel.row + turn_panel.height + 1, prompt.row)
+		eq(turn_panel.border[1][2], "AcpInstructionBorder")
+		eq(turn_panel.height, 4)
+		contains(chunks_text(turn_panel.title), "Turn")
+		contains(table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n"), "new chat")
 		local output_position = vim.api.nvim_win_get_position(state.output_win)
 		local output_info = vim.fn.getwininfo(state.output_win)[1]
 		eq(prompt.col, output_position[2] + output_info.textoff + 2)
@@ -1062,14 +1127,14 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.api.nvim_get_current_tabpage(), chat_tab)
 		eq(state.tabpage, chat_tab)
 		eq(#vim.api.nvim_list_tabpages(), tab_count + 1)
-		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 3)
+		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 4)
 		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
 		eq(vim.api.nvim_tabpage_list_wins(origin_tab), origin_windows)
 
 		vim.api.nvim_win_close(state.sessions_win, true)
 		vim.cmd("AcpSessions")
 		state = ui._state()
-		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 3)
+		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 4)
 		eq(vim.api.nvim_get_current_win(), state.sessions_win)
 		eq(vim.api.nvim_win_get_position(state.sessions_win)[2], 0)
 		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
@@ -1326,6 +1391,84 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		local prompt_top = vim.api.nvim_win_get_config(state.input_win).row + 1
 		ok(last_position.row > 0, "expected the latest response line to remain visible")
 		ok(last_position.row < prompt_top, "the floating prompt must not cover the latest response")
+
+		local function saved_output_view()
+			return vim.api.nvim_win_call(state.output_win, function()
+				return vim.fn.winsaveview()
+			end)
+		end
+
+		local function unobscured_center_row()
+			local stack_win = state.instruction_win
+					and vim.api.nvim_win_is_valid(state.instruction_win)
+					and state.instruction_win
+				or state.input_win
+			local stack_top = vim.api.nvim_win_get_config(stack_win).row + 1
+			local info = vim.fn.getwininfo(state.output_win)[1]
+			local text_top = info.winrow + (info.winbar or 0)
+			return math.floor((text_top + stack_top - 1) / 2)
+		end
+
+		local function assert_latest_response_centered(message)
+			vim.cmd("redraw")
+			local line = vim.api.nvim_buf_line_count(state.output_buf) - state.prompt_spacer_rows
+			local position = vim.fn.screenpos(state.output_win, line, 1)
+			local expected = unobscured_center_row()
+			ok(
+				math.abs(position.row - expected) <= 1,
+				("%s: expected row %d near %d"):format(message, position.row, expected)
+			)
+		end
+
+		vim.api.nvim_set_current_win(state.output_win)
+		local control_l = vim.api.nvim_replace_termcodes("<C-l>", true, false, true)
+		vim.api.nvim_feedkeys(control_l, "x", false)
+		eq(state.output_position_mode, "center")
+		assert_latest_response_centered("first control-l should center the live response")
+
+		fake.handlers.on_notification("item/agentMessage/delta", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			itemId = "message-1",
+			delta = "\nCentered continuation 1\nCentered continuation 2",
+		})
+		ok(
+			vim.wait(250, function()
+				return state.chat.by_id["message-1"].text:find("Centered continuation 2", 1, true) ~= nil
+			end, 5),
+			"expected the centered continuation to flush"
+		)
+		eq(state.output_position_mode, "center")
+		assert_latest_response_centered("streaming should retain the centered position")
+
+		local centered_view = saved_output_view()
+		vim.api.nvim_feedkeys(control_l, "x", false)
+		eq(saved_output_view(), centered_view)
+		eq(state.output_position_mode, "center")
+
+		local scroll_up = vim.api.nvim_replace_termcodes("<C-y>", true, false, true)
+		vim.cmd("normal! 4" .. scroll_up)
+		vim.cmd("redraw")
+		local manual_view = saved_output_view()
+		ok(manual_view.topline ~= centered_view.topline, "expected the manual scroll to change the output view")
+		fake.handlers.on_notification("item/agentMessage/delta", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			itemId = "message-1",
+			delta = "\nOutput after manual scrolling",
+		})
+		ok(
+			vim.wait(250, function()
+				return state.chat.by_id["message-1"].text:find("Output after manual scrolling", 1, true) ~= nil
+			end, 5),
+			"expected output after manual scrolling to flush"
+		)
+		eq(state.output_position_mode, "manual")
+		eq(saved_output_view().topline, manual_view.topline)
+
+		vim.api.nvim_feedkeys(control_l, "x", false)
+		eq(state.output_position_mode, "center")
+		assert_latest_response_centered("control-l should restore centered follow mode")
 		fake.handlers.on_notification("item/completed", {
 			threadId = "thread-1",
 			turnId = "turn-1",
@@ -1359,6 +1502,7 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(state.diff, "--- a/file\n+++ b/file")
 		eq(state.tokens.totalTokens, 42)
 		eq(state.busy, false)
+		eq(state.output_position_mode, "normal")
 		eq(
 			vim.tbl_map(function(block)
 				return block.kind
@@ -1413,6 +1557,15 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		vim.api.nvim_win_close(preview_win, true)
 		eq(vim.api.nvim_buf_get_lines(state.output_buf, 0, state.chat.line_count, false), state.chat:render_lines())
 		eq(vim.api.nvim_buf_line_count(state.output_buf), state.chat.line_count + state.prompt_spacer_rows)
+		fake.handlers.on_stderr(server_error_stderr())
+		local server_block = state.chat.blocks[#state.chat.blocks]
+		eq(server_block.kind, "error")
+		eq(server_block.metadata.server_log.source, "codex_core::tools::router")
+		local server_text = table.concat(server_block.lines, "\n")
+		contains(server_text, "Codex server · tools/router")
+		contains(server_text, "Rejected: This action was rejected due to unacceptable risk.")
+		ok(not server_text:find("\27", 1, true))
+		ok(not server_text:find("CreateProcess", 1, true))
 		eq(ui.new_chat({ keep_layout = true }), true)
 		eq(#ui._state().chat.blocks, 0)
 		eq(fake.unsubscribed, "thread-1")
@@ -1476,6 +1629,27 @@ test("control-s steers the active turn instead of queueing", function()
 			end, 5),
 			"expected the initial response block to flush"
 		)
+		local function geometry(winid)
+			local current = vim.api.nvim_win_get_config(winid)
+			return {
+				relative = current.relative,
+				row = tonumber(current.row),
+				col = tonumber(current.col),
+				width = current.width,
+				height = current.height,
+			}
+		end
+		local stable_prompt_geometry = geometry(state.input_win)
+		local stable_instruction_geometry = geometry(state.instruction_win)
+		local stable_reserved_rows = state.prompt_reserved_rows
+		local stable_spacer_rows = state.prompt_spacer_rows
+		eq(stable_instruction_geometry.height, 4)
+		local function assert_stable_prompt_stack()
+			eq(geometry(state.input_win), stable_prompt_geometry)
+			eq(geometry(state.instruction_win), stable_instruction_geometry)
+			eq(state.prompt_reserved_rows, stable_reserved_rows)
+			eq(state.prompt_spacer_rows, stable_spacer_rows)
+		end
 
 		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Keep the public API unchanged" })
 		vim.api.nvim_set_current_win(state.input_win)
@@ -1498,8 +1672,10 @@ test("control-s steers the active turn instead of queueing", function()
 		eq(instruction_config.col, prompt_config.col)
 		eq(instruction_config.width, prompt_config.width)
 		eq(instruction_config.row + instruction_config.height + 1, prompt_config.row)
+		eq(instruction_config.border[1][2], "AcpInstructionBorder")
+		assert_stable_prompt_stack()
 		local instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
-		contains(instruction_text, "STEER")
+		contains(instruction_text, "steer")
 		contains(instruction_text, "Keep the public API unchanged")
 		fake.handlers.on_notification("item/reasoning/textDelta", {
 			threadId = "thread-steer",
@@ -1508,6 +1684,10 @@ test("control-s steers the active turn instead of queueing", function()
 		})
 		eq(#state.pending_instructions, 1)
 		fake.steer_callback({})
+		assert_stable_prompt_stack()
+		instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
+		contains(instruction_text, "steered")
+		contains(instruction_text, "sent")
 		contains(
 			table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n"),
 			transcript.header("user", " (steer)")
@@ -1520,7 +1700,11 @@ test("control-s steers the active turn instead of queueing", function()
 			delta = "After steering.",
 		})
 		eq(#state.pending_instructions, 0)
-		ok(not state.instruction_win or not vim.api.nvim_win_is_valid(state.instruction_win))
+		ok(vim.api.nvim_win_is_valid(state.instruction_win))
+		assert_stable_prompt_stack()
+		instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
+		contains(instruction_text, "responding")
+		ok(not instruction_text:find("Keep the public API unchanged", 1, true))
 		ok(
 			vim.wait(250, function()
 				local continuation = state.chat.by_id["shared-message:agent:2"]
@@ -1542,9 +1726,15 @@ test("control-s steers the active turn instead of queueing", function()
 		eq(#state.pending_instructions, 1)
 		eq(state.pending_instructions[1].kind, "queued")
 		ok(vim.api.nvim_win_is_valid(state.instruction_win))
+		assert_stable_prompt_stack()
 		instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
-		contains(instruction_text, "QUEUED")
+		contains(instruction_text, "queued")
 		contains(instruction_text, "Run the tests afterward")
+		local queued_output = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+		ok(
+			not queued_output:find("Queued follow-up", 1, true),
+			"queued instructions should not add redundant transcript notices"
+		)
 
 		fake.handlers.on_notification("turn/completed", {
 			threadId = "thread-steer",
@@ -1555,7 +1745,8 @@ test("control-s steers the active turn instead of queueing", function()
 		end))
 		eq(fake.turns[2].payload.input[1].text, "Run the tests afterward")
 		eq(#state.pending_instructions, 0)
-		ok(not state.instruction_win or not vim.api.nvim_win_is_valid(state.instruction_win))
+		ok(vim.api.nvim_win_is_valid(state.instruction_win))
+		assert_stable_prompt_stack()
 	end)
 	ui._reset()
 	if not passed then

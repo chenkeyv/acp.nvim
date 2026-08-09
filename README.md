@@ -16,7 +16,8 @@ phase.
 - one long-lived `codex app-server` process per Neovim instance
 - new, recent, and resumed Codex threads, including VS Code-created threads
 - a persistent left sessions split with the current chat pinned at the top
-- an inset floating prompt with role, status, and tool-aware chat styling and icons
+- an inset floating prompt with an always-attached turn panel and tool-aware
+  chat styling and icons
 - streamed agent messages and plans
 - command, tool, and file-change summaries
 - model and reasoning-effort selectors from the server catalog
@@ -85,11 +86,13 @@ command. A command table is used exactly as supplied.
 
 The prompt floats over reserved blank rows at the bottom of the chat, so it
 does not cover the latest response. `input_height` includes the frame and
-`input_padding` controls its inset from the chat text area. While a turn is
-active, steer and queued follow-ups appear as literal text in a read-only block
-attached above the prompt. `instruction_height` caps its visible rows; queued
-entries disappear when their turn starts, while steer entries disappear when
-the continuation begins producing output.
+`input_padding` controls its inset from the chat text area. A compact read-only
+turn panel is always attached above the prompt. It shows the current status and
+fills a stable `instruction_height` frame with steer and queued follow-ups, so
+streaming updates do not resize the prompt stack. Queued entries disappear when
+their turn starts, while steer entries disappear when the continuation begins
+producing output. Transient status and queue details stay in this panel instead
+of being repeated in the chat transcript or prompt title.
 
 The chat transcript uses the custom `acp` filetype rather than Markdown, while
 the editable prompt uses `acp-prompt`. This keeps their styling and filetype
@@ -98,6 +101,11 @@ Semantic icons for people, tools, changes, warnings, and errors are written
 directly into the transcript text. The chat therefore needs no sign column or
 icon-bearing extmarks; set `vim.g.have_nerd_font = false` to write compact text
 fallbacks instead.
+
+ANSI-decorated app-server diagnostics are normalized before they enter the
+transcript. Transport timestamps remain block metadata, while log levels,
+module names, escaped multiline messages, and common process-error wrappers
+become native notice, warning, or error blocks.
 
 The visible chat remains one native buffer, backed by ordered logical blocks
 for user prompts, agent responses, plans, completed activity, notices, warnings,

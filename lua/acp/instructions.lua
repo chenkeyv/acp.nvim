@@ -142,6 +142,7 @@ local function ensure_buffer(state)
 		return state.instruction_buf
 	end
 	state.instruction_buf = vim.api.nvim_create_buf(false, true)
+	state.instruction_content_key = nil
 	pcall(vim.api.nvim_buf_set_name, state.instruction_buf, "acp://codex/instructions")
 	vim.bo[state.instruction_buf].buftype = "nofile"
 	vim.bo[state.instruction_buf].bufhidden = "hide"
@@ -156,17 +157,16 @@ function M.close_window(state)
 	close_window(state and state.instruction_win)
 	if state then
 		state.instruction_win = nil
-		state.instruction_chrome_key = nil
 	end
 end
 
-function M.sync_window(state, output_win, desired, lines, chrome_key)
+function M.sync_window(state, output_win, desired, lines, content_key)
 	if not desired or type(lines) ~= "table" or #lines == 0 then
 		M.close_window(state)
 		return
 	end
 	local bufnr = ensure_buffer(state)
-	if state.instruction_content_key ~= chrome_key then
+	if state.instruction_content_key ~= content_key then
 		local modifiable = vim.bo[bufnr].modifiable
 		vim.bo[bufnr].modifiable = true
 		local ok, err = pcall(vim.api.nvim_buf_set_lines, bufnr, 0, -1, false, lines)
@@ -174,7 +174,7 @@ function M.sync_window(state, output_win, desired, lines, chrome_key)
 		if not ok then
 			error(err)
 		end
-		state.instruction_content_key = chrome_key
+		state.instruction_content_key = content_key
 	end
 	local current_tab = valid_win(output_win) and vim.api.nvim_win_get_tabpage(output_win) or nil
 	if valid_win(state.instruction_win) and vim.api.nvim_win_get_tabpage(state.instruction_win) ~= current_tab then
@@ -182,14 +182,10 @@ function M.sync_window(state, output_win, desired, lines, chrome_key)
 	end
 	if not valid_win(state.instruction_win) then
 		state.instruction_win = vim.api.nvim_open_win(bufnr, false, desired)
-	elseif
-		not view.same_prompt_geometry(vim.api.nvim_win_get_config(state.instruction_win), desired)
-		or state.instruction_chrome_key ~= chrome_key
-	then
+	elseif not view.same_prompt_geometry(vim.api.nvim_win_get_config(state.instruction_win), desired) then
 		vim.api.nvim_win_set_config(state.instruction_win, desired)
 	end
 	vim.api.nvim_win_set_buf(state.instruction_win, bufnr)
-	state.instruction_chrome_key = chrome_key
 	view.configure_instruction_window(state.instruction_win)
 end
 

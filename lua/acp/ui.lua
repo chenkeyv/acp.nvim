@@ -6,6 +6,7 @@ local output_ui = require("acp.output_ui")
 local reloader = require("acp.reload")
 local render = require("acp.render")
 local requests = require("acp.requests")
+local server_log = require("acp.server_log")
 local view = require("acp.view")
 
 local M = {}
@@ -125,6 +126,9 @@ local function fresh_state(cwd)
 		output_text_generation = 0,
 		pending_output_block_id = nil,
 		cursor_update_pending = false,
+		output_position_mode = "normal",
+		output_position_view = false,
+		output_position_syncing = false,
 		output_winbar = nil,
 		chat = blocks.new(),
 		tokens = nil,
@@ -217,8 +221,76 @@ local function at_output_bottom()
 	return cursor >= output_content_line_count() - 2
 end
 
-local function follow_output(was_at_bottom)
-	if not was_at_bottom or not valid_win(state.output_win) or not valid_buf(state.output_buf) then
+local function reset_output_position(mode)
+	if not state then
+		return
+	end
+	state.output_position_mode = mode or "normal"
+	state.output_position_view = false
+	state.output_position_syncing = false
+end
+
+local function current_output_view()
+	if not state or not valid_win(state.output_win) then
+		return nil
+	end
+	local ok, saved_view = pcall(vim.api.nvim_win_call, state.output_win, function()
+		return vim.fn.winsaveview()
+	end)
+	return ok and saved_view or nil
+end
+
+local function same_output_view(actual, expected)
+	if type(actual) ~= "table" or type(expected) ~= "table" then
+		return false
+	end
+	for _, key in ipairs({ "lnum", "col", "topline", "topfill", "leftcol", "skipcol" }) do
+		if actual[key] ~= expected[key] then
+			return false
+		end
+	end
+	return true
+end
+
+local function output_position_synced()
+	return state
+		and state.output_position_mode == "center"
+		and same_output_view(current_output_view(), state.output_position_view)
+end
+
+local function center_output_position()
+	if not state or not valid_win(state.output_win) or not valid_buf(state.output_buf) then
+		return false
+	end
+	state.output_position_mode = "center"
+	state.output_position_syncing = true
+	local saved_view = view.center_output(state.output_win, output_content_line_count(), state.prompt_reserved_rows)
+	state.output_position_syncing = false
+	if not saved_view then
+		reset_output_position()
+		return false
+	end
+	state.output_position_view = saved_view
+	return true
+end
+
+local function leave_centered_output_if_moved()
+	if
+		state
+		and state.output_position_mode == "center"
+		and not state.output_position_syncing
+		and not output_position_synced()
+	then
+		reset_output_position("manual")
+	end
+end
+
+local function follow_output(should_follow)
+	if not should_follow or not valid_win(state.output_win) or not valid_buf(state.output_buf) then
+		return
+	end
+	if state.output_position_mode == "center" then
+		center_output_position()
 		return
 	end
 	pcall(vim.api.nvim_win_set_cursor, state.output_win, { output_content_line_count(), 0 })
@@ -294,7 +366,12 @@ local function apply_chat_operation(operation)
 	if not state or not valid_buf(state.output_buf) or type(operation) ~= "table" then
 		return
 	end
-	local follow = at_output_bottom()
+	if state.output_position_mode == "center" and not output_position_synced() then
+		reset_output_position("manual")
+	end
+	local follow = state.output_position_mode == "center"
+		or (state.output_position_mode ~= "manual" and at_output_bottom())
+	local manual_view = state.output_position_mode == "manual" and current_output_view() or nil
 	local start_row = math.max(0, tonumber(operation.start_row) or 0)
 	local end_row = math.max(start_row, tonumber(operation.end_row) or start_row)
 	output_ui.pause_language_injection(state)
@@ -303,7 +380,13 @@ local function apply_chat_operation(operation)
 	end)
 	local refresh_end = operation.block and operation.block.line2 + 1 or nil
 	refresh_output_view(start_row, true, refresh_end)
-	follow_output(follow)
+	if manual_view and valid_win(state.output_win) then
+		pcall(vim.api.nvim_win_call, state.output_win, function()
+			vim.fn.winrestview(manual_view)
+		end)
+	else
+		follow_output(follow)
+	end
 end
 
 flush_output_text = function()
@@ -664,6 +747,9 @@ local function open_prompt_window()
 	view.configure_prompt_window(state.input_win)
 	sync_instruction_window(instruction, instruction_lines, instruction_key)
 	view.configure_output_window(state.output_win, reserved_rows)
+	if state.output_position_mode == "center" then
+		center_output_position()
+	end
 	return true
 end
 
@@ -681,15 +767,20 @@ position_prompt = function()
 		return false
 	end
 	local current = vim.api.nvim_win_get_config(state.input_win)
-	if not view.same_prompt_geometry(current, desired) or state.prompt_chrome_key ~= chrome_key then
+	local geometry_changed = not view.same_prompt_geometry(current, desired)
+	if geometry_changed or state.prompt_chrome_key ~= chrome_key then
 		vim.api.nvim_win_set_config(state.input_win, desired)
 		state.prompt_chrome_key = chrome_key
 	end
 	view.configure_prompt_window(state.input_win)
 	sync_instruction_window(instruction, instruction_lines, instruction_key)
 	view.configure_output_window(state.output_win, reserved_rows)
-	if state.prompt_reserved_rows ~= reserved_rows then
+	local reserved_rows_changed = state.prompt_reserved_rows ~= reserved_rows
+	if reserved_rows_changed then
 		set_prompt_reserved_rows(reserved_rows)
+	end
+	if state.output_position_mode == "center" and (geometry_changed or reserved_rows_changed) then
+		center_output_position()
 	end
 	return true
 end
@@ -898,6 +989,7 @@ local function apply_thread_response(result)
 	state.contexts = {}
 	state.queue = {}
 	state.pending_instructions = {}
+	reset_output_position()
 	local turn = active_turn(thread)
 	state.turn_id = turn and turn.id or nil
 	state.busy = turn ~= nil
@@ -995,6 +1087,7 @@ end
 
 local function start_envelope(envelope)
 	remove_pending_instruction(envelope._acp_instruction_id, false)
+	reset_output_position()
 	state.busy = true
 	state.agent_item = nil
 	state.agent_block_id = nil
@@ -1008,6 +1101,7 @@ local function start_envelope(envelope)
 		if err or type(result) ~= "table" or type(result.turn) ~= "table" then
 			state.busy = false
 			state.turn_id = nil
+			reset_output_position()
 			set_status("error")
 			append_notice("error", err or "Codex did not start the turn")
 			drain_queue()
@@ -1041,7 +1135,6 @@ local function dispatch_prompt(envelope, follow_up)
 			else
 				table.insert(state.queue, envelope)
 				add_pending_instruction("queued", envelope)
-				append_notice("notice", ("Queued follow-up %d."):format(#state.queue))
 				set_status("running")
 			end
 			update_chrome()
@@ -1121,6 +1214,25 @@ function M.steer()
 	submit_prompt("steer")
 end
 
+local function native_output_redraw()
+	local control_l = vim.api.nvim_replace_termcodes("<C-l>", true, false, true)
+	pcall(vim.cmd, "normal! " .. control_l)
+end
+
+local function sync_output_position()
+	if not state or not state.busy or not valid_win(state.output_win) then
+		native_output_redraw()
+		return
+	end
+	if output_position_synced() then
+		native_output_redraw()
+		return
+	end
+	if not center_output_position() then
+		native_output_redraw()
+	end
+end
+
 local function set_buffer_keymaps()
 	local opts = { buffer = state.input_buf, silent = true }
 	vim.keymap.set({ "n", "i" }, "<C-s>", M.steer, vim.tbl_extend("force", opts, { desc = "Steer active Codex turn" }))
@@ -1144,6 +1256,12 @@ local function set_buffer_keymaps()
 		select_reasoning()
 	end, vim.tbl_extend("force", output_opts, { desc = "Select Codex reasoning" }))
 	vim.keymap.set("n", "s", M.stop, vim.tbl_extend("force", output_opts, { desc = "Stop Codex turn" }))
+	vim.keymap.set(
+		"n",
+		"<C-l>",
+		sync_output_position,
+		vim.tbl_extend("force", output_opts, { desc = "Center active Codex response or redraw" })
+	)
 	vim.keymap.set("n", "]]", function()
 		output_ui.jump_section(state, 1)
 	end, vim.tbl_extend("force", output_opts, { desc = "Next Codex output section" }))
@@ -1568,11 +1686,13 @@ start_review = function(instructions)
 		end
 		local target = instructions and { type = "custom", instructions = instructions }
 			or { type = "uncommittedChanges" }
+		reset_output_position()
 		state.busy = true
 		set_status("starting review")
 		client:review(state.thread_id, target, config.review_delivery, function(result, err)
 			if err or type(result) ~= "table" then
 				state.busy = false
+				reset_output_position()
 				set_status("error")
 				notify(err or "Failed to start Codex review", vim.log.levels.ERROR)
 				return
@@ -1765,6 +1885,9 @@ function M._handle_notification(method, params)
 	end
 
 	if method == "turn/started" then
+		if not state.busy then
+			reset_output_position()
+		end
 		state.busy = true
 		state.turn_id = params.turn and params.turn.id or state.turn_id
 		set_status("running")
@@ -1845,6 +1968,7 @@ function M._handle_notification(method, params)
 		local turn = params.turn or {}
 		state.busy = false
 		state.turn_id = nil
+		reset_output_position()
 		if turn.status == "failed" and turn.error then
 			append_notice("error", turn.error.message or "Turn failed")
 		end
@@ -1861,14 +1985,15 @@ function M._handle_notification(method, params)
 end
 
 local function handle_stderr(data)
-	local text = tostring(data):gsub("%s+$", "")
-	if text == "" or text:find("could not create PATH aliases", 1, true) then
-		return
-	end
-	if state and valid_buf(state.output_buf) then
-		append_notice("warning", ("Server: %s"):format(text:gsub("\n", " ")))
-	else
-		notify(text, vim.log.levels.WARN)
+	for _, entry in ipairs(server_log.parse(data)) do
+		if state and valid_buf(state.output_buf) then
+			append_notice(entry.kind, entry.message, {
+				lines = entry.lines,
+				metadata = entry.metadata,
+			})
+		else
+			notify(entry.message, entry.kind == "error" and vim.log.levels.ERROR or vim.log.levels.WARN)
+		end
 	end
 end
 
@@ -1891,6 +2016,7 @@ local function client_handlers()
 			if state then
 				state.busy = false
 				state.turn_id = nil
+				reset_output_position()
 				set_status("disconnected")
 				append_notice("warning", message)
 			end
@@ -2066,6 +2192,7 @@ local function register_autocmds()
 		group = group,
 		callback = function(event)
 			if state and event.buf == state.output_buf then
+				leave_centered_output_if_moved()
 				schedule_output_cursor_update()
 			end
 		end,
@@ -2082,6 +2209,7 @@ local function register_autocmds()
 		group = group,
 		callback = function(event)
 			if state and tonumber(event.match) == state.output_win then
+				leave_centered_output_if_moved()
 				defer_semantic_refresh()
 			end
 		end,
