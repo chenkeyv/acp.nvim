@@ -1,3 +1,4 @@
+local action = require("acp.action")
 local output = require("acp.output")
 
 local M = {}
@@ -16,37 +17,91 @@ function M.invalidate(block)
 	block.semantic_cache = nil
 end
 
-function M.sections(block)
-	local cache = cache_for(block)
-	if cache.sections == nil then
-		cache.sections = output.sections(block.lines)
-		for index, section in ipairs(cache.sections) do
-			section.line2 = cache.sections[index + 1] and cache.sections[index + 1].line - 1 or #block.lines
+local function code_blocks_for(block)
+	local values = {}
+	for child_index, child in ipairs(block.children or {}) do
+		if child.kind == "code" and child.line1 and child.line2 then
+			local lines = vim.split(tostring(child.text or ""), "\n", { plain = true })
+			local empty = #lines == 1 and lines[1] == ""
+			local preview = not empty and vim.trim(lines[1]) or nil
+			preview = preview ~= "" and preview or nil
+			table.insert(values, {
+				start_line = child.line1 - block.line1 + 1,
+				end_line = child.line2 - block.line1 + 1,
+				language = child.language or "text",
+				filetype = output.filetype_for_language(child.language),
+				lines = lines,
+				line_count = empty and 0 or #lines,
+				preview = preview,
+				closed = child.closed ~= false,
+				block_id = block.id,
+				child_index = child_index,
+			})
 		end
 	end
-	return cache.sections
-end
-
-function M.activities(block)
-	local cache = cache_for(block)
-	if cache.activities == nil then
-		cache.activities = output.activity_groups(block.lines)
-	end
-	return cache.activities
+	return values
 end
 
 function M.local_code_blocks(block)
 	local cache = cache_for(block)
 	if cache.code_blocks == nil then
-		cache.code_blocks = output.code_blocks(block.lines)
+		cache.code_blocks = code_blocks_for(block)
 	end
 	return cache.code_blocks
+end
+
+local function diagnostics_for(block)
+	local severity
+	if block.kind == "error" then
+		severity = vim.diagnostic.severity.ERROR
+	elseif block.kind == "warning" then
+		severity = vim.diagnostic.severity.WARN
+	elseif block.kind == "activity" and block.status == "failed" then
+		severity = vim.diagnostic.severity.ERROR
+	end
+	if not severity then
+		return {}
+	end
+
+	local presentation = block.metadata and block.metadata.presentation
+	local child = block.children and block.children[1]
+	if block.kind == "activity" then
+		for _, candidate in ipairs(block.children or {}) do
+			if action.failed(candidate) then
+				child = candidate
+				break
+			end
+		end
+	end
+	local item = child and child.item or {}
+	local message = block.metadata and block.metadata.problem_message or block.text
+	if not message and block.kind == "activity" then
+		local command = presentation == "command" or presentation == "explore"
+		local label = command and tostring(item.command or "command") or tostring(item.tool or "tool")
+		message = (command and "Command failed: " or "Tool failed: ") .. label
+	end
+	message =
+		vim.trim(tostring(message or (severity == vim.diagnostic.severity.WARN and "Codex warning" or "Codex error")))
+	local local_line = math.max(1, tonumber(block.header_offset) or 1)
+	local text = tostring(block.lines[local_line] or "")
+	return {
+		{
+			lnum = local_line - 1,
+			col = 0,
+			end_lnum = local_line - 1,
+			end_col = #text,
+			severity = severity,
+			source = "acp.nvim",
+			message = message,
+			block_id = block.id,
+		},
+	}
 end
 
 function M.local_diagnostics(block)
 	local cache = cache_for(block)
 	if cache.diagnostics == nil then
-		cache.diagnostics = output.problem_diagnostics(block.lines)
+		cache.diagnostics = diagnostics_for(block)
 	end
 	return cache.diagnostics
 end
@@ -57,6 +112,9 @@ function M.local_references(block, cwd)
 	local key = tostring(cwd)
 	if cache.references[key] == nil then
 		cache.references[key] = output.file_references(block.lines, { cwd = cwd, limit = 120 })
+		for _, reference in ipairs(cache.references[key]) do
+			reference.block_id = block.id
+		end
 	end
 	return cache.references[key]
 end

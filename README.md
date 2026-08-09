@@ -98,10 +98,11 @@ is always attached above the prompt. A blank top row separates it from the chat,
 while the current status stays anchored to the bottom and steer or queued
 follow-ups fill upward immediately above it. The panel grows with its content up
 to `instruction_height`, including the spacer and status rows; pending entries
-expand and collapse it without changing its width. Queued entries disappear when
-their turn starts, while steer entries disappear when the continuation begins
-producing output. Transient status and queue details stay in this panel instead
-of being repeated elsewhere.
+expand and collapse it without changing its width. The active status icon spins
+in place during a turn and stops on completion, error, close, or reload. Queued
+entries disappear when their turn starts, while steer entries disappear when the
+continuation begins producing output. Transient status and queue details stay in
+this panel instead of being repeated elsewhere.
 
 The chat transcript uses the custom `acp` filetype rather than Markdown, while
 the editable prompt uses `acp-prompt`. This keeps their styling and filetype
@@ -122,9 +123,13 @@ The visible chat remains one native buffer, backed by ordered logical blocks
 for user prompts, agent responses, plans, individual actions, notices, warnings,
 and errors. Top-level cells have one blank separator, matching the compact Codex
 CLI rhythm, while the tree rows inside an action remain contiguous. Fenced code
-is indexed as a child of its owning prompt or response. This keeps navigation,
-previews, folds, hot reload, and presentation rules on stable semantic
-boundaries instead of rediscovering roles from rendered text.
+is indexed as a child of its owning prompt or response. Every live row carries
+an explicit role, action span, owning block, and semantic range; navigation,
+search, previews, folds, diagnostics, and highlights consume that structure
+directly. Rendered transcript text is never reparsed into chat structure. File
+references and inline code remain lexical leaf detection because the app server
+delivers them inside prose, but they never determine chat ownership or cell
+boundaries.
 
 The repository ships a lightweight `acp` Tree-sitter grammar and queries for
 role headers, command/tool/exploration cells, tree branches, and fenced-code

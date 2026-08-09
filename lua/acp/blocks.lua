@@ -1,7 +1,7 @@
 local action = require("acp.action")
+local icons = require("acp.icons")
 local render = require("acp.render")
 local semantics = require("acp.block_semantics")
-local transcript = require("acp.transcript")
 
 local M = {}
 local Model = {}
@@ -67,6 +67,16 @@ local function copy_lines(lines)
 	return values
 end
 
+local function copy_rows(rows)
+	return type(rows) == "table" and vim.deepcopy(rows) or nil
+end
+
+local function row_lines(rows)
+	return vim.tbl_map(function(row)
+		return tostring(row.text or "")
+	end, rows or {})
+end
+
 local function split_lines(text)
 	return vim.split(tostring(text or ""), "\n", { plain = true })
 end
@@ -102,6 +112,19 @@ local function activity_success(item)
 	return successful_statuses[status] == true
 end
 
+local function item_problem_message(item, status)
+	item = type(item) == "table" and item or {}
+	if type(item.error) == "table" and present(item.error.message) then
+		return tostring(item.error.message)
+	elseif present(item.error) then
+		return tostring(item.error)
+	elseif item.type == "fileChange" then
+		return "File changes " .. tostring(status or "failed")
+	end
+	local label = tostring(item.type or "Codex item"):gsub("(%l)(%u)", "%1 %2"):lower()
+	return label .. " " .. tostring(status or "failed")
+end
+
 local function content_segments(text)
 	local lines = split_lines(text)
 	local segments = {}
@@ -116,15 +139,19 @@ local function content_segments(text)
 				table.insert(content, lines[index])
 				index = index + 1
 			end
-			local end_line = math.min(#lines, index)
+			local closed = index <= #lines
+			local end_line = closed and index or #lines
 			table.insert(segments, {
 				kind = "code",
 				language = language ~= "" and language or "text",
 				start_line = start_line,
 				end_line = end_line,
+				closed = closed,
 				text = table.concat(content, "\n"),
 			})
-			index = index + 1
+			if closed then
+				index = index + 1
+			end
 		else
 			local start_line = index
 			local content = {}
@@ -201,11 +228,14 @@ end
 local function new_block(model, kind, opts)
 	opts = opts or {}
 	local lines = copy_lines(opts.lines)
-	local separated = kind ~= "legacy"
+	local rows = copy_rows(opts.rows)
 	local header_offset = opts.header_offset
 	local content_offset = opts.content_offset
-	if separated and lines[1] ~= "" then
+	if lines[1] ~= "" then
 		table.insert(lines, 1, "")
+		if rows then
+			table.insert(rows, 1, { text = "", role = "separator" })
+		end
 		if header_offset then
 			header_offset = header_offset + 1
 		end
@@ -219,11 +249,11 @@ local function new_block(model, kind, opts)
 		status = opts.status,
 		text = opts.text,
 		lines = lines,
+		rows = rows,
 		children = opts.children or {},
 		header_offset = header_offset,
 		content_offset = content_offset,
 		metadata = opts.metadata or {},
-		separated = separated,
 		revision = 1,
 	}
 	if #block.lines == 0 then
@@ -286,13 +316,17 @@ function Model:_append_block(block)
 	}
 end
 
-function Model:_replace_block_lines(block, lines)
+function Model:_replace_block_lines(block, lines, rows)
 	if not block then
 		return nil
 	end
 	lines = copy_lines(lines)
-	if block.separated and lines[1] ~= "" then
+	rows = copy_rows(rows)
+	if lines[1] ~= "" then
 		table.insert(lines, 1, "")
+		if rows then
+			table.insert(rows, 1, { text = "", role = "separator" })
+		end
 	end
 	if #lines == 0 then
 		lines = { "" }
@@ -300,6 +334,7 @@ function Model:_replace_block_lines(block, lines)
 	local old_line2 = block.line2
 	local old_count = #block.lines
 	block.lines = lines
+	block.rows = rows
 	block.line2 = block.line1 + #lines - 1
 	shift_after(self, block, #lines - old_count)
 	touch_block(block)
@@ -327,13 +362,14 @@ function Model:_render_action_block(block)
 		child.relative_line2 = nil
 	end
 	block.status = active and "in progress" or failed and "failed" or "completed"
-	local lines = action.render_block(block)
+	local rows = action.render_rows(block)
+	local lines = row_lines(rows)
 	if #block.children == 1 then
 		block.children[1].lines = copy_lines(lines)
 		block.children[1].relative_line1 = block.header_offset or 1
 		block.children[1].relative_line2 = (block.header_offset or 1) + #lines - 1
 	end
-	return self:_replace_block_lines(block, lines)
+	return self:_replace_block_lines(block, lines, rows)
 end
 
 function Model:_append_block_lines(block, lines, child)
@@ -489,13 +525,15 @@ function Model:start_item(item, opts)
 	end
 
 	self:break_activity()
+	local activity_rows = action.render_rows({
+		children = { child },
+		metadata = { presentation = presentation },
+	})
 	local block = new_block(self, "activity", {
 		id = item.id or opts.id,
 		status = normalize_status(item.status),
-		lines = action.render_block({
-			children = { child },
-			metadata = { presentation = presentation },
-		}),
+		lines = row_lines(activity_rows),
+		rows = activity_rows,
 		children = { child },
 		header_offset = 1,
 		metadata = { presentation = presentation },
@@ -595,6 +633,10 @@ function Model:add_item(item, opts)
 	elseif lines[1] ~= "" then
 		table.insert(lines, 1, "")
 	end
+	local metadata = { item = vim.deepcopy(item) }
+	if kind == "error" or kind == "warning" then
+		metadata.problem_message = item_problem_message(item, status)
+	end
 	local block = new_block(self, kind, {
 		id = item.id or opts.id,
 		status = status,
@@ -603,7 +645,7 @@ function Model:add_item(item, opts)
 		children = content_segments(item.text or item.review or ""),
 		header_offset = #lines > 1 and 2 or 1,
 		content_offset = (kind == "plan" or kind == "review") and 3 or nil,
-		metadata = { item = vim.deepcopy(item) },
+		metadata = metadata,
 	})
 	self:break_activity()
 	return self:_append_block(block), block
@@ -615,13 +657,17 @@ function Model:add_notice(kind, message, opts)
 	local prefix = kind == "error" and "Error: " or kind == "warning" and "Warning: " or ""
 	local icon = kind == "error" and "error" or kind == "warning" and "warning" or "info"
 	local lines = opts.lines or { "", render.transcript_line(icon, prefix .. tostring(message or "")) }
+	local metadata = vim.deepcopy(opts.metadata or {})
+	if kind == "error" or kind == "warning" then
+		metadata.problem_message = tostring(message or kind)
+	end
 	local block = new_block(self, kind, {
 		id = opts.id,
 		status = opts.status,
 		text = message,
 		lines = lines,
 		header_offset = #lines > 1 and 2 or 1,
-		metadata = opts.metadata,
+		metadata = metadata,
 	})
 	self:break_activity()
 	return self:_append_block(block), block
@@ -655,26 +701,156 @@ function Model:block_at(line)
 	end
 end
 
-function Model:section_at(line)
-	local requested_line = type(line) == "table" and line.line1 or tonumber(line) or 1
-	local block = type(line) == "table" and line or self:block_at(requested_line)
-	if block and block.kind == "legacy" then
-		local local_line = requested_line - block.line1 + 1
-		local current
-		for _, section in ipairs(semantics.sections(block)) do
-			if section.line > local_line then
-				break
-			end
-			current = section
-		end
-		if not current then
-			return nil
-		end
-		local section = semantics.shift(current, block.line1 - 1, { "line", "line2" })
-		section.total_lines = self.line_count
-		section.block_id = block.id
-		return section
+function Model:row_at(line, known_block)
+	line = tonumber(line) or 1
+	local block = known_block or self:block_at(line)
+	if not block then
+		return nil
 	end
+	local local_line = line - block.line1 + 1
+	local base = {
+		block_id = block.id,
+		block_kind = block.kind,
+		line = line,
+		presentation = block.metadata and block.metadata.presentation,
+		status = block.status,
+	}
+	local stored = block.rows and block.rows[local_line]
+	if stored then
+		return vim.tbl_extend("force", base, stored)
+	end
+	if local_line == 1 then
+		return vim.tbl_extend("force", base, { role = "separator" })
+	end
+
+	local presentation = block.metadata and block.metadata.presentation
+	if block.kind == "activity" and presentation == "files" then
+		return vim.tbl_extend("force", base, { role = "change" })
+	elseif line == block.header_line then
+		if block.kind == "user" or block.kind == "agent" or block.kind == "plan" or block.kind == "review" then
+			return vim.tbl_extend("force", base, { role = "header", header_kind = block.kind })
+		elseif block.kind == "error" or block.kind == "warning" or block.kind == "notice" then
+			return vim.tbl_extend("force", base, { role = block.kind })
+		end
+	end
+
+	for _, child in ipairs(block.children or {}) do
+		if child.line1 and line >= child.line1 and line <= child.line2 then
+			if child.kind == "code" then
+				local fence = line == child.line1 or (child.closed ~= false and line == child.line2)
+				return vim.tbl_extend("force", base, {
+					role = fence and "code_fence" or "code",
+					child = child,
+				})
+			elseif block.kind == "activity" and child.kind == "file" then
+				return vim.tbl_extend("force", base, { role = "change", child = child })
+			end
+			return vim.tbl_extend("force", base, { role = child.kind or "text", child = child })
+		end
+	end
+
+	if block.kind == "user" and #(block.metadata and block.metadata.labels or {}) > 0 and line == block.line2 then
+		return vim.tbl_extend("force", base, { role = "context" })
+	elseif block.kind == "error" or block.kind == "warning" or block.kind == "notice" then
+		return vim.tbl_extend("force", base, { role = block.kind })
+	end
+	return vim.tbl_extend("force", base, { role = "text" })
+end
+
+function Model:entries(limit)
+	limit = math.max(1, tonumber(limit) or 500)
+	local values = {}
+	for _, block in ipairs(self.blocks) do
+		for line = block.line1, block.line2 do
+			local text = vim.trim(tostring(block.lines[line - block.line1 + 1] or ""))
+			if text ~= "" then
+				local row = self:row_at(line, block) or {}
+				local kind = "TEXT"
+				if row.role == "header" then
+					kind = section_kinds[block.kind] or block.kind:upper()
+				elseif row.role == "action_header" then
+					kind = row.presentation == "command" and "COMMAND"
+						or row.presentation == "tool" and "TOOL"
+						or "ACTIVITY"
+				elseif row.role == "error" or row.role == "warning" or row.role == "notice" then
+					kind = section_kinds[row.role] or row.role:upper()
+				elseif row.role == "change" then
+					kind = "FILE"
+				elseif row.role == "context" then
+					kind = "CONTEXT"
+				elseif row.role == "code_fence" or row.role == "code" then
+					kind = "CODE"
+				end
+				table.insert(values, {
+					line = line,
+					kind = kind,
+					text = text,
+					total_lines = self.line_count,
+					block_id = block.id,
+				})
+				if #values >= limit then
+					return values
+				end
+			end
+		end
+	end
+	return values
+end
+
+function Model:fold_level(line)
+	line = tonumber(line) or 1
+	local block = self:block_at(line)
+	if not block then
+		return nil
+	end
+	local header_line = block.header_line or block.line1
+	if line < header_line or block.line2 <= header_line then
+		return "0"
+	end
+	local level = block.kind == "activity" and 2 or 1
+	return line == header_line and (">" .. level) or tostring(level)
+end
+
+local fold_icons = {
+	ACTIVITY = "command",
+	AGENT = "agent",
+	ERROR = "error",
+	NOTE = "note",
+	PLAN = "section",
+	REVIEW = "section",
+	USER = "user",
+	WARNING = "warning",
+}
+
+function Model:fold_text(line, foldend)
+	line = tonumber(line) or 1
+	local block = self:block_at(line)
+	if not block then
+		return nil
+	end
+	if block.kind == "activity" then
+		return require("acp.output").activity_fold_text(self:activity_at(block))
+	end
+	local section = self:section_at(block)
+	if not section then
+		return nil
+	end
+	local count = math.max(1, (tonumber(foldend) or block.line2) - line + 1)
+	local preview = section.preview and vim.trim(section.preview) or ""
+	local suffix = preview ~= "" and ("  " .. preview) or ""
+	local text = ("%s %s %s  (%d line%s)%s"):format(
+		icons.get(fold_icons[section.kind] or "section"),
+		section.kind,
+		section.title,
+		count,
+		count == 1 and "" or "s",
+		suffix
+	)
+	return #text > 120 and (text:sub(1, 117) .. "...") or text
+end
+
+function Model:section_at(line)
+	local block = type(line) == "table" and line or self:block_at(tonumber(line) or 1)
 	local kind = block and section_kinds[block.kind] or nil
 	if not kind then
 		return nil
@@ -700,18 +876,9 @@ end
 function Model:sections()
 	local sections = {}
 	for _, block in ipairs(self.blocks) do
-		if block.kind == "legacy" then
-			for _, local_section in ipairs(semantics.sections(block)) do
-				local section = semantics.shift(local_section, block.line1 - 1, { "line", "line2" })
-				section.total_lines = self.line_count
-				section.block_id = block.id
-				table.insert(sections, section)
-			end
-		else
-			local section = self:section_at(block)
-			if section then
-				table.insert(sections, section)
-			end
+		local section = self:section_at(block)
+		if section then
+			table.insert(sections, section)
 		end
 	end
 	return sections
@@ -724,14 +891,6 @@ function Model:section_lines(line, opts)
 	if not block then
 		return nil
 	end
-	if block.kind == "legacy" then
-		local values, range = require("acp.output").section_lines(block.lines, requested_line - block.line1 + 1, opts)
-		if not values then
-			return nil
-		end
-		return values, semantics.shift(range, block.line1 - 1, { "line1", "line2" })
-	end
-
 	local line1 = block.header_line or block.line1
 	local values = {}
 	for index = line1 - block.line1 + 1, #block.lines do
@@ -761,20 +920,7 @@ function Model:section_text(line, opts)
 end
 
 function Model:activity_at(line)
-	local requested_line = type(line) == "table" and line.line1 or tonumber(line) or 1
-	local block = type(line) == "table" and line or self:block_at(requested_line)
-	if block and block.kind == "legacy" then
-		local local_line = requested_line - block.line1 + 1
-		for _, local_group in ipairs(semantics.activities(block)) do
-			if local_line >= local_group.line and local_line <= local_group.line2 then
-				local group = semantics.shift(local_group, block.line1 - 1, { "line", "line2" })
-				group.total_lines = self.line_count
-				group.block_id = block.id
-				return group
-			end
-		end
-		return nil
-	end
+	local block = type(line) == "table" and line or self:block_at(tonumber(line) or 1)
 	if not block or block.kind ~= "activity" then
 		return nil
 	end
@@ -810,18 +956,9 @@ end
 function Model:activities()
 	local groups = {}
 	for _, block in ipairs(self.blocks) do
-		if block.kind == "legacy" then
-			for _, local_group in ipairs(semantics.activities(block)) do
-				local group = semantics.shift(local_group, block.line1 - 1, { "line", "line2" })
-				group.total_lines = self.line_count
-				group.block_id = block.id
-				table.insert(groups, group)
-			end
-		else
-			local group = self:activity_at(block)
-			if group then
-				table.insert(groups, group)
-			end
+		local group = self:activity_at(block)
+		if group then
+			table.insert(groups, group)
 		end
 	end
 	return groups
@@ -840,30 +977,7 @@ function Model:references(cwd, limit)
 end
 
 function Model:diagnostics()
-	local values = semantics.diagnostics(self)
-	for _, block in ipairs(self.blocks) do
-		local presentation = block.metadata and block.metadata.presentation
-		if
-			block.kind == "activity"
-			and block.status == "failed"
-			and (presentation == "command" or presentation == "tool")
-		then
-			local child = block.children and block.children[1]
-			local item = child and child.item or {}
-			local label = presentation == "command" and tostring(item.command or "command")
-				or tostring(item.tool or "tool")
-			table.insert(values, {
-				lnum = (block.header_line or block.line1) - 1,
-				col = 0,
-				end_lnum = (block.header_line or block.line1) - 1,
-				end_col = #(block.lines[block.header_offset or 1] or ""),
-				severity = vim.diagnostic.severity.ERROR,
-				source = "acp.nvim",
-				message = (presentation == "command" and "Command failed: " or "Tool failed: ") .. label,
-			})
-		end
-	end
-	return values
+	return semantics.diagnostics(self)
 end
 
 function Model:semantic_data(cwd)
@@ -893,57 +1007,40 @@ function Model:reindex()
 	self.by_id = {}
 	self.activity_items = {}
 	self.line_count = 0
-	for index, block in ipairs(self.blocks or {}) do
+	self.blocks = vim.tbl_filter(function(block)
+		return type(block) == "table" and section_kinds[block.kind] ~= nil
+	end, self.blocks or {})
+	for index, block in ipairs(self.blocks) do
 		block.index = index
 		block.id = present(block.id) and tostring(block.id) or block_id(self, block.kind)
-		if block.separated == nil then
-			block.separated = block.kind ~= "legacy"
-		end
 		block.lines = copy_lines(block.lines)
-		if block.kind == "legacy" then
-			for line_index, line in ipairs(block.lines) do
-				block.lines[line_index] = transcript.migrate_line(line)
-			end
-		else
-			local header_index = tonumber(block.header_offset)
-			if header_index and block.lines[header_index] then
-				block.lines[header_index] = transcript.migrate_line(block.lines[header_index])
-			end
-			if
-				block.kind == "activity"
-				or block.kind == "notice"
-				or block.kind == "warning"
-				or block.kind == "error"
-			then
-				for line_index, line in ipairs(block.lines) do
-					block.lines[line_index] = transcript.migrate_line(line)
-				end
-			end
+		if #block.lines == 0 then
+			block.lines = { "" }
 		end
-		block.children = block.children or {}
-		for _, child in ipairs(block.children) do
-			if type(child.lines) == "table" then
-				for line_index, line in ipairs(child.lines) do
-					child.lines[line_index] = transcript.migrate_line(line)
-				end
-			end
-		end
+		block.rows = copy_rows(block.rows)
+		block.children = type(block.children) == "table" and block.children or {}
+		block.metadata = type(block.metadata) == "table" and block.metadata or {}
+		block.separated = nil
 		local presentation = block.metadata and block.metadata.presentation
 		if
 			block.kind == "activity"
 			and (presentation == "command" or presentation == "tool" or presentation == "explore")
 		then
-			local rendered = action.render_block(block)
-			block.lines = block.separated == false and rendered or vim.list_extend({ "" }, rendered)
-			block.header_offset = block.separated == false and 1 or 2
+			local rendered_rows = action.render_rows(block)
+			local rendered = row_lines(rendered_rows)
+			block.lines = vim.list_extend({ "" }, rendered)
+			block.rows = vim.list_extend({ { text = "", role = "separator" } }, rendered_rows)
+			block.header_offset = 2
 			if #block.children == 1 then
 				block.children[1].lines = copy_lines(rendered)
 				block.children[1].relative_line1 = block.header_offset
 				block.children[1].relative_line2 = block.header_offset + #rendered - 1
 			end
-		end
-		if block.separated and block.lines[1] ~= "" then
+		elseif block.lines[1] ~= "" then
 			table.insert(block.lines, 1, "")
+			if block.rows then
+				table.insert(block.rows, 1, { text = "", role = "separator" })
+			end
 			block.header_offset = (tonumber(block.header_offset) or 1) + 1
 			if block.content_offset then
 				block.content_offset = block.content_offset + 1
@@ -957,7 +1054,15 @@ function Model:reindex()
 				end
 			end
 		end
+		if block.kind == "user" or block.kind == "agent" or block.kind == "plan" or block.kind == "review" then
+			block.header_offset = math.max(2, tonumber(block.header_offset) or 2)
+			local suffix = block.kind == "user" and block.metadata.steer and " (steer)" or nil
+			block.lines[block.header_offset] = render.header(block.kind, suffix)
+		end
 		block.revision = tonumber(block.revision) or 1
+		if block.rows and #block.rows ~= #block.lines then
+			block.rows = nil
+		end
 		semantics.invalidate(block)
 		block.line1 = self.line_count + 1
 		block.line2 = self.line_count + #block.lines
@@ -966,6 +1071,8 @@ function Model:reindex()
 		index_activity_children(self, block)
 		refresh_block_ranges(block)
 	end
+	local last = self.blocks[#self.blocks]
+	self.activity_open = self.activity_open == true and last and last.kind == "activity" or false
 	touch_model(self)
 	return self
 end
@@ -988,8 +1095,6 @@ function M.adopt(value)
 	end
 	value.sequence = tonumber(value.sequence) or #value.blocks
 	value.revision = tonumber(value.revision) or 0
-	local last = value.blocks[#value.blocks]
-	value.activity_open = value.activity_open == true and last and last.kind == "activity" or false
 	return setmetatable(value, Model):reindex()
 end
 
@@ -1026,25 +1131,6 @@ function M.from_thread(thread)
 			end
 		end
 	end
-	return model
-end
-
-function M.from_lines(lines)
-	local model = M.new()
-	lines = copy_lines(lines)
-	if #lines == 0 or (#lines == 1 and lines[1] == "") then
-		return model
-	end
-	for index, line in ipairs(lines) do
-		lines[index] = transcript.migrate_line(line)
-	end
-	model:_append_block(new_block(model, "legacy", {
-		id = "legacy:transcript",
-		lines = lines,
-		header_offset = 1,
-		metadata = { migrated = true },
-	}))
-	model:break_activity()
 	return model
 end
 

@@ -7,12 +7,6 @@ local function present(value)
 	return value ~= nil and value ~= vim.NIL
 end
 
-local function append(lines, values)
-	for _, value in ipairs(values or {}) do
-		table.insert(lines, value)
-	end
-end
-
 local function clean(value)
 	if not present(value) then
 		return ""
@@ -116,45 +110,6 @@ function M.completed_item(item)
 		return { transcript.line("note", "Conversation context compacted.") }
 	end
 	return {}
-end
-
-local function user_message(item)
-	local text = {}
-	local mentions = {}
-	for _, content in ipairs(item.content or {}) do
-		if content.type == "text" and content.text and content.text ~= "" then
-			table.insert(text, content.text)
-		elseif content.type == "mention" or content.type == "skill" then
-			table.insert(mentions, content.path or content.name)
-		end
-	end
-	local lines = { "", transcript.header("user"), "" }
-	append(lines, vim.split(table.concat(text, "\n\n"), "\n", { plain = true }))
-	if #mentions > 0 then
-		table.insert(lines, "")
-		table.insert(lines, transcript.line("context", ("Context: %s"):format(table.concat(mentions, ", "))))
-	end
-	return lines
-end
-
-function M.thread(thread, _)
-	local lines = {}
-	for _, turn in ipairs(thread.turns or {}) do
-		for _, item in ipairs(turn.items or {}) do
-			if item.type == "userMessage" then
-				append(lines, user_message(item))
-			elseif item.type == "agentMessage" and item.text and item.text ~= "" then
-				append(lines, { "", transcript.header("agent"), "" })
-				append(lines, vim.split(item.text, "\n", { plain = true }))
-			else
-				append(lines, M.completed_item(item))
-			end
-		end
-	end
-	if #lines == 0 or lines[#lines] ~= "" then
-		table.insert(lines, "")
-	end
-	return lines
 end
 
 function M.thread_diff(thread)

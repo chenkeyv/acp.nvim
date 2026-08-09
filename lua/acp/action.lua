@@ -91,12 +91,17 @@ local function preview(lines, limit)
 	return values, omitted
 end
 
-local function prefixed(lines, first_prefix, rest_prefix)
-	local values = {}
-	for index, line in ipairs(lines or {}) do
-		table.insert(values, (index == 1 and first_prefix or rest_prefix) .. tostring(line or ""))
-	end
-	return values
+local function row(text, role, opts)
+	return vim.tbl_extend("force", {
+		text = tostring(text or ""),
+		role = role,
+	}, opts or {})
+end
+
+local function row_lines(rows)
+	return vim.tbl_map(function(value)
+		return value.text
+	end, rows or {})
 end
 
 local function duration_label(value)
@@ -263,45 +268,70 @@ function M.set_progress(child, message)
 	return true
 end
 
-local function command_lines(child)
+local function command_rows(child)
 	local item = child.item or {}
 	local command = split_lines(item.command or "command")
 	if #command == 0 then
 		command = { "command" }
 	end
 	local title = M.is_active(child) and "Running" or (item.source == "userShell" and "You ran" or "Ran")
-	local lines = { ("• %s %s"):format(title, command[1]) }
+	local rows = {
+		row(("• %s %s"):format(title, command[1]), "action_header", {
+			title = title,
+			title_col = #"• ",
+			detail_col = #"• " + #title + 1,
+			detail_kind = "command",
+		}),
+	}
 
 	local continuation_count = math.min(M.command_continuation_limit, math.max(0, #command - 1))
 	for index = 1, continuation_count do
-		table.insert(lines, "  │ " .. command[index + 1])
+		table.insert(rows, row("  │ " .. command[index + 1], "action_command", { tree_width = #"  │ " }))
 	end
 	if #command - 1 > continuation_count then
-		table.insert(lines, ("  │ … +%d lines"):format(#command - 1 - continuation_count))
+		table.insert(
+			rows,
+			row(("  │ … +%d lines"):format(#command - 1 - continuation_count), "action_command", {
+				tree_width = #"  │ ",
+			})
+		)
 	end
 
 	local output_lines = split_lines(command_output(child))
 	if #output_lines == 0 then
 		if not M.is_active(child) then
-			table.insert(lines, "  └ (no output)")
+			table.insert(rows, row("  └ (no output)", "action_output", { tree_width = #"  └ " }))
 		end
 		child.preview_omitted = 0
-		return lines
+		return rows
 	end
 	local visible, omitted = preview(output_lines)
 	child.preview_omitted = omitted
-	vim.list_extend(lines, prefixed(visible, "  └ ", "    "))
-	return lines
+	for index, line in ipairs(visible) do
+		local prefix = index == 1 and "  └ " or "    "
+		table.insert(rows, row(prefix .. line, "action_output", { tree_width = #prefix }))
+	end
+	return rows
 end
 
-local function tool_lines(child)
+local function tool_rows(child)
 	local title = M.is_active(child) and "Calling" or "Called"
-	local lines = { ("• %s %s"):format(title, tool_invocation(child.item)) }
+	local rows = {
+		row(("• %s %s"):format(title, tool_invocation(child.item)), "action_header", {
+			title = title,
+			title_col = #"• ",
+			detail_col = #"• " + #title + 1,
+			detail_kind = "tool",
+		}),
+	}
 	local details = tool_result_lines(child)
 	local visible, omitted = preview(details)
 	child.preview_omitted = omitted
-	vim.list_extend(lines, prefixed(visible, "  └ ", "    "))
-	return lines
+	for index, line in ipairs(visible) do
+		local prefix = index == 1 and "  └ " or "    "
+		table.insert(rows, row(prefix .. line, "action_output", { tree_width = #prefix }))
+	end
+	return rows
 end
 
 local function exploration_actions(children)
@@ -349,32 +379,48 @@ local function exploration_actions(children)
 	return lines
 end
 
-local function exploration_lines(block)
+local function exploration_rows(block)
 	local active = false
 	for _, child in ipairs(block.children or {}) do
 		active = active or M.is_active(child)
 	end
-	local lines = { "• " .. (active and "Exploring" or "Explored") }
-	vim.list_extend(lines, prefixed(exploration_actions(block.children), "  └ ", "    "))
-	return lines
+	local title = active and "Exploring" or "Explored"
+	local rows = {
+		row("• " .. title, "action_header", {
+			title = title,
+			title_col = #"• ",
+			detail_kind = "command",
+		}),
+	}
+	for index, line in ipairs(exploration_actions(block.children)) do
+		local prefix = index == 1 and "  └ " or "    "
+		table.insert(rows, row(prefix .. line, "action_command", { tree_width = #prefix }))
+	end
+	return rows
 end
 
-function M.render_block(block)
+function M.render_rows(block)
 	if type(block) ~= "table" then
 		return {}
 	end
 	if block.metadata and block.metadata.presentation == "explore" then
-		return exploration_lines(block)
+		return exploration_rows(block)
 	end
 	local child = block.children and block.children[1]
 	if not child then
 		return {}
 	elseif child.kind == "command" then
-		return command_lines(child)
+		return command_rows(child)
 	elseif child.kind == "tool" then
-		return tool_lines(child)
+		return tool_rows(child)
 	end
-	return vim.deepcopy(child.lines or {})
+	return vim.tbl_map(function(line)
+		return row(line, "action_output")
+	end, child.lines or {})
+end
+
+function M.render_block(block)
+	return row_lines(M.render_rows(block))
 end
 
 local function command_detail(child)

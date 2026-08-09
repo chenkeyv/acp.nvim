@@ -84,6 +84,9 @@ local text = {
 	warning = "!",
 }
 
+local spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local text_spinner = { "|", "/", "-", "\\" }
+
 for name, glyph in pairs(nerd) do
 	M[name] = glyph
 end
@@ -93,16 +96,10 @@ function M.get(name)
 	return values[name] or text[name] or "·"
 end
 
-function M.variants(name)
-	local values = {}
-	local seen = {}
-	for _, glyph in ipairs({ nerd[name], text[name] }) do
-		if glyph and glyph ~= "" and not seen[glyph] then
-			seen[glyph] = true
-			table.insert(values, glyph)
-		end
-	end
-	return values
+function M.spinner(index)
+	local values = vim.g.have_nerd_font == false and text_spinner or spinner
+	local number = math.max(1, math.floor(tonumber(index) or 1))
+	return values[((number - 1) % #values) + 1]
 end
 
 return M

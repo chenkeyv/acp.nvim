@@ -306,7 +306,7 @@ test("editor context becomes mentions and bounded application context", function
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
-test("thread renderer reconstructs history and diffs", function()
+test("structured thread model renders history and diffs", function()
 	local thread = {
 		id = "thread-1",
 		preview = "Fix the parser",
@@ -337,7 +337,7 @@ test("thread renderer reconstructs history and diffs", function()
 			},
 		},
 	}
-	local text = table.concat(render.thread(thread, "/tmp/project"), "\n")
+	local text = table.concat(blocks.from_thread(thread):render_lines(), "\n")
 	contains(text, render.header("user"))
 	contains(text, "Please fix it")
 	contains(text, "nvim --headless")
@@ -354,7 +354,6 @@ test("thread renderer reconstructs history and diffs", function()
 		changes = { { path = "lua/acp/ui.lua", kind = { type = "update", move_path = vim.NIL } } },
 	})[1]
 	contains(failed_change, "File changes: failed")
-	eq(output.activity_kind(failed_change), nil)
 end)
 
 test("chat blocks preserve roles, action cells, code, and failures", function()
@@ -448,6 +447,67 @@ test("chat blocks preserve roles, action cells, code, and failures", function()
 	contains(section_text, render.header("agent"))
 	contains(section_text, "Done.")
 	eq(range.block_id, "agent-1")
+end)
+
+test("live chat consumers use structural rows instead of reparsing rendered text", function()
+	local chat = blocks.new()
+	chat:add_user("Review `lua/acp/view.lua:12`.", {})
+	chat:ensure_agent("agent-structural")
+	chat:append_text("agent-structural", "Done.\n```lua\nreturn true\n```")
+	chat:add_notice("warning", "Check the structural result")
+	local _, action_block = chat:add_item({
+		id = "command-structural",
+		type = "commandExecution",
+		command = "false",
+		status = "completed",
+		exitCode = 1,
+		aggregatedOutput = "boom",
+	})
+
+	local agent = chat.by_id["agent-structural"]
+	local code
+	for _, child in ipairs(agent.children) do
+		if child.kind == "code" then
+			code = child
+		end
+	end
+	eq(chat:row_at(agent.header_line).role, "header")
+	eq(chat:row_at(code.line1).role, "code_fence")
+	eq(chat:row_at(code.line1 + 1).role, "code")
+	eq(chat:row_at(action_block.header_line).role, "action_header")
+	eq(chat:row_at(action_block.header_line + 1).role, "action_output")
+
+	for _, name in ipairs({
+		"sections",
+		"activity_groups",
+		"code_blocks",
+		"problem_diagnostics",
+		"fold_expr",
+		"fold_text",
+	}) do
+		ok(output[name] == nil, "rendered-text parser should not be exported: " .. name)
+	end
+	eq(transcript.header_kind, nil)
+	eq(transcript.parse, nil)
+
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, chat:render_lines())
+	local semantic = chat:semantic_data(vim.fn.getcwd())
+	eq(#semantic.sections, 4)
+	eq(#semantic.activities, 1)
+	eq(#semantic.code_blocks, 1)
+	eq(#semantic.diagnostics, 2)
+	contains(semantic.diagnostics[1].message, "structural result")
+	contains(semantic.diagnostics[2].message, "Command failed: false")
+	ok(#semantic.references >= 1)
+	eq(semantic.code_blocks[1].block_id, "agent-structural")
+	eq(chat:fold_level(agent.header_line), ">1")
+	contains(chat:fold_text(agent.header_line, agent.line2), "AGENT")
+	local entries = chat:entries()
+	ok(#entries > 0)
+	eq(entries[1].kind, "USER")
+	view.refresh_transcript(bufnr, 0, chat)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
 test("Codex-style command cells stream a bounded head-tail preview", function()
@@ -609,7 +669,7 @@ test("ACP Tree-sitter grammar is distributable and keeps the acp filetype", func
 	eq(vim.treesitter.language.get_lang("acp"), "acp")
 end)
 
-test("hot reload migration adds Codex spacing to existing activity blocks", function()
+test("structural adoption normalizes spacing and action rows", function()
 	local restored = blocks.adopt({
 		blocks = {
 			{
@@ -667,39 +727,26 @@ test("hot reload migration adds Codex spacing to existing activity blocks", func
 	end
 end)
 
-test("legacy transcripts keep sections, activity, and code after block migration", function()
-	local fence = string.rep(string.char(96), 3)
-	local chat = blocks.from_lines({
-		"## You",
-		"Inspect the migration.",
-		"> Command completed (exit 0): `rg blocks`",
-		"> Tool completed: `inspect`",
-		"## Codex",
-		"Done.",
-		fence .. "lua",
-		"return true",
-		fence,
+test("chat adoption drops blocks without a structural role", function()
+	local chat = blocks.adopt({
+		blocks = {
+			{ id = "raw-text", kind = "raw", lines = { "## Codex", "unstructured" } },
+			{
+				id = "agent-structural",
+				kind = "agent",
+				text = "Preserved.",
+				lines = { "", render.header("agent"), "Preserved." },
+				children = {},
+				header_offset = 2,
+				content_offset = 3,
+			},
+		},
 	})
 
-	eq(
-		vim.tbl_map(function(section)
-			return section.kind
-		end, chat:sections()),
-		{ "USER", "COMMAND", "TOOL", "AGENT" }
-	)
-	local activity = chat:activity_at(3)
-	eq(activity.line, 3)
-	eq(activity.line2, 4)
-	eq(#chat:activities(), 1)
-	eq(chat:code_block_at(8).language, "lua")
-	local text, range = chat:section_text(8)
-	contains(text, render.header("agent"))
-	eq(range.line1, 5)
-	contains(table.concat(chat:render_lines(), "\n"), icons.get("command") .. " Command")
-	ok(
-		not table.concat(chat:render_lines(), "\n"):find("## ", 1, true),
-		"legacy role headings should migrate to direct icons"
-	)
+	eq(#chat.blocks, 1)
+	eq(chat.by_id["raw-text"], nil)
+	eq(chat.by_id["agent-structural"].kind, "agent")
+	eq(chat:sections()[1].kind, "AGENT")
 end)
 
 test("live chat blocks emit bounded incremental buffer operations", function()
@@ -842,7 +889,7 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	contains(instruction_block.lines[2], icons.get("send") .. " steer")
 	contains(instruction_block.lines[2], "Keep the public API unchanged")
 	contains(instruction_block.lines[3], icons.get("history") .. " queued")
-	contains(instruction_block.lines[4], icons.get("busy") .. " responding")
+	contains(instruction_block.lines[4], icons.spinner(1) .. " responding")
 	for _, line in ipairs(instruction_block.lines) do
 		eq(vim.fn.strdisplaywidth(line), 52)
 	end
@@ -889,7 +936,7 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	eq(#default_height_block.lines, 3)
 	eq(default_height_block.lines[1], string.rep(" ", 28))
 	contains(default_height_block.lines[2], icons.get("history") .. " queued")
-	contains(default_height_block.lines[3], icons.get("busy") .. " running command")
+	contains(default_height_block.lines[3], icons.spinner(1) .. " running command")
 	local clipped_instructions = view.instruction_block({
 		status = "running",
 		busy = true,
@@ -902,26 +949,46 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	eq(#clipped_instructions.lines, 3)
 	eq(clipped_instructions.lines[1], string.rep(" ", 28))
 	contains(clipped_instructions.lines[2], "+3 pending instructions")
-	contains(clipped_instructions.lines[3], icons.get("busy") .. " running")
+	contains(clipped_instructions.lines[3], icons.spinner(1) .. " running")
 	eq(vim.fn.strdisplaywidth(clipped_instructions.lines[2]), 28)
 	eq(vim.fn.strdisplaywidth(clipped_instructions.lines[3]), 28)
 
+	local styled_chat = blocks.new()
+	styled_chat:add_user("Use `turn/steer`.", {})
+	styled_chat:ensure_agent("styled-agent")
+	styled_chat:append_text("styled-agent", "Done with `inline` syntax.\n```lua\nreturn true\n```")
+	styled_chat:add_item({
+		id = "styled-command",
+		type = "commandExecution",
+		command = "nvim --headless",
+		status = "completed",
+		exitCode = 0,
+		aggregatedOutput = "ok",
+	})
+	styled_chat:add_item({
+		id = "styled-tool",
+		type = "mcpToolCall",
+		server = "mcp",
+		tool = "read",
+		status = "completed",
+		result = { content = { { type = "text", text = "done" } } },
+	})
+	styled_chat:add_item({
+		id = "styled-file",
+		type = "fileChange",
+		status = "completed",
+		changes = { { path = "lua/acp/view.lua", kind = { type = "update" } } },
+	})
+	styled_chat:add_notice("warning", "Check this result")
+	styled_chat:add_notice("error", "Failed to apply change")
+	styled_chat:ensure_plan("styled-plan")
+	styled_chat:append_text("styled-plan", "Verify the result.")
+
 	local bufnr = vim.api.nvim_create_buf(false, true)
-	local direct_lines = {
-		transcript.header("user"),
-		"Use `turn/steer`.",
-		transcript.header("agent"),
-		transcript.line("command", "Command completed: `nvim --headless`"),
-		transcript.line("tool", "Tool completed: `mcp/read`"),
-		transcript.line("changes", "update `lua/acp/view.lua`"),
-		transcript.line("warning", "Warning: check this result"),
-		transcript.line("error", "Error: failed to apply change"),
-		transcript.header("plan"),
-		"```lua",
-	}
+	local direct_lines = styled_chat:render_lines()
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, direct_lines)
 	view.define_highlights()
-	view.refresh_transcript(bufnr, 0)
+	view.refresh_transcript(bufnr, 0, styled_chat)
 	local marks = vim.api.nvim_buf_get_extmarks(bufnr, view.transcript_namespace, 0, -1, { details = true })
 	local groups = {}
 	for _, extmark in ipairs(marks) do
@@ -934,20 +1001,18 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	end
 	ok(groups.AcpUserHeader)
 	ok(groups.AcpAgentHeader)
+	ok(groups.AcpActionTitle)
+	ok(groups.AcpActionCommand)
+	ok(groups.AcpActionTool)
 	ok(groups.AcpTranscriptTool)
+	ok(groups.AcpTranscriptWarning)
+	ok(groups.AcpTranscriptError)
+	ok(groups.AcpSectionHeader)
 	ok(groups.AcpCodeFence)
 	ok(groups.AcpInlineCode)
-	for _, expected in ipairs({
-		{ 1, "user" },
-		{ 3, "agent" },
-		{ 4, "command" },
-		{ 5, "tool" },
-		{ 6, "changes" },
-		{ 7, "warning" },
-		{ 8, "error" },
-		{ 9, "section" },
-	}) do
-		contains(direct_lines[expected[1]], icons.get(expected[2]))
+	local styled_text = table.concat(direct_lines, "\n")
+	for _, name in ipairs({ "user", "agent", "changes", "warning", "error", "section" }) do
+		contains(styled_text, icons.get(name))
 	end
 	local evaluated = vim.api.nvim_eval_statusline(
 		view.chat_winbar({
@@ -971,123 +1036,61 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
-test("custom output model restores sections, items, folds, references, and problems", function()
-	local lines = {
-		"## You",
-		"Please inspect the transcript.",
-		"## Codex",
-		"I will check it.",
-		"> Command completed: `nvim --headless`",
-		"> update `lua/acp/view.lua`",
-		"### Plan",
-		"1. Verify behavior",
-		"```lua",
-		"print('ok')",
-		"```",
-		"> Warning: check this result",
-		"> Error: failed to apply change",
-	}
-
-	local sections = output.sections(lines)
-	eq(#sections, 7)
-	eq(sections[1].kind, "USER")
-	eq(sections[2].kind, "AGENT")
-	eq(sections[3].kind, "COMMAND")
-	eq(sections[4].kind, "FILE")
-	eq(sections[5].kind, "PLAN")
-	eq(output.next_section(lines, 1, 1), 3)
-	eq(output.fold_level(lines, 1), ">1")
-	eq(output.fold_level(lines, 2), "1")
-	eq(output.fold_expr("preamble", 1), "0")
-	eq(output.fold_expr("preamble", 2), "=")
-	eq(output.fold_expr("## Codex", 3), ">1")
-	contains(output.fold_text(lines, 1, 2), "USER")
-
-	local blocks = output.code_blocks(lines)
-	eq(#blocks, 1)
-	eq(blocks[1].filetype, "lua")
-	eq(output.code_block_text(blocks[1]), "print('ok')")
-
-	local references = output.file_references(lines, { cwd = vim.fn.getcwd() })
-	eq(#references, 1)
-	contains(references[1].display_path, "lua/acp/view.lua")
-	eq(references[1].line, 1)
-
-	local diagnostics = output.problem_diagnostics(lines)
-	eq(#diagnostics, 2)
-	eq(diagnostics[1].severity, vim.diagnostic.severity.WARN)
-	eq(diagnostics[2].severity, vim.diagnostic.severity.ERROR)
-
-	local items = output.output_items(lines, { cwd = vim.fn.getcwd() })
-	eq(#items, 5)
-	eq(items[1].kind, "activity")
-	eq(output.transcript_stats(lines, { cwd = vim.fn.getcwd() }), {
-		sections = 7,
-		code_blocks = 1,
-		locations = 1,
-		changes = 0,
+test("output projections consume structural semantics", function()
+	local chat = blocks.new()
+	chat:add_user("Review `lua/acp/view.lua:1`.", {})
+	chat:ensure_agent("projection-agent")
+	chat:append_text("projection-agent", "Done.\n```lua\nreturn true\n```")
+	chat:add_item({
+		id = "projection-command",
+		type = "commandExecution",
+		command = "false",
+		status = "completed",
+		exitCode = 1,
+		aggregatedOutput = "boom",
 	})
-	ok(#output.output_map_entries(lines, { cwd = vim.fn.getcwd() }) > #sections)
-end)
+	chat:add_notice("warning", "Inspect the failure")
 
-test("legacy completed activity groups collapse together while failures stay visible", function()
-	local lines = {
-		"## Codex",
-		"> Command completed (exit 0): `rg error lua/acp`",
-		"> Tool completed: `mcp/read`",
-		"> update `lua/acp/output.lua`",
-		"> Command failed (exit 1): `nvim --headless`",
-		"> Warning: inspect the failure",
-	}
+	local semantic = chat:semantic_data(vim.fn.getcwd())
+	eq(#semantic.sections, 4)
+	eq(#semantic.activities, 1)
+	eq(#semantic.code_blocks, 1)
+	eq(#semantic.references, 1)
+	eq(#semantic.diagnostics, 2)
+	eq(output.code_block_text(semantic.code_blocks[1]), "return true")
+	contains(chat:fold_text(chat.by_id["projection-command"].header_line), "ACTIVITY")
 
-	local groups = output.activity_groups(lines)
-	eq(#groups, 1)
-	eq(groups[1].line, 2)
-	eq(groups[1].line2, 4)
-	eq(groups[1].counts, { command = 1, tool = 1, file = 1 })
-	contains(groups[1].label, "3 completed")
-	eq(output.activity_kind(lines[5]), nil)
-	eq(output.activity_kind("> Command running: `sleep 1`"), nil)
-	eq(output.fold_expr(lines[2], 2, lines[1], lines[3]), ">2")
-	eq(output.fold_expr(lines[3], 3, lines[2], lines[4]), "2")
-	eq(output.fold_expr(lines[4], 4, lines[3], lines[5]), "2")
-	eq(output.fold_expr(lines[5], 5, lines[4], lines[6]), ">1")
-	contains(output.fold_text({ lines[2], lines[3], lines[4] }, 1, 3), "ACTIVITY")
-
-	local item = output.current_output_item(lines, 3, 0, { cwd = vim.fn.getcwd() })
-	eq(item.kind, "activity")
-	eq(item.line, 2)
-	eq(item.line2, 4)
-	eq(output.current_output_item(lines, 4, 10, { cwd = vim.fn.getcwd() }).kind, "reference")
-	eq(
-		output.current_output_item(lines, 4, 10, {
-			cwd = vim.fn.getcwd(),
-			prefer_activity = true,
-		}).kind,
-		"activity"
-	)
-	local preview = output.output_map_preview(lines, item)
-	eq(preview.lines, { lines[2], lines[3], lines[4] })
-	contains(preview.title, "3 completed")
-
-	local diagnostics = output.problem_diagnostics(lines)
-	eq(#diagnostics, 2)
-	eq(diagnostics[1].severity, vim.diagnostic.severity.ERROR)
-	eq(diagnostics[2].severity, vim.diagnostic.severity.WARN)
+	local items = output.output_items({
+		total_lines = semantic.total_lines,
+		references = semantic.references,
+		blocks = semantic.code_blocks,
+		diagnostics = semantic.diagnostics,
+		activities = semantic.activities,
+	})
+	eq(#items, 5)
+	local entries = output.output_map_entries({
+		total_lines = semantic.total_lines,
+		sections = semantic.sections,
+		items = items,
+	})
+	eq(#entries, #semantic.sections + #items)
+	local map_lines, rows = output.output_map_lines(entries, {
+		total_lines = semantic.total_lines,
+		current_line = chat.by_id["projection-agent"].header_line,
+	})
+	ok(#map_lines > #entries)
+	ok(vim.tbl_count(rows) > 0)
 end)
 
 test("output UI restores semantic visuals and section drafting", function()
 	local output_buf = vim.api.nvim_create_buf(false, true)
 	local input_buf = vim.api.nvim_create_buf(false, true)
-	local lines = {
-		"## You",
-		"Review `lua/acp/view.lua:1`.",
-		"## Codex",
-		"```lua",
-		"return true",
-		"```",
-		"> Warning: inspect this",
-	}
+	local chat = blocks.new()
+	local _, user_block = chat:add_user("Review `lua/acp/view.lua:1`.", {}, { id = "output-ui-user" })
+	chat:ensure_agent("output-ui-agent")
+	chat:append_text("output-ui-agent", "```lua\nreturn true\n```")
+	chat:add_notice("warning", "Inspect this")
+	local lines = chat:render_lines()
 	vim.api.nvim_buf_set_lines(output_buf, 0, -1, false, lines)
 	local output_win = vim.api.nvim_open_win(output_buf, false, {
 		relative = "editor",
@@ -1097,12 +1100,14 @@ test("output UI restores semantic visuals and section drafting", function()
 		height = 5,
 		style = "minimal",
 	})
-	vim.api.nvim_win_set_cursor(output_win, { 2, lines[2]:find("lua", 1, true) - 1 })
+	local reference_line = user_block.header_line + 1
+	vim.api.nvim_win_set_cursor(output_win, { reference_line, lines[reference_line]:find("lua", 1, true) - 1 })
 	local state = {
 		cwd = vim.fn.getcwd(),
 		output_buf = output_buf,
 		output_win = output_win,
 		input_buf = input_buf,
+		chat = chat,
 	}
 
 	output_ui.refresh(state)
@@ -1629,6 +1634,15 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			end
 		end
 		assert_action_status_width()
+		local initial_spinner = vim.api.nvim_buf_get_lines(state.instruction_buf, -2, -1, false)[1]
+		ok(
+			vim.wait(400, function()
+				local current = vim.api.nvim_buf_get_lines(state.instruction_buf, -2, -1, false)[1]
+				return current ~= initial_spinner
+			end, 10),
+			"expected the active turn icon to spin"
+		)
+		assert_action_status_width()
 		fake.handlers.on_notification("item/started", {
 			threadId = "thread-1",
 			turnId = "turn-1",
@@ -1867,6 +1881,8 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(state.diff, "--- a/file\n+++ b/file")
 		eq(state.tokens.totalTokens, 42)
 		eq(state.busy, false)
+		eq(state.instruction_spinner_timer, nil)
+		contains(vim.api.nvim_buf_get_lines(state.instruction_buf, -2, -1, false)[1], icons.get("idle") .. " completed")
 		eq(state.output_position_mode, "normal")
 		local expected_kinds = { "user" }
 		for _ = 1, 8 do
@@ -2253,17 +2269,6 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 		end, 5),
 		"expected a structured block before reload"
 	)
-	local legacy_block = state.chat.by_id["message-before-reload"]
-	legacy_block.lines[legacy_block.header_offset] = "## Codex"
-	vim.bo[state.output_buf].modifiable = true
-	vim.api.nvim_buf_set_lines(
-		state.output_buf,
-		legacy_block.header_line - 1,
-		legacy_block.header_line,
-		false,
-		{ "## Codex" }
-	)
-	vim.bo[state.output_buf].modifiable = false
 	vim.bo[state.output_buf].filetype = "markdown"
 
 	local tabpage = state.tabpage

@@ -137,6 +137,67 @@ function M.consume_steers(state)
 	return changed
 end
 
+local function stop_timer(timer)
+	if not timer then
+		return
+	end
+	pcall(timer.stop, timer)
+	local closing = false
+	pcall(function()
+		closing = timer:is_closing()
+	end)
+	if not closing then
+		pcall(timer.close, timer)
+	end
+end
+
+function M.stop_spinner(state)
+	if not state then
+		return
+	end
+	stop_timer(state.instruction_spinner_timer)
+	state.instruction_spinner_timer = nil
+	state.instruction_spinner_frame = nil
+end
+
+function M.sync_spinner(state, active, refresh)
+	if not state then
+		return
+	end
+	if not active then
+		M.stop_spinner(state)
+		return
+	end
+	if state.instruction_spinner_timer then
+		return
+	end
+	local uv = vim.uv or vim.loop
+	if not uv or not uv.new_timer then
+		state.instruction_spinner_frame = 1
+		return
+	end
+	local timer = uv.new_timer()
+	if not timer then
+		state.instruction_spinner_frame = 1
+		return
+	end
+	state.instruction_spinner_frame = math.max(1, tonumber(state.instruction_spinner_frame) or 1)
+	state.instruction_spinner_timer = timer
+	timer:start(
+		90,
+		90,
+		vim.schedule_wrap(function()
+			if state.instruction_spinner_timer ~= timer then
+				return
+			end
+			state.instruction_spinner_frame = (tonumber(state.instruction_spinner_frame) or 1) + 1
+			if type(refresh) == "function" then
+				pcall(refresh)
+			end
+		end)
+	)
+end
+
 local function ensure_buffer(state)
 	if valid_buf(state.instruction_buf) then
 		return state.instruction_buf

@@ -8,8 +8,6 @@ local M = {}
 local visual_ns = vim.api.nvim_create_namespace("acp.nvim.output.visual")
 local current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current")
 local pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
-local legacy_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
-local fold_cache = {}
 
 M.namespaces = {
 	visual = visual_ns,
@@ -23,13 +21,6 @@ end
 
 local function valid_win(winid)
 	return winid and vim.api.nvim_win_is_valid(winid)
-end
-
-local function clear_legacy_diagnostics(bufnr)
-	if not valid_buf(bufnr) then
-		return
-	end
-	vim.diagnostic.reset(legacy_diagnostic_ns, bufnr)
 end
 
 local function notify(message, level)
@@ -74,44 +65,42 @@ local function items_for_state(state)
 	end
 	local semantic = structured_semantics(state)
 	if semantic then
-		return output.output_items({}, {
+		return output.output_items({
 			total_lines = semantic.total_lines,
-			cwd = state.cwd,
 			references = semantic.references,
 			blocks = semantic.code_blocks,
 			diagnostics = semantic.diagnostics,
 			activities = semantic.activities,
 		})
 	end
-	return output.output_items(transcript_lines(state), { cwd = state.cwd })
+	return {}
 end
 
 local function code_blocks_for_state(state)
 	if state and state.chat and state.chat.code_blocks then
 		return state.chat:code_blocks()
 	end
-	return output.code_blocks(transcript_lines(state))
+	return {}
 end
 
 local function code_block_at_state(state, line)
 	if state and state.chat and state.chat.code_block_at then
 		return state.chat:code_block_at(line)
 	end
-	return output.code_block_at(transcript_lines(state), line)
 end
 
 local function references_for_state(state)
 	if state and state.chat and state.chat.references then
 		return state.chat:references(state.cwd)
 	end
-	return output.file_references(transcript_lines(state), { cwd = state.cwd })
+	return {}
 end
 
 local function diagnostics_for_state(state)
 	if state and state.chat and state.chat.diagnostics then
 		return state.chat:diagnostics()
 	end
-	return output.problem_diagnostics(transcript_lines(state))
+	return {}
 end
 
 local function cached_item_at(state, line, col, prefer_activity)
@@ -235,12 +224,6 @@ local function reference_at_item(state, item)
 			return reference
 		end
 	end
-	return output.file_reference_at(
-		transcript_lines(state),
-		item.line or output_cursor(state)[1],
-		math.max(0, (item.col or 1) - 1),
-		{ cwd = state.cwd }
-	)
 end
 
 local function block_at_item(state, item)
@@ -275,6 +258,27 @@ local function preview_file(reference)
 	}
 end
 
+local function preview_output_line(state, item)
+	local lines = transcript_lines(state)
+	if #lines == 0 then
+		return nil
+	end
+	local line = math.max(1, math.min(tonumber(item and item.line) or 1, #lines))
+	local line1 = math.max(1, line - 5)
+	local line2 = math.min(#lines, line + 5)
+	local preview = {}
+	for index = line1, line2 do
+		local marker = index == line and icons.location or icons.pulse_empty
+		table.insert(preview, ("%s %4d  %s"):format(marker, index, lines[index] or ""))
+	end
+	return {
+		lines = preview,
+		filetype = "acp",
+		title = (" %s Codex output line %d "):format(icons.map, line),
+		cursor_line = line - line1 + 1,
+	}
+end
+
 local function preview_for_item(state, item)
 	if item.kind == "reference" then
 		return preview_file(reference_at_item(state, item))
@@ -304,8 +308,19 @@ local function preview_for_item(state, item)
 				cursor_line = 1,
 			}
 		end
+	elseif item.kind == "section" and state.chat and state.chat.section_lines then
+		local lines = state.chat:section_lines(item.line, { trim_blank = false })
+		local section = state.chat:section_at(item.line)
+		if lines and section then
+			return {
+				lines = lines,
+				filetype = "acp",
+				title = (" %s %s "):format(icons.section, section.title or section.kind or "Output"),
+				cursor_line = 1,
+			}
+		end
 	end
-	return output.output_map_preview(transcript_lines(state), item)
+	return preview_output_line(state, item)
 end
 
 local function open_preview(preview)
@@ -491,25 +506,21 @@ end
 function M.jump_section(state, direction)
 	local cursor = output_cursor(state)
 	local line
-	local sections = state.chat and state.chat.sections and state.chat:sections() or nil
-	if sections then
-		if direction < 0 then
-			for index = #sections, 1, -1 do
-				if sections[index].line < cursor[1] then
-					line = sections[index].line
-					break
-				end
-			end
-		else
-			for _, section in ipairs(sections) do
-				if section.line > cursor[1] then
-					line = section.line
-					break
-				end
+	local sections = state.chat and state.chat.sections and state.chat:sections() or {}
+	if direction < 0 then
+		for index = #sections, 1, -1 do
+			if sections[index].line < cursor[1] then
+				line = sections[index].line
+				break
 			end
 		end
 	else
-		line = output.next_section(transcript_lines(state), cursor[1], direction)
+		for _, section in ipairs(sections) do
+			if section.line > cursor[1] then
+				line = section.line
+				break
+			end
+		end
 	end
 	if not line then
 		notify(direction < 0 and "No previous output section" or "No next output section")
@@ -608,21 +619,15 @@ function M.inspect(state, item)
 				cursor_line = 1,
 			})
 		end
-	end
-	local section = output.current_section(transcript_lines(state), cursor[1])
-	if not section then
 		notify("No output item or section is under the cursor", vim.log.levels.WARN)
 		return false
 	end
-	return open_preview(output.output_map_preview(transcript_lines(state), {
-		kind = "section",
-		line = section.line,
-	}))
+	notify("No output item or section is under the cursor", vim.log.levels.WARN)
+	return false
 end
 
 function M.open_outline(state)
-	local lines = transcript_lines(state)
-	local sections = state.chat and state.chat.sections and state.chat:sections() or output.sections(lines)
+	local sections = state.chat and state.chat.sections and state.chat:sections() or {}
 	return select_items(sections, "Codex output outline", function(section)
 		return ("%s %4d  %-9s  %s"):format(icons.section, section.line, section.kind, section.title)
 	end, function(section)
@@ -631,7 +636,7 @@ function M.open_outline(state)
 end
 
 function M.search(state)
-	local entries = output.transcript_entries(transcript_lines(state))
+	local entries = state.chat and state.chat.entries and state.chat:entries() or {}
 	return select_items(entries, "Search Codex output", function(entry)
 		return ("%4d  %-9s  %s"):format(entry.line or 1, entry.kind or "TEXT", entry.text or "")
 	end, function(entry)
@@ -736,12 +741,7 @@ end
 
 function M.yank_section(state)
 	local line = output_cursor(state)[1]
-	local text, range
-	if state.chat and state.chat.section_text then
-		text, range = state.chat:section_text(line)
-	else
-		text, range = output.section_text(transcript_lines(state), line)
-	end
+	local text, range = state.chat and state.chat.section_text and state.chat:section_text(line)
 	local yanked = yank_text(text, "output section")
 	if yanked then
 		pulse_range(state, range, "SECTION YANKED")
@@ -752,7 +752,6 @@ end
 function M.draft_section(state)
 	local line = output_cursor(state)[1]
 	local text = state.chat and state.chat.section_text and state.chat:section_text(line)
-		or output.section_text(transcript_lines(state), line)
 	if not text then
 		notify("No output section is under the cursor", vim.log.levels.WARN)
 		return false
@@ -791,9 +790,12 @@ function M.refresh_map(state, force)
 		entries = cache.entries or {}
 		total_lines = cache.total_lines or 0
 	else
-		local lines = transcript_lines(state)
-		entries = output.output_map_entries(lines, { cwd = state.cwd })
-		total_lines = #lines
+		total_lines = state.chat.line_count or 0
+		entries = output.output_map_entries({
+			total_lines = total_lines,
+			sections = state.chat:sections(),
+			items = items_for_state(state),
+		})
 	end
 	local map_lines, rows = output.output_map_lines(entries, {
 		current_line = cursor[1],
@@ -840,7 +842,13 @@ function M.open_map(state)
 		end, vim.tbl_extend("force", opts, { desc = "Preview Codex output map entry" }))
 		vim.keymap.set("n", "Q", function()
 			local entries = state.output_cache and state.output_cache.entries
-				or output.output_map_entries(transcript_lines(state), { cwd = state.cwd })
+			if not entries then
+				entries = output.output_map_entries({
+					total_lines = state.chat.line_count,
+					sections = state.chat:sections(),
+					items = items_for_state(state),
+				})
+			end
 			set_quickfix(output.output_map_quickfix_items(entries, state.output_buf), "Codex output map")
 		end, vim.tbl_extend("force", opts, { desc = "Send Codex output map to quickfix" }))
 	end
@@ -882,13 +890,19 @@ end
 function M.actions(state)
 	local item = M.current_item(state)
 	local cache = state.output_cache
+	local semantic = not cache and structured_semantics(state) or nil
 	local stats = cache
 			and {
 				sections = #(cache.sections or {}),
 				code_blocks = #(cache.blocks or {}),
 				locations = #(cache.references or {}),
 			}
-		or output.transcript_stats(transcript_lines(state), { cwd = state.cwd })
+		or semantic and {
+			sections = #(semantic.sections or {}),
+			code_blocks = #(semantic.code_blocks or {}),
+			locations = #(semantic.references or {}),
+		}
+		or { sections = 0, code_blocks = 0, locations = 0 }
 	local actions = {
 		{ label = "Search transcript", run = M.search },
 		{ label = "Open output map", run = M.open_map },
@@ -1045,7 +1059,6 @@ function M.refresh(state)
 	stop_refresh_timer(state, false)
 	state.output_refresh_pending = false
 	local bufnr = state.output_buf
-	clear_legacy_diagnostics(bufnr)
 	vim.b[bufnr].acp_cwd = state.cwd
 	if not state.busy and not state.output_language_injection_tried then
 		state.output_language_injection_tried = true
@@ -1058,29 +1071,27 @@ function M.refresh(state)
 		M.refresh_map(state)
 		return
 	end
-	local lines = transcript_lines(state)
 	vim.api.nvim_buf_clear_namespace(bufnr, visual_ns, 0, -1)
 
 	local semantic = structured_semantics(state)
-	local references = semantic and semantic.references or output.file_references(lines, { cwd = state.cwd })
-	local blocks = semantic and semantic.code_blocks or output.code_blocks(lines)
-	local diagnostics = semantic and semantic.diagnostics or output.problem_diagnostics(lines)
-	local sections = semantic and semantic.sections or output.sections(lines)
-	local activities = semantic and semantic.activities or output.activity_groups(lines)
-	local total_lines = semantic and semantic.total_lines or #lines
-	local items = output.output_items(lines, {
+	if not semantic then
+		state.output_cache = nil
+		return
+	end
+	local references = semantic.references
+	local blocks = semantic.code_blocks
+	local diagnostics = semantic.diagnostics
+	local sections = semantic.sections
+	local activities = semantic.activities
+	local total_lines = semantic.total_lines
+	local items = output.output_items({
 		total_lines = total_lines,
-		cwd = state.cwd,
 		references = references,
 		blocks = blocks,
 		diagnostics = diagnostics,
 		activities = activities,
 	})
 	local changedtick = vim.api.nvim_buf_get_changedtick(bufnr)
-	local activities_by_start = {}
-	for _, activity in ipairs(activities) do
-		activities_by_start[activity.line] = activity
-	end
 	state.output_cache = {
 		bufnr = bufnr,
 		changedtick = changedtick,
@@ -1093,16 +1104,15 @@ function M.refresh(state)
 		diagnostics = diagnostics,
 		sections = sections,
 		activities = activities,
-		chat_blocks = semantic and state.chat.blocks or nil,
+		chat_blocks = state.chat.blocks,
 		items = items,
 		item_index = build_item_index(items),
-		entries = output.output_map_entries(lines, {
+		entries = output.output_map_entries({
 			total_lines = total_lines,
 			sections = sections,
 			items = items,
 		}),
 	}
-	fold_cache[bufnr] = { changedtick = changedtick, activities_by_start = activities_by_start }
 	for _, reference in ipairs(references) do
 		local row = (reference.source_line or 1) - 1
 		pcall(vim.api.nvim_buf_set_extmark, bufnr, visual_ns, row, math.max(0, (reference.source_col or 1) - 1), {
@@ -1145,9 +1155,6 @@ function M.close(state)
 	end
 	state.output_map_buf = nil
 	state.output_map_rows = nil
-	if state.output_buf then
-		fold_cache[state.output_buf] = nil
-	end
 	state.output_cache = nil
 	if valid_buf(state.output_buf) then
 		vim.api.nvim_buf_clear_namespace(state.output_buf, visual_ns, 0, -1)
@@ -1162,33 +1169,15 @@ end
 _G.acp_nvim_output_foldexpr = function()
 	local lnum = vim.v.lnum
 	local chat = chat_blocks.for_buffer(vim.api.nvim_get_current_buf())
-	local block = chat and chat.block_at and chat:block_at(lnum) or nil
-	local activity_line = block and (block.header_line or block.line1) or nil
-	if block and block.kind == "activity" and block.line2 > activity_line and lnum >= activity_line then
-		return lnum == activity_line and ">2" or "2"
-	end
-	local first = math.max(0, lnum - 2)
-	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, first, lnum + 1, false)
-	local current = lnum - first
-	return ok and output.fold_expr(lines[current], lnum, lines[current - 1], lines[current + 1]) or "0"
+	local structural = chat and chat.fold_level and chat:fold_level(lnum) or nil
+	return structural or "0"
 end
 
 _G.acp_nvim_output_foldtext = function()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local chat = chat_blocks.for_buffer(bufnr)
-	local structured = chat and chat.activity_at and chat:activity_at(vim.v.foldstart) or nil
-	if structured and structured.line == vim.v.foldstart and structured.line2 == vim.v.foldend then
-		return output.activity_fold_text(structured)
-	end
-	local cached = fold_cache[bufnr]
-	if cached and cached.changedtick == vim.api.nvim_buf_get_changedtick(bufnr) then
-		local activity = cached.activities_by_start[vim.v.foldstart]
-		if activity and activity.line2 == vim.v.foldend then
-			return output.activity_fold_text(activity)
-		end
-	end
-	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, vim.v.foldstart - 1, vim.v.foldend, false)
-	return ok and output.fold_text(lines, 1, #lines) or ""
+	local structural = chat and chat.fold_text and chat:fold_text(vim.v.foldstart, vim.v.foldend) or nil
+	return structural or ""
 end
 
 return M

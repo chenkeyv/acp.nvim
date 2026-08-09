@@ -55,6 +55,7 @@ local compact_thread
 local show_status
 local drain_queue
 local position_prompt
+local refresh_instruction_window
 local flush_output_text
 local flush_action_output
 
@@ -591,6 +592,12 @@ local function update_chrome()
 	if not state then
 		return
 	end
+	local status = tostring(state.status or ""):lower()
+	local spinner_active = valid_win(state.input_win)
+		and (state.busy or state.starting or status == "stopping")
+		and not status:find("error", 1, true)
+		and status ~= "disconnected"
+	instructions.sync_spinner(state, spinner_active, refresh_instruction_window)
 	update_output_winbar()
 	if valid_win(state.input_win) and position_prompt then
 		position_prompt()
@@ -682,6 +689,7 @@ function M.close()
 	local current_tab = vim.api.nvim_get_current_tabpage()
 	local chat_tab = valid_tab(state.tabpage) and state.tabpage or nil
 	local return_win = chat_tab == current_tab and state.origin_win or current_win
+	instructions.stop_spinner(state)
 	instructions.close_window(state)
 	if not close_tab(chat_tab, return_win) then
 		close_window(state.input_win)
@@ -790,6 +798,18 @@ end
 
 local function sync_instruction_window(desired, lines, chrome_key)
 	instructions.sync_window(state, state.output_win, desired, lines, chrome_key)
+end
+
+refresh_instruction_window = function()
+	if not state or not valid_win(state.output_win) or not valid_win(state.input_win) then
+		instructions.stop_spinner(state)
+		return
+	end
+	local _, _, _, instruction, instruction_lines, instruction_key = prompt_config()
+	if not instruction then
+		instructions.stop_spinner(state)
+	end
+	sync_instruction_window(instruction, instruction_lines, instruction_key)
 end
 
 local function open_prompt_window()
@@ -2289,6 +2309,7 @@ local function register_autocmds()
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		group = group,
 		callback = function()
+			instructions.stop_spinner(state)
 			if client then
 				client:stop()
 			end
@@ -2342,6 +2363,7 @@ end
 
 function M._export_runtime()
 	if state then
+		instructions.stop_spinner(state)
 		flush_output_text()
 		flush_action_output()
 		output_ui.flush_refresh(state)
@@ -2371,10 +2393,6 @@ function M._adopt_runtime(runtime)
 	if state then
 		if had_chat then
 			state.chat = blocks.adopt(state.chat)
-		elseif valid_buf(state.output_buf) then
-			local count = vim.api.nvim_buf_line_count(state.output_buf)
-			local content_count = math.max(1, count - math.max(0, tonumber(state.prompt_spacer_rows) or 0))
-			state.chat = blocks.from_lines(vim.api.nvim_buf_get_lines(state.output_buf, 0, content_count, false))
 		else
 			state.chat = blocks.new()
 		end

@@ -1,6 +1,5 @@
 local icons = require("acp.icons")
 local output = require("acp.output")
-local transcript = require("acp.transcript")
 
 local M = {}
 
@@ -116,29 +115,8 @@ local function current_section(state)
 	end
 	local cursor = vim.api.nvim_win_get_cursor(state.output_win)
 	if state.chat and state.chat.section_at then
-		local section = state.chat:section_at(cursor[1])
-		if section then
-			return section
-		end
+		return state.chat:section_at(cursor[1])
 	end
-	local sections = state.output_cache and state.output_cache.sections
-	if sections and #sections > 0 then
-		local low = 1
-		local high = #sections
-		local current
-		while low <= high do
-			local middle = math.floor((low + high) / 2)
-			if (sections[middle].line or 1) <= cursor[1] then
-				current = sections[middle]
-				low = middle + 1
-			else
-				high = middle - 1
-			end
-		end
-		return current
-	end
-	local lines = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
-	return output.current_section(lines, cursor[1])
 end
 
 local function status_icon(state)
@@ -146,7 +124,7 @@ local function status_icon(state)
 	if status:find("error", 1, true) or status == "disconnected" then
 		return icons.get("error")
 	elseif state.busy or state.starting or status == "stopping" then
-		return icons.get("busy")
+		return icons.spinner(state.instruction_spinner_frame)
 	end
 	return icons.get("idle")
 end
@@ -586,62 +564,54 @@ local function highlight_inline_code(bufnr, row, line)
 	end
 end
 
-local function quote_style(content)
-	local kind = transcript.activity_kind(content)
-	if kind == "error" then
-		return "AcpTranscriptError"
-	elseif kind == "warning" then
-		return "AcpTranscriptWarning"
-	elseif kind == "command" or kind == "tool" or kind == "changes" then
-		return "AcpTranscriptTool"
-	end
-	return "AcpTranscriptMeta"
-end
-
-local action_titles = { "You ran", "Running", "Exploring", "Calling", "Explored", "Called", "Ran" }
-
-local function highlight_action_line(bufnr, row, line, block, line_number)
-	local presentation = block.metadata and block.metadata.presentation
-	if presentation ~= "command" and presentation ~= "tool" and presentation ~= "explore" then
+local function highlight_action_row(bufnr, row, line, block, row_info)
+	if not row_info or not tostring(row_info.role or ""):match("^action_") then
 		return false
 	end
-	if line_number == (block.header_line or block.line1) then
+	if row_info.role == "action_header" then
 		local bullet_highlight = block.status == "failed" and "AcpActionFailure"
 			or block.status == "in progress" and "AcpActionActive"
 			or "AcpActionSuccess"
 		mark(bufnr, row, 0, { end_col = #"•", hl_group = bullet_highlight, priority = 200 })
-		for _, title in ipairs(action_titles) do
-			local prefix = "• " .. title
-			if line:sub(1, #prefix) == prefix then
-				local title_col = #"• "
-				mark(bufnr, row, title_col, {
-					end_col = title_col + #title,
-					hl_group = "AcpActionTitle",
-					priority = 190,
-				})
-				local detail_col = #prefix + 1
-				if #line > detail_col then
-					mark(bufnr, row, detail_col, {
-						end_col = #line,
-						hl_group = presentation == "tool" and "AcpActionTool" or "AcpActionCommand",
-						priority = 180,
-					})
-				end
-				break
-			end
+		local title_col = tonumber(row_info.title_col) or #"• "
+		local title = tostring(row_info.title or "")
+		if title ~= "" then
+			mark(bufnr, row, title_col, {
+				end_col = title_col + #title,
+				hl_group = "AcpActionTitle",
+				priority = 190,
+			})
+		end
+		local detail_col = tonumber(row_info.detail_col)
+		if detail_col and #line > detail_col then
+			mark(bufnr, row, detail_col, {
+				end_col = #line,
+				hl_group = row_info.detail_kind == "tool" and "AcpActionTool" or "AcpActionCommand",
+				priority = 180,
+			})
 		end
 		return true
 	end
 
-	local tree = (line:match("^  │ ") or line:match("^  └ ")) and #"  │ " or line:match("^    ") and 4 or 0
+	local tree = math.max(0, tonumber(row_info.tree_width) or 0)
 	if tree > 0 then
 		mark(bufnr, row, 0, { end_col = tree, hl_group = "AcpActionTree", priority = 170 })
-		local highlight = presentation == "explore" and "AcpActionCommand"
-			or line:match("^  │ ") and "AcpActionCommand"
-			or "AcpActionOutput"
+		local highlight = row_info.role == "action_command" and "AcpActionCommand" or "AcpActionOutput"
 		mark(bufnr, row, tree, { end_col = #line, hl_group = highlight, priority = 160 })
 	end
 	return true
+end
+
+local function structural_line_highlight(role)
+	if role == "error" then
+		return "AcpTranscriptError"
+	elseif role == "warning" then
+		return "AcpTranscriptWarning"
+	elseif role == "change" then
+		return "AcpTranscriptTool"
+	elseif role == "notice" or role == "context" then
+		return "AcpTranscriptMeta"
+	end
 end
 
 function M.refresh_transcript(bufnr, start_row, chat, end_row)
@@ -663,49 +633,25 @@ function M.refresh_transcript(bufnr, start_row, chat, end_row)
 		local row = start_row + offset - 1
 		local line_number = row + 1
 		local block = chat and chat.block_at and chat:block_at(line_number) or nil
-		local header_kind = transcript.header_kind(line)
-		local parse_legacy = not block or block.kind == "legacy"
-		if block and block.kind == "activity" and highlight_action_line(bufnr, row, line, block, line_number) then
+		local row_info = block and chat and chat.row_at and chat:row_at(line_number, block) or nil
+		if block and block.kind == "activity" and highlight_action_row(bufnr, row, line, block, row_info) then
 			-- Action cells use literal Codex CLI tree glyphs and structured highlights.
-		elseif
-			(block and block.kind == "user" and line_number == block.header_line)
-			or (parse_legacy and header_kind == "user")
-		then
+		elseif row_info and row_info.role == "header" and row_info.header_kind == "user" then
 			highlight_line(bufnr, row, line, "AcpUserHeader")
-		elseif
-			(block and block.kind == "agent" and line_number == block.header_line)
-			or (parse_legacy and header_kind == "agent")
-		then
+		elseif row_info and row_info.role == "header" and row_info.header_kind == "agent" then
 			highlight_line(bufnr, row, line, "AcpAgentHeader")
 		elseif
-			(block and (block.kind == "plan" or block.kind == "review") and line_number == block.header_line)
-			or (parse_legacy and (header_kind == "plan" or header_kind == "review"))
+			row_info
+			and row_info.role == "header"
+			and (row_info.header_kind == "plan" or row_info.header_kind == "review")
 		then
 			highlight_line(bufnr, row, line, "AcpSectionHeader")
-		elseif line:match("^```") then
+		elseif row_info and row_info.role == "code_fence" then
 			highlight_line(bufnr, row, line, "AcpCodeFence")
-		elseif line:match("^Working directory:") then
-			highlight_line(bufnr, row, line, "AcpTranscriptMeta")
-		else
-			local structural = parse_legacy
-				or (
-					block
-					and (
-						block.kind == "activity"
-						or block.kind == "notice"
-						or block.kind == "warning"
-						or block.kind == "error"
-					)
-				)
-			if structural then
-				local direct, direct_kind = transcript.parse(line)
-				local content = line:match("^>%s*(.*)") or direct_kind and direct
-				if content then
-					highlight_line(bufnr, row, line, quote_style(content))
-				end
-			end
+		elseif row_info and structural_line_highlight(row_info.role) then
+			highlight_line(bufnr, row, line, structural_line_highlight(row_info.role))
 		end
-		if not line:match("^```") then
+		if not (row_info and row_info.role == "code_fence") then
 			highlight_inline_code(bufnr, row, line)
 		end
 	end
