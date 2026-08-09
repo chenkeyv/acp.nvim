@@ -1,4 +1,5 @@
 local Codex = require("acp.codex").Client
+local action = require("acp.action")
 local blocks = require("acp.blocks")
 local context = require("acp.context")
 local instructions = require("acp.instructions")
@@ -7,6 +8,7 @@ local reloader = require("acp.reload")
 local render = require("acp.render")
 local requests = require("acp.requests")
 local server_log = require("acp.server_log")
+local treesitter = require("acp.treesitter")
 local view = require("acp.view")
 
 local M = {}
@@ -54,6 +56,7 @@ local show_status
 local drain_queue
 local position_prompt
 local flush_output_text
+local flush_action_output
 
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -125,6 +128,9 @@ local function fresh_state(cwd)
 		output_text_scheduled = false,
 		output_text_generation = 0,
 		pending_output_block_id = nil,
+		pending_action_output = {},
+		action_output_scheduled = false,
+		action_output_generation = 0,
 		cursor_update_pending = false,
 		output_position_mode = "normal",
 		output_position_view = false,
@@ -323,6 +329,15 @@ local function cancel_output_text()
 	state.output_text_generation = (state.output_text_generation or 0) + 1
 end
 
+local function cancel_action_output()
+	if not state then
+		return
+	end
+	state.pending_action_output = {}
+	state.action_output_scheduled = false
+	state.action_output_generation = (state.action_output_generation or 0) + 1
+end
+
 local function set_output(lines, opts)
 	if not state or not valid_buf(state.output_buf) then
 		return
@@ -335,6 +350,7 @@ local function set_output(lines, opts)
 		end)
 	end
 	cancel_output_text()
+	cancel_action_output()
 	output_ui.pause_language_injection(state)
 	with_modifiable(state.output_buf, function()
 		state.prompt_spacer_rows = 0
@@ -404,6 +420,22 @@ flush_output_text = function()
 	end
 end
 
+flush_action_output = function()
+	if not state then
+		return
+	end
+	local pending = state.pending_action_output or {}
+	state.pending_action_output = {}
+	state.action_output_scheduled = false
+	state.action_output_generation = (state.action_output_generation or 0) + 1
+	for item_id, delta in pairs(pending) do
+		if delta ~= "" and state.chat then
+			local operation = state.chat:append_command_output(item_id, delta)
+			apply_chat_operation(operation)
+		end
+	end
+end
+
 local function append_text(block_id, text)
 	if not state or not valid_buf(state.output_buf) or not text or text == "" then
 		return
@@ -430,11 +462,34 @@ local function append_text(block_id, text)
 	end, performance_delay("stream_interval_ms", 25))
 end
 
+local function append_action_output(item_id, delta)
+	if not state or not valid_buf(state.output_buf) or not item_id or not delta or delta == "" then
+		return
+	end
+	state.pending_action_output = state.pending_action_output or {}
+	state.pending_action_output[item_id] = (state.pending_action_output[item_id] or "") .. delta
+	if state.action_output_scheduled then
+		return
+	end
+	state.action_output_scheduled = true
+	state.action_output_generation = (state.action_output_generation or 0) + 1
+	local generation = state.action_output_generation
+	local scheduled_state = state
+	vim.defer_fn(function()
+		if state ~= scheduled_state or scheduled_state.action_output_generation ~= generation then
+			return
+		end
+		scheduled_state.action_output_scheduled = false
+		flush_action_output()
+	end, performance_delay("stream_interval_ms", 25))
+end
+
 local function append_chat_block(callback)
 	if not state or not state.chat then
 		return nil
 	end
 	flush_output_text()
+	flush_action_output()
 	local operation, block = callback(state.chat)
 	apply_chat_operation(operation)
 	return block
@@ -621,6 +676,7 @@ function M.close()
 		return
 	end
 	flush_output_text()
+	flush_action_output()
 	output_ui.close(state)
 	local current_win = vim.api.nvim_get_current_win()
 	local current_tab = vim.api.nvim_get_current_tabpage()
@@ -1899,6 +1955,10 @@ function M._handle_notification(method, params)
 		if item.type == "agentMessage" then
 			consume_steering_instructions()
 			ensure_agent_item(item.id)
+		elseif action.kind(item) then
+			append_chat_block(function(chat)
+				return chat:start_item(item)
+			end)
 		end
 		set_status(render.item_status(item))
 	elseif method == "item/agentMessage/delta" then
@@ -1917,14 +1977,25 @@ function M._handle_notification(method, params)
 		consume_steering_instructions()
 		set_status("thinking")
 	elseif method == "item/commandExecution/outputDelta" then
+		append_action_output(params.itemId, params.delta or "")
 		set_status("running command")
+	elseif method == "item/mcpToolCall/progress" then
+		append_chat_block(function(chat)
+			return chat:update_item_progress(params.itemId, params.message)
+		end)
+		set_status(params.message or "using tool")
 	elseif method == "item/completed" then
 		flush_output_text()
+		flush_action_output()
 		local item = params.item or {}
 		if item.id then
 			state.items[item.id] = item
 		end
-		if item.type == "agentMessage" then
+		if action.kind(item) then
+			append_chat_block(function(chat)
+				return chat:complete_item(item)
+			end)
+		elseif item.type == "agentMessage" then
 			if not state.streamed_items[item.id] and item.text and item.text ~= "" then
 				local block_id = ensure_agent_item(item.id)
 				append_text(block_id, item.text)
@@ -1964,6 +2035,7 @@ function M._handle_notification(method, params)
 		set_status("ready")
 	elseif method == "turn/completed" then
 		flush_output_text()
+		flush_action_output()
 		local instructions_changed = clear_pending_instructions("steer", false)
 		local turn = params.turn or {}
 		state.busy = false
@@ -2225,6 +2297,7 @@ local function register_autocmds()
 end
 
 local function register_runtime()
+	treesitter.setup()
 	view.define_highlights()
 	register_commands()
 	register_autocmds()
@@ -2270,6 +2343,7 @@ end
 function M._export_runtime()
 	if state then
 		flush_output_text()
+		flush_action_output()
 		output_ui.flush_refresh(state)
 	end
 	return {

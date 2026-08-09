@@ -1,3 +1,4 @@
+local action = require("acp.action")
 local transcript = require("acp.transcript")
 
 local M = {}
@@ -96,25 +97,15 @@ function M.completed_item(item)
 	if type(item) ~= "table" then
 		return {}
 	end
-	if item.type == "commandExecution" then
-		local suffix = present(item.exitCode) and (" (exit %s)"):format(item.exitCode) or ""
-		local content = ("Command %s%s: `%s`"):format(status_label(item.status), suffix, clean(item.command))
-		local failed = failed_status(item.status) or (present(item.exitCode) and tonumber(item.exitCode) ~= 0)
-		return { transcript.line(failed and "error" or "command", content) }
+	local action_kind = action.kind(item)
+	if action_kind then
+		local child = action.new_child(item)
+		return action.render_block({
+			children = { child },
+			metadata = { presentation = action.is_exploration(item) and "explore" or action_kind },
+		})
 	elseif item.type == "fileChange" then
 		return file_change_lines(item)
-	elseif item.type == "mcpToolCall" then
-		local content = ("Tool %s: `%s/%s`"):format(
-			status_label(item.status),
-			item.server or "mcp",
-			item.tool or "tool"
-		)
-		return {
-			transcript.line(failed_status(item.status) and "error" or "tool", content),
-		}
-	elseif item.type == "dynamicToolCall" then
-		local content = ("Tool %s: `%s`"):format(status_label(item.status), item.tool or "tool")
-		return { transcript.line(failed_status(item.status) and "error" or "tool", content) }
 	elseif item.type == "plan" and item.text and item.text ~= "" then
 		return { "", transcript.header("plan"), "", item.text }
 	elseif item.type == "enteredReviewMode" then

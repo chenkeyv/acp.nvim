@@ -19,7 +19,7 @@ phase.
 - an inset floating prompt with an always-attached turn panel and tool-aware
   chat styling and icons
 - streamed agent messages and plans
-- command, tool, and file-change summaries
+- Codex CLI-style command, tool, exploration, and file-change cells
 - model and reasoning-effort selectors from the server catalog
 - token usage, turn status, interruption, and follow-up queueing or steering
 - current-file and visual/range context
@@ -40,6 +40,11 @@ runner.
 - Neovim 0.10 or newer
 - a recent Codex CLI on `PATH`
 - an authenticated Codex session (`codex login` or `:AcpLogin`)
+
+The included ACP Tree-sitter grammar is optional. With `nvim-treesitter` on the
+runtime path, acp.nvim registers its local parser so it can be installed with
+`:TSInstall acp`. Until it is installed, chats retain the `acp` filetype and use
+Neovim's bundled Markdown parser only for fenced-code injection.
 
 No npm ACP adapter is required.
 
@@ -86,13 +91,15 @@ command. A command table is used exactly as supplied.
 
 The prompt floats over reserved blank rows at the bottom of the chat, so it
 does not cover the latest response. `input_height` includes the frame and
-`input_padding` controls its inset from the chat text area. A compact read-only
-turn panel is always attached above the prompt. It shows the current status and
-fills a stable `instruction_height` frame with steer and queued follow-ups, so
-streaming updates do not resize the prompt stack. Queued entries disappear when
-their turn starts, while steer entries disappear when the continuation begins
+`input_padding` controls its inset from the chat text area. Prompt, model,
+reasoning, and context metadata sit on the lower-left border, while the send and
+steer hints remain on the lower-right. A compact read-only turn panel is always
+attached above the prompt. It shows the current status and fills a stable
+`instruction_height` frame with steer and queued follow-ups, so streaming
+updates do not resize the prompt stack. Queued entries disappear when their
+turn starts, while steer entries disappear when the continuation begins
 producing output. Transient status and queue details stay in this panel instead
-of being repeated in the chat transcript or prompt title.
+of being repeated elsewhere.
 
 The chat transcript uses the custom `acp` filetype rather than Markdown, while
 the editable prompt uses `acp-prompt`. This keeps their styling and filetype
@@ -100,33 +107,45 @@ options independent and lets `FileType acp` customizations target only chats.
 Semantic icons for people, tools, changes, warnings, and errors are written
 directly into the transcript text. The chat therefore needs no sign column or
 icon-bearing extmarks; set `vim.g.have_nerd_font = false` to write compact text
-fallbacks instead.
+fallbacks instead. acp.nvim does not attach Neovim diagnostics to the chat
+buffer, so warnings and errors remain ordinary native transcript cells without
+diagnostic underlines, signs, or virtual text.
 
-ANSI-decorated app-server diagnostics are normalized before they enter the
+ANSI-decorated app-server log messages are normalized before they enter the
 transcript. Transport timestamps remain block metadata, while log levels,
 module names, escaped multiline messages, and common process-error wrappers
 become native notice, warning, or error blocks.
 
 The visible chat remains one native buffer, backed by ordered logical blocks
-for user prompts, agent responses, plans, completed activity, notices, warnings,
-and errors. Fenced code is indexed as a child of its owning prompt or response.
-This keeps the restrained Codex CLI-like flow and whitespace while giving
-navigation, previews, folds, hot reload, and future presentation rules stable
-semantic boundaries instead of rediscovering roles from rendered text.
+for user prompts, agent responses, plans, individual actions, notices, warnings,
+and errors. Top-level cells have one blank separator, matching the compact Codex
+CLI rhythm, while the tree rows inside an action remain contiguous. Fenced code
+is indexed as a child of its owning prompt or response. This keeps navigation,
+previews, folds, hot reload, and presentation rules on stable semantic
+boundaries instead of rediscovering roles from rendered text.
+
+The repository ships a lightweight `acp` Tree-sitter grammar and queries for
+role headers, command/tool/exploration cells, tree branches, and fenced-code
+injection. The logical block model remains authoritative: Tree-sitter adds idle
+syntax control and language injection but never reconstructs streaming state
+from rendered text.
 
 Large transcripts use indexed block lookup and cache references, code blocks,
-and diagnostics per logical block, plus one model-wide semantic snapshot for
+and problem metadata per logical block, plus one model-wide semantic snapshot for
 each transcript revision. During a response, streamed deltas are
 coalesced at `stream_interval_ms`; each flush replaces only the active block's
 tail and refreshes decorations only through that block. Unchanged history is
-not reparsed, full language injection remains paused until the turn ends, and
-typing or scrolling can defer the final semantic refresh by
+not reparsed, the ACP parser and language injection remain paused until the
+turn ends, and typing or scrolling can defer the final semantic refresh by
 `semantic_debounce_ms`. Cursor-only updates are capped by `cursor_interval_ms`.
 The chat window disables editor indent guides and wrapped-line indentation, and
-the output and sessions buffers keep no undo history. Consecutive completed
-commands, tools, and file changes share a level-two activity block that starts
-collapsed and opens in a focused detail float with `<Enter>` or `K`; warnings
-and failures remain expanded in the transcript.
+the output and sessions buffers keep no undo history. Each command or tool gets
+one level-two Codex-style cell; compatible read/list/search commands coalesce
+under a single `Exploring` or `Explored` cell. Command and tool results keep a
+five-row head/ellipsis/tail preview in the chat, with the omitted-line count
+written directly into the buffer. `<Enter>` or `K` opens the complete command or
+tool transcript in a focused detail float. Action previews start open and remain
+manually foldable; warnings and failures stay visible in the transcript.
 
 The sessions split is scoped to the current working directory, like
 `codex resume` without `--all`. It includes the CLI and VS Code interactive
@@ -188,10 +207,10 @@ Codex tab keymaps:
 - `n`, `t`, `d`, `m`, `r`, and `s` select new chat, sessions, diff, model,
   reasoning, and stop from output
 - `]]` / `[[` move between transcript sections; `]o` / `[o` move between
-  grouped activity, references, code blocks, and problems
-- `<Enter>` opens the item under the cursor and `K` previews it; on a collapsed
-  activity group either key shows every command/tool row in a floating detail
-  window. `gf` opens a local file reference and `?` opens context-aware actions
+  action cells, references, code blocks, and problems
+- `<Enter>` opens the item under the cursor and `K` previews it; on a command or
+  tool cell either key shows its complete output in a floating detail window.
+  `gf` opens a local file reference and `?` opens context-aware actions
 - `za`, `zM`, and `zR` toggle, close, and open the native transcript folds
 - `<leader>ax`, `<leader>am`, `<leader>aO`, and `<leader>av` open transcript
   search, the persistent output map, unified items, and the section outline
@@ -235,4 +254,7 @@ app-server configuration.
 ```sh
 NVIM_LOG_FILE=/tmp/acp.nvim-nvim.log nvim --headless -u tests/minimal_init.lua \
   -c "luafile tests/acp_spec.lua" -c "qa!"
+
+XDG_CACHE_HOME=/tmp/acp-tree-sitter-cache tree-sitter test \
+  --grammar-path tree-sitter-acp
 ```

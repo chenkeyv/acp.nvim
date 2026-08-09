@@ -1,19 +1,19 @@
 local chat_blocks = require("acp.blocks")
 local icons = require("acp.icons")
 local output = require("acp.output")
+local treesitter = require("acp.treesitter")
 
 local M = {}
 
 local visual_ns = vim.api.nvim_create_namespace("acp.nvim.output.visual")
 local current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current")
-local diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
 local pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
+local legacy_diagnostic_ns = vim.api.nvim_create_namespace("acp.nvim.output.diagnostics")
 local fold_cache = {}
 
 M.namespaces = {
 	visual = visual_ns,
 	current = current_ns,
-	diagnostics = diagnostic_ns,
 	pulse = pulse_ns,
 }
 
@@ -23,6 +23,13 @@ end
 
 local function valid_win(winid)
 	return winid and vim.api.nvim_win_is_valid(winid)
+end
+
+local function clear_legacy_diagnostics(bufnr)
+	if not valid_buf(bufnr) then
+		return
+	end
+	vim.diagnostic.reset(legacy_diagnostic_ns, bufnr)
 end
 
 local function notify(message, level)
@@ -287,7 +294,8 @@ local function preview_for_item(state, item)
 			}
 		end
 	elseif item.kind == "activity" and state.chat and state.chat.section_lines then
-		local lines = state.chat:section_lines(item.line, { trim_blank = false })
+		local lines = state.chat.activity_detail_lines and state.chat:activity_detail_lines(item.line)
+			or state.chat:section_lines(item.line, { trim_blank = false })
 		if lines then
 			return {
 				lines = lines,
@@ -938,9 +946,7 @@ function M.pause_language_injection(state)
 	if not state or not valid_buf(state.output_buf) or not state.output_language_injection then
 		return
 	end
-	if vim.treesitter and vim.treesitter.stop then
-		pcall(vim.treesitter.stop, state.output_buf)
-	end
+	treesitter.stop(state.output_buf)
 	state.output_language_injection = false
 	state.output_language_injection_tried = false
 	vim.b[state.output_buf].acp_language_injection = "paused"
@@ -1039,15 +1045,13 @@ function M.refresh(state)
 	stop_refresh_timer(state, false)
 	state.output_refresh_pending = false
 	local bufnr = state.output_buf
+	clear_legacy_diagnostics(bufnr)
 	vim.b[bufnr].acp_cwd = state.cwd
 	if not state.busy and not state.output_language_injection_tried then
 		state.output_language_injection_tried = true
-		state.output_language_injection = vim.treesitter
-				and vim.treesitter.start
-				and pcall(vim.treesitter.start, bufnr, "markdown")
-			or false
-		vim.b[bufnr].acp_language_injection = state.output_language_injection and "treesitter-markdown"
-			or "fence-detection"
+		local active, mode = treesitter.start(bufnr)
+		state.output_language_injection = active
+		vim.b[bufnr].acp_language_injection = mode
 	end
 	if cache_is_current(state) then
 		refresh_current(state)
@@ -1119,7 +1123,6 @@ function M.refresh(state)
 		end
 	end
 
-	vim.diagnostic.set(diagnostic_ns, bufnr, diagnostics)
 	refresh_current(state)
 	M.refresh_map(state)
 end
@@ -1150,23 +1153,19 @@ function M.close(state)
 		vim.api.nvim_buf_clear_namespace(state.output_buf, visual_ns, 0, -1)
 		vim.api.nvim_buf_clear_namespace(state.output_buf, current_ns, 0, -1)
 		vim.api.nvim_buf_clear_namespace(state.output_buf, pulse_ns, 0, -1)
-		vim.diagnostic.reset(diagnostic_ns, state.output_buf)
+	end
+	if type(state._position_prompt) == "function" then
+		state._position_prompt()
 	end
 end
-
-vim.diagnostic.config({
-	virtual_text = false,
-	signs = false,
-	underline = true,
-	severity_sort = true,
-}, diagnostic_ns)
 
 _G.acp_nvim_output_foldexpr = function()
 	local lnum = vim.v.lnum
 	local chat = chat_blocks.for_buffer(vim.api.nvim_get_current_buf())
 	local block = chat and chat.block_at and chat:block_at(lnum) or nil
-	if block and block.kind == "activity" and block.line2 > block.line1 then
-		return lnum == block.line1 and ">2" or "2"
+	local activity_line = block and (block.header_line or block.line1) or nil
+	if block and block.kind == "activity" and block.line2 > activity_line and lnum >= activity_line then
+		return lnum == activity_line and ">2" or "2"
 	end
 	local first = math.max(0, lnum - 2)
 	local ok, lines = pcall(vim.api.nvim_buf_get_lines, 0, first, lnum + 1, false)

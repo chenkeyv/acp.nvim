@@ -1,4 +1,5 @@
 local approval = require("acp.approval")
+local action = require("acp.action")
 local blocks = require("acp.blocks")
 local Client = require("acp.codex").Client
 local context = require("acp.context")
@@ -12,6 +13,7 @@ local render = require("acp.render")
 local requests = require("acp.requests")
 local server_log = require("acp.server_log")
 local transcript = require("acp.transcript")
+local treesitter = require("acp.treesitter")
 local ui = require("acp.ui")
 local view = require("acp.view")
 
@@ -355,7 +357,7 @@ test("thread renderer reconstructs history and diffs", function()
 	eq(output.activity_kind(failed_change), nil)
 end)
 
-test("chat blocks preserve roles, grouped activity, code, and failures", function()
+test("chat blocks preserve roles, action cells, code, and failures", function()
 	local chat = blocks.from_thread({
 		turns = {
 			{
@@ -367,6 +369,7 @@ test("chat blocks preserve roles, grouped activity, code, and failures", functio
 						command = "rg blocks",
 						status = "completed",
 						exitCode = 0,
+						aggregatedOutput = "lua/acp/blocks.lua\nREADME.md",
 					},
 					{
 						id = "change-1",
@@ -385,6 +388,7 @@ test("chat blocks preserve roles, grouped activity, code, and failures", functio
 						command = "false",
 						status = "completed",
 						exitCode = 1,
+						aggregatedOutput = "boom",
 					},
 				},
 			},
@@ -395,15 +399,24 @@ test("chat blocks preserve roles, grouped activity, code, and failures", functio
 		vim.tbl_map(function(block)
 			return block.kind
 		end, chat.blocks),
-		{ "user", "activity", "agent", "error" }
+		{ "user", "activity", "activity", "agent", "activity" }
 	)
-	eq(#chat.blocks[2].children, 2)
+	eq(#chat.blocks[2].children, 1)
 	eq(chat.blocks[2].children[1].kind, "command")
-	eq(chat.blocks[2].children[2].kind, "file")
+	eq(chat.blocks[2].metadata.presentation, "command")
+	eq(chat.blocks[3].children[1].kind, "file")
 	local activity = chat:activities()[1]
-	eq(activity.line, chat.blocks[2].line1)
+	eq(activity.line, chat.blocks[2].header_line)
 	eq(activity.line2, chat.blocks[2].line2)
-	eq(activity.counts, { command = 1, tool = 0, file = 1 })
+	eq(activity.counts, { command = 1, tool = 0, file = 0 })
+	eq(#chat:activities(), 3)
+	local rendered = chat:render_lines()
+	for index, block in ipairs(chat.blocks) do
+		eq(block.lines[1], "")
+		if index > 1 then
+			ok(rendered[block.line1 - 1] ~= "", "expected exactly one blank row between top-level cells")
+		end
+	end
 
 	local code
 	for _, child in ipairs(chat.by_id["agent-1"].children) do
@@ -423,17 +436,235 @@ test("chat blocks preserve roles, grouped activity, code, and failures", functio
 	local text = table.concat(chat:render_lines(), "\n")
 	contains(text, render.header("user"))
 	contains(text, render.header("agent"))
-	contains(text, icons.get("command") .. " Command")
+	contains(text, "• Ran rg blocks")
+	contains(text, "  └ lua/acp/blocks.lua")
 	contains(text, icons.get("changes") .. " update")
-	contains(text, icons.get("error") .. " Command")
+	contains(text, "• Ran false")
+	contains(text, "  └ boom")
 	contains(text, "lua/acp/blocks.lua")
-	contains(text, "Command completed (exit 1)")
 	eq(#chat:diagnostics(), 1)
 	eq(#chat:code_blocks(), 1)
 	local section_text, range = chat:section_text(code.line1)
 	contains(section_text, render.header("agent"))
 	contains(section_text, "Done.")
 	eq(range.block_id, "agent-1")
+end)
+
+test("Codex-style command cells stream a bounded head-tail preview", function()
+	local chat = blocks.new()
+	local _, activity_block = chat:start_item({
+		id = "command-preview",
+		type = "commandExecution",
+		command = "printf output\necho done",
+		status = "inProgress",
+		commandActions = {},
+	})
+	eq(activity_block.lines, { "", "• Running printf output", "  │ echo done" })
+
+	local output_lines = {}
+	for index = 1, 10 do
+		table.insert(output_lines, (index == 1 and "\27[31m" or "") .. "line " .. index)
+	end
+	local update = chat:append_command_output("command-preview", table.concat(output_lines, "\n"))
+	eq(update.type, "replace")
+	eq(#activity_block.lines, 3 + action.output_preview_limit)
+	eq(activity_block.lines, {
+		"",
+		"• Running printf output",
+		"  │ echo done",
+		"  └ line 1",
+		"    line 2",
+		"    … +6 lines (K to inspect)",
+		"    line 9",
+		"    line 10",
+	})
+
+	local completed = chat:complete_item({
+		id = "command-preview",
+		type = "commandExecution",
+		command = "printf output\necho done",
+		status = "completed",
+		exitCode = 0,
+		durationMs = 420,
+	})
+	eq(completed.type, "replace")
+	contains(activity_block.lines[2], "• Ran printf output")
+	local details = chat:activity_detail_lines(activity_block.line1)
+	local detail_text = table.concat(details, "\n")
+	contains(detail_text, "$ printf output\necho done")
+	contains(detail_text, "line 1")
+	contains(detail_text, "line 10")
+	contains(detail_text, "✓ • 420ms")
+	local activity = chat:activity_at(activity_block.line1)
+	eq(activity.counts, { command = 1, tool = 0, file = 0 })
+	eq(activity.presentation, "command")
+
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, chat:render_lines())
+	view.refresh_transcript(bufnr, 0, chat)
+	local highlights = {}
+	for _, extmark in
+		ipairs(vim.api.nvim_buf_get_extmarks(bufnr, view.transcript_namespace, 0, -1, {
+			details = true,
+		}))
+	do
+		ok(not (extmark[4] and extmark[4].virt_text), "action glyphs should be literal buffer text")
+		highlights[extmark[4] and extmark[4].hl_group or ""] = true
+	end
+	ok(highlights.AcpActionSuccess)
+	ok(highlights.AcpActionTitle)
+	ok(highlights.AcpActionOutput)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
+test("Codex-style tools and exploration use Calling and Explored hierarchies", function()
+	local chat = blocks.new()
+	local _, tool_block = chat:start_item({
+		id = "tool-live",
+		type = "mcpToolCall",
+		server = "search",
+		tool = "find_docs",
+		arguments = { query = "ratatui styling", limit = 3 },
+		status = "inProgress",
+	})
+	contains(tool_block.lines[2], "• Calling search.find_docs(")
+	chat:update_item_progress("tool-live", "Searching documentation")
+	eq(tool_block.lines[3], "  └ Searching documentation")
+	chat:complete_item({
+		id = "tool-live",
+		type = "mcpToolCall",
+		server = "search",
+		tool = "find_docs",
+		arguments = { query = "ratatui styling", limit = 3 },
+		status = "completed",
+		result = { content = { { type = "text", text = "Found styling guidance in styles.md" } } },
+	})
+	contains(tool_block.lines[2], "• Called search.find_docs(")
+	eq(tool_block.lines[3], "  └ Found styling guidance in styles.md")
+	eq(chat:activity_at(tool_block.line1).presentation, "tool")
+
+	local explore = blocks.new()
+	local _, explore_block = explore:add_item({
+		id = "search-1",
+		type = "commandExecution",
+		command = "rg shimmer_spans",
+		commandActions = { { type = "search", command = "rg shimmer_spans", query = "shimmer_spans" } },
+		status = "completed",
+		exitCode = 0,
+	})
+	explore:add_item({
+		id = "read-1",
+		type = "commandExecution",
+		command = "sed -n 1,80p shimmer.rs status_indicator_widget.rs",
+		commandActions = {
+			{ type = "read", command = "sed", name = "shimmer.rs", path = "shimmer.rs" },
+			{
+				type = "read",
+				command = "sed",
+				name = "status_indicator_widget.rs",
+				path = "status_indicator_widget.rs",
+			},
+		},
+		status = "completed",
+		exitCode = 0,
+	})
+	eq(explore_block.lines, {
+		"",
+		"• Explored",
+		"  └ Search shimmer_spans",
+		"    Read shimmer.rs, status_indicator_widget.rs",
+	})
+	eq(#explore_block.children, 2)
+	local detail = table.concat(explore:activity_detail_lines(explore_block.line1), "\n")
+	contains(detail, "$ rg shimmer_spans")
+	contains(detail, "$ sed -n 1,80p")
+
+	local failed = blocks.new()
+	local _, failed_block = failed:add_item({
+		id = "tool-failed",
+		type = "mcpToolCall",
+		server = "search",
+		tool = "find_docs",
+		status = "completed",
+		result = { isError = true, content = { { type = "text", text = "No index available" } } },
+	})
+	eq(failed_block.status, "failed")
+	eq(#failed:diagnostics(), 1)
+end)
+
+test("ACP Tree-sitter grammar is distributable and keeps the acp filetype", function()
+	local parser = treesitter.parser_config()
+	eq(parser.location, "tree-sitter-acp")
+	eq(parser.queries, "queries/acp")
+	for _, path in ipairs({
+		"tree-sitter-acp/grammar.js",
+		"tree-sitter-acp/src/parser.c",
+		"tree-sitter-acp/src/node-types.json",
+		"queries/acp/highlights.scm",
+		"queries/acp/injections.scm",
+	}) do
+		ok(vim.fn.filereadable(vim.fs.joinpath(parser.path, path)) == 1, "missing parser artifact: " .. path)
+	end
+	treesitter.setup()
+	eq(vim.treesitter.language.get_lang("acp"), "acp")
+end)
+
+test("hot reload migration adds Codex spacing to existing activity blocks", function()
+	local restored = blocks.adopt({
+		blocks = {
+			{
+				id = "old-command",
+				kind = "activity",
+				status = "completed",
+				lines = { "• Ran true", "  └ (no output)" },
+				children = {
+					{
+						id = "old-command",
+						kind = "command",
+						status = "completed",
+						item = {
+							id = "old-command",
+							type = "commandExecution",
+							command = "true",
+							status = "completed",
+							exitCode = 0,
+						},
+						output = "",
+						relative_line1 = 1,
+						relative_line2 = 2,
+					},
+				},
+				header_offset = 1,
+				metadata = { presentation = "command" },
+			},
+			{
+				id = "old-files",
+				kind = "activity",
+				status = "completed",
+				lines = { icons.get("changes") .. " update `lua/acp/ui.lua`" },
+				children = {
+					{
+						id = "old-file",
+						kind = "file",
+						status = "completed",
+						lines = { icons.get("changes") .. " update `lua/acp/ui.lua`" },
+						relative_line1 = 1,
+						relative_line2 = 1,
+					},
+				},
+				header_offset = 1,
+				metadata = { presentation = "files" },
+			},
+		},
+		sequence = 2,
+		revision = 0,
+	})
+
+	for _, block in ipairs(restored.blocks) do
+		eq(block.lines[1], "")
+		eq(block.header_offset, 2)
+		eq(block.children[1].line1, block.header_line)
+	end
 end)
 
 test("legacy transcripts keep sections, activity, and code after block migration", function()
@@ -501,7 +732,7 @@ test("live chat blocks emit bounded incremental buffer operations", function()
 	eq(second_delta.lines, { "One", "Two" })
 	apply(second_delta)
 
-	local activity_operation = chat:add_item({
+	local activity_operation, activity_block = chat:add_item({
 		id = "command-live-1",
 		type = "commandExecution",
 		command = "true",
@@ -509,20 +740,24 @@ test("live chat blocks emit bounded incremental buffer operations", function()
 		exitCode = 0,
 	})
 	apply(activity_operation)
-	local merge_operation, activity_block = chat:add_item({
+	local tool_operation, tool_block = chat:add_item({
 		id = "tool-live-1",
 		type = "dynamicToolCall",
 		tool = "inspect",
 		status = "completed",
 	})
-	apply(merge_operation)
-	eq(merge_operation.type, "insert")
-	eq(#activity_block.children, 2)
+	apply(tool_operation)
+	eq(tool_operation.type, "insert")
+	eq(#tool_block.children, 1)
+	eq(#chat:activities(), 2)
 	local activity_line = activity_block.line1
+	local tool_line = tool_block.line1
 	local late_delta = chat:append_text("agent-live", "\nThree")
 	apply(late_delta)
 	eq(activity_block.line1, activity_line + 1)
-	eq(activity_block.children[1].line1, activity_block.line1)
+	eq(tool_block.line1, tool_line + 1)
+	eq(activity_block.children[1].line1, activity_block.header_line)
+	eq(tool_block.children[1].line1, tool_block.header_line)
 	eq(chat.line_count, #chat:render_lines())
 	eq(vim.api.nvim_buf_get_lines(bufnr, chat.line_count, -1, false), { "", "", "" })
 	vim.api.nvim_buf_delete(bufnr, { force = true })
@@ -560,21 +795,21 @@ test("large block transcripts keep lookup and streaming edits bounded", function
 
 	local started = (vim.uv or vim.loop).hrtime()
 	local chat = blocks.from_thread(thread)
-	eq(chat.line_count, 5000)
+	eq(chat.line_count, 5500)
 	for line = 1, chat.line_count, 5 do
 		ok(chat:block_at(line))
 	end
 	local elapsed_ms = ((vim.uv or vim.loop).hrtime() - started) / 1000000
-	ok(elapsed_ms < 1000, ("expected 5,000-line block indexing under 1s, got %.2fms"):format(elapsed_ms))
+	ok(elapsed_ms < 1000, ("expected 5,500-line block indexing under 1s, got %.2fms"):format(elapsed_ms))
 	local semantic = chat:semantic_data(vim.fn.getcwd())
 	ok(chat:semantic_data(vim.fn.getcwd()) == semantic, "expected model-wide semantics to reuse the current revision")
 
 	local operation = chat:append_text("agent-250", "\nfinal streamed line")
 	eq(operation.type, "replace")
-	eq(operation.start_row, 4999)
-	eq(operation.end_row, 5000)
+	eq(operation.start_row, 5499)
+	eq(operation.end_row, 5500)
 	eq(#operation.lines, 2)
-	eq(chat.line_count, 5001)
+	eq(chat.line_count, 5501)
 	ok(chat:semantic_data(vim.fn.getcwd()) ~= semantic, "expected a streamed edit to invalidate model-wide semantics")
 end)
 
@@ -616,6 +851,26 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	}))
 	ok(not prompt_title:find("steer", 1, true))
 	ok(not prompt_title:find("queued", 1, true))
+	local prompt_footer = chunks_text(view.prompt_footer({
+		model = "gpt-5.6",
+		effort = "high",
+		tokens = { modelContextWindow = 1050000 },
+		contexts = { { type = "file" } },
+	}, 83))
+	eq(vim.fn.strdisplaywidth(prompt_footer), 83)
+	contains(prompt_footer, "Prompt")
+	contains(prompt_footer, "gpt-5.6 · high")
+	contains(prompt_footer, "ctx 1.1m")
+	contains(prompt_footer, "+1 context")
+	contains(prompt_footer, "<C-s> steer")
+	contains(prompt_footer, "<C-CR> send")
+	ok(
+		prompt_footer:find("Prompt", 1, true) < prompt_footer:find("<C-s> steer", 1, true),
+		"expected prompt metadata before the lower-right key hints"
+	)
+	local narrow_footer = chunks_text(view.prompt_footer({ model = "gpt-5.6", effort = "high" }, 20))
+	eq(vim.fn.strdisplaywidth(narrow_footer), 20)
+	contains(narrow_footer, "Prompt")
 	local idle_block = view.instruction_block({ status = "ready" }, 28, 4)
 	eq(#idle_block.lines, 1)
 	contains(idle_block.lines[1], icons.get("idle") .. " ready")
@@ -756,7 +1011,7 @@ test("custom output model restores sections, items, folds, references, and probl
 	ok(#output.output_map_entries(lines, { cwd = vim.fn.getcwd() }) > #sections)
 end)
 
-test("completed activity groups collapse together while failures stay visible", function()
+test("legacy completed activity groups collapse together while failures stay visible", function()
 	local lines = {
 		"## Codex",
 		"> Command completed (exit 0): `rg error lua/acp`",
@@ -862,7 +1117,7 @@ test("output UI restores semantic visuals and section drafting", function()
 	for _, extmark in ipairs(current_marks) do
 		ok(not (extmark[4] or {}).virt_text, "cursor highlights should not add virtual text")
 	end
-	eq(#vim.diagnostic.get(output_buf, { namespace = output_ui.namespaces.diagnostics }), 1)
+	eq(#vim.diagnostic.get(output_buf), 0)
 	ok(output_ui.yank_section(state))
 	contains(vim.fn.getreg('"'), "Review")
 	ok(output_ui.draft_section(state))
@@ -1050,12 +1305,19 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 4)
 		eq(vim.bo[state.sessions_buf].filetype, "acp-sessions")
 		eq(vim.bo[state.output_buf].filetype, "acp")
+		ok(
+			vim.tbl_contains(
+				{ "treesitter-acp", "treesitter-markdown" },
+				vim.b[state.output_buf].acp_language_injection
+			),
+			"expected an ACP parser or the Markdown injection fallback"
+		)
 		eq(vim.bo[state.input_buf].filetype, "acp-prompt")
 		eq(vim.bo[state.sessions_buf].undolevels, -1)
 		eq(vim.bo[state.output_buf].undolevels, -1)
 		eq(vim.wo[state.output_win].foldmethod, "expr")
 		eq(vim.wo[state.output_win].foldexpr, "v:lua.acp_nvim_output_foldexpr()")
-		eq(vim.wo[state.output_win].foldlevel, 1)
+		eq(vim.wo[state.output_win].foldlevel, 2)
 		eq(vim.wo[state.output_win].foldcolumn, "1")
 		eq(vim.wo[state.output_win].signcolumn, "no")
 		eq(vim.wo[state.output_win].statuscolumn, "%C ")
@@ -1096,9 +1358,13 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		local turn_panel = vim.api.nvim_win_get_config(state.instruction_win)
 		eq(prompt.relative, "editor")
 		eq(prompt.zindex, 50)
-		contains(chunks_text(prompt.title), "Prompt")
-		contains(chunks_text(prompt.footer), "<C-s> steer")
-		contains(chunks_text(prompt.footer), "<C-CR> send")
+		ok(not chunks_text(prompt.title):find("Prompt", 1, true))
+		local prompt_footer = chunks_text(prompt.footer)
+		contains(prompt_footer, "Prompt")
+		contains(prompt_footer, "<C-s> steer")
+		contains(prompt_footer, "<C-CR> send")
+		eq(prompt.footer_pos, "left")
+		eq(vim.fn.strdisplaywidth(prompt_footer), prompt.width)
 		eq(turn_panel.relative, "editor")
 		eq(turn_panel.focusable, false)
 		eq(turn_panel.col, prompt.col)
@@ -1264,9 +1530,9 @@ test("sessions split lists and resumes Codex threads", function()
 			vim.tbl_map(function(block)
 				return block.kind
 			end, state.chat.blocks),
-			{ "user", "activity", "agent" }
+			{ "user", "activity", "activity", "agent" }
 		)
-		eq(#state.chat:activities(), 1)
+		eq(#state.chat:activities(), 2)
 		eq(state.chat:code_block_at(state.chat.by_id["restored-agent"].line2 - 1).language, "lua")
 		local lines = vim.api.nvim_buf_get_lines(state.sessions_buf, 0, -1, false)
 		eq(lines, { "* Second session", "  First session" })
@@ -1334,6 +1600,37 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(fake.turns[1].thread_id, "thread-1")
 		eq(fake.turns[1].payload.input[1].text, "Simplify this plugin")
 		eq(state.busy, true)
+		fake.handlers.on_notification("item/started", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			item = {
+				id = "command-1",
+				type = "commandExecution",
+				command = "rg blocks",
+				status = "inProgress",
+			},
+		})
+		local command_output = {}
+		for index = 1, 10 do
+			table.insert(command_output, ("match %d"):format(index))
+		end
+		local action_tick = vim.api.nvim_buf_get_changedtick(state.output_buf)
+		fake.handlers.on_notification("item/commandExecution/outputDelta", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			itemId = "command-1",
+			delta = table.concat(command_output, "\n"),
+		})
+		eq(vim.api.nvim_buf_get_changedtick(state.output_buf), action_tick)
+		ok(
+			vim.wait(250, function()
+				local block = state.chat.by_id["command-1"]
+				return block and table.concat(block.lines, "\n"):find("… +6 lines", 1, true) ~= nil
+			end, 5),
+			"expected bounded command output to flush promptly"
+		)
+		local command_block = state.chat.by_id["command-1"]
+		eq(#command_block.lines, action.output_preview_limit + 2)
 		fake.handlers.on_notification("item/completed", {
 			threadId = "thread-1",
 			turnId = "turn-1",
@@ -1345,14 +1642,49 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 				exitCode = 0,
 			},
 		})
+		for index = 2, 7 do
+			fake.handlers.on_notification("item/completed", {
+				threadId = "thread-1",
+				turnId = "turn-1",
+				item = {
+					id = "command-" .. index,
+					type = "commandExecution",
+					command = "echo command-" .. index,
+					status = "completed",
+					exitCode = 0,
+				},
+			})
+		end
+		fake.handlers.on_notification("item/started", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			item = {
+				id = "tool-1",
+				type = "mcpToolCall",
+				server = "search",
+				tool = "inspect",
+				arguments = { query = "action cells" },
+				status = "inProgress",
+			},
+		})
+		fake.handlers.on_notification("item/mcpToolCall/progress", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			itemId = "tool-1",
+			message = "Inspecting action cells",
+		})
+		contains(table.concat(state.chat.by_id["tool-1"].lines, "\n"), "Inspecting action cells")
 		fake.handlers.on_notification("item/completed", {
 			threadId = "thread-1",
 			turnId = "turn-1",
 			item = {
 				id = "tool-1",
-				type = "dynamicToolCall",
+				type = "mcpToolCall",
+				server = "search",
 				tool = "inspect",
+				arguments = { query = "action cells" },
 				status = "completed",
+				result = { content = { { type = "text", text = "Found action cells" } } },
 			},
 		})
 
@@ -1503,16 +1835,26 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(state.tokens.totalTokens, 42)
 		eq(state.busy, false)
 		eq(state.output_position_mode, "normal")
+		local expected_kinds = { "user" }
+		for _ = 1, 8 do
+			table.insert(expected_kinds, "activity")
+		end
+		table.insert(expected_kinds, "agent")
 		eq(
 			vim.tbl_map(function(block)
 				return block.kind
 			end, state.chat.blocks),
-			{ "user", "activity", "agent" }
+			expected_kinds
 		)
 		contains(state.chat.by_id["message-1"].text, "Detail line 40")
 		eq(state.output_cache.chat_blocks, state.chat.blocks)
-		local activity = state.chat:activities()[1]
-		eq(activity.counts, { command = 1, tool = 1, file = 0 })
+		local activities = state.chat:activities()
+		eq(#activities, 8)
+		for index = 1, 7 do
+			eq(activities[index].counts, { command = 1, tool = 0, file = 0 })
+		end
+		eq(activities[8].counts, { command = 0, tool = 1, file = 0 })
+		local activity = activities[1]
 		eq(
 			vim.api.nvim_win_call(state.output_win, function()
 				return vim.fn.foldlevel(activity.line)
@@ -1523,11 +1865,14 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			vim.api.nvim_win_call(state.output_win, function()
 				return vim.fn.foldclosed(activity.line)
 			end),
-			activity.line
+			-1
 		)
 		vim.api.nvim_win_set_cursor(state.output_win, { state.chat.blocks[1].header_line, 0 })
 		ok(output_ui.jump_section(state, 1))
 		eq(vim.api.nvim_win_get_cursor(state.output_win)[1], activity.line)
+		ok(output_ui.jump_section(state, 1))
+		eq(vim.api.nvim_win_get_cursor(state.output_win)[1], activities[2].line)
+		vim.api.nvim_win_set_cursor(state.output_win, { activities[#activities].line, 0 })
 		ok(output_ui.jump_section(state, 1))
 		eq(vim.api.nvim_win_get_cursor(state.output_win)[1], state.chat.by_id["message-1"].header_line)
 		vim.api.nvim_win_set_cursor(state.output_win, { activity.line, 0 })
@@ -1535,7 +1880,10 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		ok(output_ui.yank_section(state))
 		local activity_text = vim.fn.getreg('"')
 		contains(activity_text, "rg blocks")
-		contains(activity_text, "inspect")
+		contains(activity_text, "match 1")
+		contains(activity_text, "match 10")
+		ok(not activity_text:find("echo command-7", 1, true))
+		ok(not activity_text:find("search.inspect", 1, true))
 		ok(not activity_text:find("Simplify this plugin", 1, true))
 		local windows_before = {}
 		for _, winid in ipairs(vim.api.nvim_list_wins()) do
@@ -1553,8 +1901,25 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		local preview_text =
 			table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(preview_win), 0, -1, false), "\n")
 		contains(preview_text, "rg blocks")
-		contains(preview_text, "inspect")
+		contains(preview_text, "match 1")
+		contains(preview_text, "match 10")
+		ok(not preview_text:find("echo command-7", 1, true))
 		vim.api.nvim_win_close(preview_win, true)
+		vim.api.nvim_win_set_cursor(state.output_win, { activities[#activities].line, 0 })
+		ok(output_ui.inspect(state, activities[#activities]))
+		local tool_preview_win
+		for _, winid in ipairs(vim.api.nvim_list_wins()) do
+			if not windows_before[winid] then
+				tool_preview_win = winid
+				break
+			end
+		end
+		ok(tool_preview_win and vim.api.nvim_win_is_valid(tool_preview_win), "expected a tool detail float")
+		local tool_preview =
+			table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(tool_preview_win), 0, -1, false), "\n")
+		contains(tool_preview, "search.inspect")
+		contains(tool_preview, "Found action cells")
+		vim.api.nvim_win_close(tool_preview_win, true)
 		eq(vim.api.nvim_buf_get_lines(state.output_buf, 0, state.chat.line_count, false), state.chat:render_lines())
 		eq(vim.api.nvim_buf_line_count(state.output_buf), state.chat.line_count + state.prompt_spacer_rows)
 		fake.handlers.on_stderr(server_error_stderr())

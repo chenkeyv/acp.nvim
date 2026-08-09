@@ -1,3 +1,4 @@
+local action = require("acp.action")
 local render = require("acp.render")
 local semantics = require("acp.block_semantics")
 local transcript = require("acp.transcript")
@@ -158,10 +159,35 @@ local function refresh_block_ranges(block)
 		end
 	elseif block.kind == "activity" then
 		for _, child in ipairs(block.children or {}) do
-			child.line1 = block.line1 + (child.relative_line1 or 1) - 1
-			child.line2 = block.line1 + (child.relative_line2 or child.relative_line1 or 1) - 1
+			if child.relative_line1 then
+				child.line1 = block.line1 + child.relative_line1 - 1
+				child.line2 = block.line1 + (child.relative_line2 or child.relative_line1) - 1
+			else
+				child.line1 = nil
+				child.line2 = nil
+			end
 		end
 	end
+end
+
+local function full_activity_lines(block)
+	if
+		block.metadata
+		and (
+			block.metadata.presentation == "command"
+			or block.metadata.presentation == "tool"
+			or block.metadata.presentation == "explore"
+		)
+	then
+		return action.detail_lines(block) or copy_lines(block.lines)
+	end
+	local lines = {}
+	for _, child in ipairs(block.children or {}) do
+		for _, line in ipairs(child.lines or {}) do
+			table.insert(lines, tostring(line or ""))
+		end
+	end
+	return #lines > 0 and lines or copy_lines(block.lines)
 end
 
 local function block_id(model, prefix, requested)
@@ -174,16 +200,30 @@ end
 
 local function new_block(model, kind, opts)
 	opts = opts or {}
+	local lines = copy_lines(opts.lines)
+	local separated = kind ~= "legacy"
+	local header_offset = opts.header_offset
+	local content_offset = opts.content_offset
+	if separated and lines[1] ~= "" then
+		table.insert(lines, 1, "")
+		if header_offset then
+			header_offset = header_offset + 1
+		end
+		if content_offset then
+			content_offset = content_offset + 1
+		end
+	end
 	local block = {
 		id = block_id(model, kind, opts.id),
 		kind = kind,
 		status = opts.status,
 		text = opts.text,
-		lines = copy_lines(opts.lines),
+		lines = lines,
 		children = opts.children or {},
-		header_offset = opts.header_offset,
-		content_offset = opts.content_offset,
+		header_offset = header_offset,
+		content_offset = content_offset,
 		metadata = opts.metadata or {},
+		separated = separated,
 		revision = 1,
 	}
 	if #block.lines == 0 then
@@ -215,6 +255,17 @@ local function shift_after(model, block, delta)
 	model.line_count = model.line_count + delta
 end
 
+local function index_activity_children(model, block)
+	if block.kind ~= "activity" then
+		return
+	end
+	for _, child in ipairs(block.children or {}) do
+		if present(child.id) then
+			model.activity_items[tostring(child.id)] = { block = block, child = child }
+		end
+	end
+end
+
 function Model:_append_block(block)
 	local old_line_count = self.line_count
 	block.index = #self.blocks + 1
@@ -223,6 +274,7 @@ function Model:_append_block(block)
 	self.line_count = block.line2
 	table.insert(self.blocks, block)
 	self.by_id[block.id] = block
+	index_activity_children(self, block)
 	refresh_block_ranges(block)
 	touch_model(self)
 	return {
@@ -232,6 +284,56 @@ function Model:_append_block(block)
 		lines = copy_lines(block.lines),
 		block = block,
 	}
+end
+
+function Model:_replace_block_lines(block, lines)
+	if not block then
+		return nil
+	end
+	lines = copy_lines(lines)
+	if block.separated and lines[1] ~= "" then
+		table.insert(lines, 1, "")
+	end
+	if #lines == 0 then
+		lines = { "" }
+	end
+	local old_line2 = block.line2
+	local old_count = #block.lines
+	block.lines = lines
+	block.line2 = block.line1 + #lines - 1
+	shift_after(self, block, #lines - old_count)
+	touch_block(block)
+	refresh_block_ranges(block)
+	touch_model(self)
+	return {
+		type = "replace",
+		start_row = block.line1 - 1,
+		end_row = old_line2,
+		lines = copy_lines(lines),
+		block = block,
+	}
+end
+
+function Model:_render_action_block(block)
+	if not block or block.kind ~= "activity" then
+		return nil
+	end
+	local active = false
+	local failed = false
+	for _, child in ipairs(block.children or {}) do
+		active = active or action.is_active(child)
+		failed = failed or action.failed(child)
+		child.relative_line1 = nil
+		child.relative_line2 = nil
+	end
+	block.status = active and "in progress" or failed and "failed" or "completed"
+	local lines = action.render_block(block)
+	if #block.children == 1 then
+		block.children[1].lines = copy_lines(lines)
+		block.children[1].relative_line1 = block.header_offset or 1
+		block.children[1].relative_line2 = (block.header_offset or 1) + #lines - 1
+	end
+	return self:_replace_block_lines(block, lines)
 end
 
 function Model:_append_block_lines(block, lines, child)
@@ -244,14 +346,15 @@ function Model:_append_block_lines(block, lines, child)
 	for _, line in ipairs(lines) do
 		table.insert(block.lines, line)
 	end
+	child = child or { kind = "activity", lines = lines }
+	child.lines = copy_lines(child.lines or lines)
 	touch_block(block)
 	block.line2 = block.line2 + #lines
 	shift_after(self, block, #lines)
-	if child then
-		child.relative_line1 = relative_line1
-		child.relative_line2 = relative_line1 + #lines - 1
-		table.insert(block.children, child)
-	end
+	child.relative_line1 = relative_line1
+	child.relative_line2 = relative_line1 + #lines - 1
+	table.insert(block.children, child)
+	index_activity_children(self, block)
 	refresh_block_ranges(block)
 	touch_model(self)
 	return {
@@ -354,6 +457,83 @@ function Model:append_text(id, text)
 	}
 end
 
+function Model:start_item(item, opts)
+	opts = opts or {}
+	local action_kind = action.kind(item)
+	if not action_kind then
+		return nil
+	end
+	local requested_id = present(item.id) and tostring(item.id) or nil
+	local existing = requested_id and self.activity_items[requested_id] or nil
+	if existing then
+		action.update_child(existing.child, item)
+		return self:_render_action_block(existing.block), existing.block
+	end
+
+	local child = action.new_child(item)
+	child.id = child.id or block_id(self, action_kind, opts.id)
+	child.item.id = child.item.id or child.id
+	local presentation = action.is_exploration(item) and "explore" or action_kind
+	local last = self.blocks[#self.blocks]
+	if
+		presentation == "explore"
+		and self.activity_open
+		and last
+		and last.kind == "activity"
+		and last.metadata
+		and last.metadata.presentation == "explore"
+	then
+		table.insert(last.children, child)
+		index_activity_children(self, last)
+		return self:_render_action_block(last), last
+	end
+
+	self:break_activity()
+	local block = new_block(self, "activity", {
+		id = item.id or opts.id,
+		status = normalize_status(item.status),
+		lines = action.render_block({
+			children = { child },
+			metadata = { presentation = presentation },
+		}),
+		children = { child },
+		header_offset = 1,
+		metadata = { presentation = presentation },
+	})
+	block.status = action.is_active(child) and "in progress" or action.failed(child) and "failed" or "completed"
+	child.lines = action.render_block(block)
+	child.relative_line1 = block.header_offset or 1
+	child.relative_line2 = (block.header_offset or 1) + #child.lines - 1
+	self.activity_open = presentation == "explore"
+	return self:_append_block(block), block
+end
+
+function Model:append_command_output(id, delta)
+	local entry = present(id) and self.activity_items[tostring(id)] or nil
+	if not entry or not action.append_output(entry.child, delta) then
+		return nil
+	end
+	return self:_render_action_block(entry.block), entry.block
+end
+
+function Model:update_item_progress(id, message)
+	local entry = present(id) and self.activity_items[tostring(id)] or nil
+	if not entry or not action.set_progress(entry.child, message) then
+		return nil
+	end
+	return self:_render_action_block(entry.block), entry.block
+end
+
+function Model:complete_item(item, opts)
+	local requested_id = type(item) == "table" and present(item.id) and tostring(item.id) or nil
+	local entry = requested_id and self.activity_items[requested_id] or nil
+	if entry and action.kind(item) then
+		action.update_child(entry.child, item)
+		return self:_render_action_block(entry.block), entry.block
+	end
+	return self:add_item(item, opts)
+end
+
 function Model:add_item(item, opts)
 	opts = opts or {}
 	if type(item) ~= "table" then
@@ -362,11 +542,14 @@ function Model:add_item(item, opts)
 	if item.type == "fileChange" then
 		self:invalidate_references()
 	end
+	if action.kind(item) then
+		return self:start_item(item, opts)
+	end
 	local lines = render.completed_item(item)
 	if #lines == 0 then
 		return nil
 	end
-	local activity_kind = activity_types[item.type]
+	local activity_kind = item.type == "fileChange" and activity_types[item.type] or nil
 	if activity_kind and activity_success(item) then
 		local block = self.blocks[#self.blocks]
 		local child = {
@@ -376,7 +559,13 @@ function Model:add_item(item, opts)
 			item = vim.deepcopy(item),
 			lines = copy_lines(lines),
 		}
-		if block and block.kind == "activity" and self.activity_open then
+		if
+			block
+			and block.kind == "activity"
+			and self.activity_open
+			and block.metadata
+			and block.metadata.presentation == "files"
+		then
 			return self:_append_block_lines(block, lines, child), block
 		end
 		block = new_block(self, "activity", {
@@ -385,9 +574,10 @@ function Model:add_item(item, opts)
 			lines = lines,
 			children = { child },
 			header_offset = 1,
+			metadata = { presentation = "files" },
 		})
-		child.relative_line1 = 1
-		child.relative_line2 = #lines
+		child.relative_line1 = block.header_offset or 1
+		child.relative_line2 = (block.header_offset or 1) + #lines - 1
 		self.activity_open = true
 		return self:_append_block(block), block
 	end
@@ -489,8 +679,12 @@ function Model:section_at(line)
 	if not kind then
 		return nil
 	end
+	local presentation = block.metadata and block.metadata.presentation
 	local title = block.kind == "activity"
-			and ("%d completed item%s"):format(#(block.children or {}), #(block.children or {}) == 1 and "" or "s")
+			and (presentation == "command" and "Command" or presentation == "tool" and "Tool call" or presentation == "explore" and "Exploration" or ("%d completed item%s"):format(
+				#(block.children or {}),
+				#(block.children or {}) == 1 and "" or "s"
+			))
 		or section_titles[block.kind]
 	return {
 		line = block.header_line or block.line1,
@@ -581,7 +775,7 @@ function Model:activity_at(line)
 		end
 		return nil
 	end
-	if not block or block.kind ~= "activity" or block.line2 <= block.line1 then
+	if not block or block.kind ~= "activity" then
 		return nil
 	end
 	local counts = { command = 0, tool = 0, file = 0 }
@@ -592,16 +786,25 @@ function Model:activity_at(line)
 	end
 	local group = {
 		kind = "activity",
-		line = block.line1,
+		line = block.header_line or block.line1,
 		line2 = block.line2,
 		col = 1,
 		count = #block.children,
 		counts = counts,
 		total_lines = self.line_count,
 		block_id = block.id,
+		presentation = block.metadata and block.metadata.presentation,
 	}
 	group.label = require("acp.output").activity_summary(group)
 	return group
+end
+
+function Model:activity_detail_lines(line)
+	local block = type(line) == "table" and line or self:block_at(tonumber(line) or 1)
+	if not block or block.kind ~= "activity" then
+		return nil
+	end
+	return full_activity_lines(block)
 end
 
 function Model:activities()
@@ -637,7 +840,30 @@ function Model:references(cwd, limit)
 end
 
 function Model:diagnostics()
-	return semantics.diagnostics(self)
+	local values = semantics.diagnostics(self)
+	for _, block in ipairs(self.blocks) do
+		local presentation = block.metadata and block.metadata.presentation
+		if
+			block.kind == "activity"
+			and block.status == "failed"
+			and (presentation == "command" or presentation == "tool")
+		then
+			local child = block.children and block.children[1]
+			local item = child and child.item or {}
+			local label = presentation == "command" and tostring(item.command or "command")
+				or tostring(item.tool or "tool")
+			table.insert(values, {
+				lnum = (block.header_line or block.line1) - 1,
+				col = 0,
+				end_lnum = (block.header_line or block.line1) - 1,
+				end_col = #(block.lines[block.header_offset or 1] or ""),
+				severity = vim.diagnostic.severity.ERROR,
+				source = "acp.nvim",
+				message = (presentation == "command" and "Command failed: " or "Tool failed: ") .. label,
+			})
+		end
+	end
+	return values
 end
 
 function Model:semantic_data(cwd)
@@ -665,10 +891,14 @@ end
 
 function Model:reindex()
 	self.by_id = {}
+	self.activity_items = {}
 	self.line_count = 0
 	for index, block in ipairs(self.blocks or {}) do
 		block.index = index
 		block.id = present(block.id) and tostring(block.id) or block_id(self, block.kind)
+		if block.separated == nil then
+			block.separated = block.kind ~= "legacy"
+		end
 		block.lines = copy_lines(block.lines)
 		if block.kind == "legacy" then
 			for line_index, line in ipairs(block.lines) do
@@ -698,12 +928,42 @@ function Model:reindex()
 				end
 			end
 		end
+		local presentation = block.metadata and block.metadata.presentation
+		if
+			block.kind == "activity"
+			and (presentation == "command" or presentation == "tool" or presentation == "explore")
+		then
+			local rendered = action.render_block(block)
+			block.lines = block.separated == false and rendered or vim.list_extend({ "" }, rendered)
+			block.header_offset = block.separated == false and 1 or 2
+			if #block.children == 1 then
+				block.children[1].lines = copy_lines(rendered)
+				block.children[1].relative_line1 = block.header_offset
+				block.children[1].relative_line2 = block.header_offset + #rendered - 1
+			end
+		end
+		if block.separated and block.lines[1] ~= "" then
+			table.insert(block.lines, 1, "")
+			block.header_offset = (tonumber(block.header_offset) or 1) + 1
+			if block.content_offset then
+				block.content_offset = block.content_offset + 1
+			end
+			for _, child in ipairs(block.children) do
+				if child.relative_line1 then
+					local relative_line1 = child.relative_line1
+					local relative_line2 = child.relative_line2 or relative_line1
+					child.relative_line1 = relative_line1 + 1
+					child.relative_line2 = relative_line2 + 1
+				end
+			end
+		end
 		block.revision = tonumber(block.revision) or 1
 		semantics.invalidate(block)
 		block.line1 = self.line_count + 1
 		block.line2 = self.line_count + #block.lines
 		self.line_count = block.line2
 		self.by_id[block.id] = block
+		index_activity_children(self, block)
 		refresh_block_ranges(block)
 	end
 	touch_model(self)
@@ -714,6 +974,7 @@ function M.new()
 	return setmetatable({
 		blocks = {},
 		by_id = {},
+		activity_items = {},
 		line_count = 0,
 		sequence = 0,
 		activity_open = false,

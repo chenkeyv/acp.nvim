@@ -1,0 +1,508 @@
+[
+  {
+    "type": "action_result",
+    "named": true,
+    "fields": {
+      "content": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "result_text",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "action_branch",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "action_result_continuation",
+    "named": true,
+    "fields": {
+      "content": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "result_text",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "action_indent",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "blank_line",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "code_fence_content",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "code_line",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "code_line",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "command_action",
+    "named": true,
+    "fields": {
+      "state": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "command_marker",
+            "named": true
+          }
+        ]
+      },
+      "subject": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "command_subject",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "action_result",
+          "named": true
+        },
+        {
+          "type": "action_result_continuation",
+          "named": true
+        },
+        {
+          "type": "command_continuation",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "command_continuation",
+    "named": true,
+    "fields": {
+      "content": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "command_detail",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "action_pipe",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "command_detail",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "command_subject",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "document",
+    "named": true,
+    "root": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "agent_header",
+          "named": true
+        },
+        {
+          "type": "blank_line",
+          "named": true
+        },
+        {
+          "type": "command_action",
+          "named": true
+        },
+        {
+          "type": "exploration_action",
+          "named": true
+        },
+        {
+          "type": "fenced_code_block",
+          "named": true
+        },
+        {
+          "type": "plan_header",
+          "named": true
+        },
+        {
+          "type": "review_header",
+          "named": true
+        },
+        {
+          "type": "text_line",
+          "named": true
+        },
+        {
+          "type": "tool_action",
+          "named": true
+        },
+        {
+          "type": "user_header",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "exploration_action",
+    "named": true,
+    "fields": {
+      "state": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "exploration_marker",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "exploration_continuation",
+          "named": true
+        },
+        {
+          "type": "exploration_result",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "exploration_continuation",
+    "named": true,
+    "fields": {
+      "content": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "exploration_detail",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "action_indent",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "exploration_detail",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "exploration_result",
+    "named": true,
+    "fields": {
+      "content": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "exploration_detail",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "action_branch",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "fence_end",
+    "named": true,
+    "fields": {
+      "delimiter": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "fence_delimiter",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "fence_padding",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "fence_start",
+    "named": true,
+    "fields": {
+      "delimiter": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "fence_delimiter",
+            "named": true
+          }
+        ]
+      },
+      "language": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "language",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "fence_padding",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "fenced_code_block",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "code_fence_content",
+          "named": true
+        },
+        {
+          "type": "fence_end",
+          "named": true
+        },
+        {
+          "type": "fence_start",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "result_text",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "text_line",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "text",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tool_action",
+    "named": true,
+    "fields": {
+      "state": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "tool_marker",
+            "named": true
+          }
+        ]
+      },
+      "subject": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "tool_subject",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "action_result",
+          "named": true
+        },
+        {
+          "type": "action_result_continuation",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tool_subject",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": " ",
+    "named": false
+  },
+  {
+    "type": "action_branch",
+    "named": true
+  },
+  {
+    "type": "action_indent",
+    "named": true
+  },
+  {
+    "type": "action_pipe",
+    "named": true
+  },
+  {
+    "type": "agent_header",
+    "named": true
+  },
+  {
+    "type": "command_marker",
+    "named": true
+  },
+  {
+    "type": "exploration_marker",
+    "named": true
+  },
+  {
+    "type": "fence_delimiter",
+    "named": true
+  },
+  {
+    "type": "fence_padding",
+    "named": true
+  },
+  {
+    "type": "language",
+    "named": true
+  },
+  {
+    "type": "plan_header",
+    "named": true
+  },
+  {
+    "type": "review_header",
+    "named": true
+  },
+  {
+    "type": "text",
+    "named": true
+  },
+  {
+    "type": "tool_marker",
+    "named": true
+  },
+  {
+    "type": "user_header",
+    "named": true
+  }
+]

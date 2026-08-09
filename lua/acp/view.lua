@@ -97,8 +97,26 @@ function M.define_highlights()
 		AcpTranscriptTool = { fg = "#737aa2" },
 		AcpTranscriptError = { link = "DiagnosticError" },
 		AcpTranscriptWarning = { link = "DiagnosticWarn" },
+		AcpActionTitle = { bold = true },
+		AcpActionActive = { fg = "#e0af68", bold = true },
+		AcpActionSuccess = { link = "DiagnosticOk" },
+		AcpActionFailure = { link = "DiagnosticError" },
+		AcpActionCommand = { fg = "#2ac3de" },
+		AcpActionTool = { fg = "#bb9af7" },
+		AcpActionTree = { link = "Comment" },
+		AcpActionOutput = { link = "Comment" },
 		AcpCodeFence = { fg = "#e0af68", bold = true },
 		AcpInlineCode = { fg = "#7dcfff" },
+		["@acp.user.header"] = { link = "AcpUserHeader" },
+		["@acp.agent.header"] = { link = "AcpAgentHeader" },
+		["@acp.section.header"] = { link = "AcpSectionHeader" },
+		["@acp.action.title"] = { link = "AcpActionTitle" },
+		["@acp.action.command"] = { link = "AcpActionCommand" },
+		["@acp.action.tool"] = { link = "AcpActionTool" },
+		["@acp.action.tree"] = { link = "AcpActionTree" },
+		["@acp.action.output"] = { link = "AcpActionOutput" },
+		["@acp.code.fence"] = { link = "AcpCodeFence" },
+		["@acp.code.language"] = { link = "AcpInjectedLanguage" },
 	}) do
 		definition.default = true
 		vim.api.nvim_set_hl(0, name, definition)
@@ -190,6 +208,18 @@ function M.sessions_winbar(count, loading, cwd)
 	return table.concat(chunks)
 end
 
+local function flatten(chunks)
+	local values = {}
+	for _, chunk in ipairs(chunks or {}) do
+		table.insert(values, chunk[1] or "")
+	end
+	return table.concat(values)
+end
+
+local function chunks_width(chunks)
+	return vim.fn.strdisplaywidth(flatten(chunks))
+end
+
 function M.prompt_title(state)
 	state = state or {}
 	local chunks = {}
@@ -213,7 +243,10 @@ function M.prompt_title(state)
 	return chunks
 end
 
-function M.prompt_footer()
+local function prompt_hints(compact)
+	if compact then
+		return { { " <C-CR> send ", "AcpPromptKey" } }
+	end
 	return {
 		{ " <C-s> steer ", "AcpPromptKey" },
 		{ "·", "AcpPromptHint" },
@@ -221,16 +254,35 @@ function M.prompt_footer()
 	}
 end
 
-local function flatten(chunks)
-	local values = {}
-	for _, chunk in ipairs(chunks or {}) do
-		table.insert(values, chunk[1] or "")
+function M.prompt_footer(state, width)
+	width = math.max(1, math.floor(tonumber(width) or 1))
+	local metadata = M.prompt_title(state)
+	local hints = prompt_hints(false)
+	if chunks_width(metadata) + chunks_width(hints) + 1 > width then
+		hints = prompt_hints(true)
 	end
-	return table.concat(values)
+	while #metadata > 1 and chunks_width(metadata) + chunks_width(hints) + 1 > width do
+		table.remove(metadata)
+		table.remove(metadata)
+	end
+	if chunks_width(metadata) + chunks_width(hints) + 1 > width then
+		hints = {}
+	end
+	if chunks_width(metadata) + 1 > width then
+		metadata = {}
+	end
+
+	local footer = metadata
+	local fill = math.max(1, width - chunks_width(metadata) - chunks_width(hints))
+	table.insert(footer, { " " .. string.rep("─", fill - 1), "AcpPromptBorder" })
+	for _, chunk in ipairs(hints) do
+		table.insert(footer, chunk)
+	end
+	return footer
 end
 
-function M.prompt_key(state)
-	return flatten(M.prompt_title(state)) .. "\0" .. flatten(M.prompt_footer())
+function M.prompt_key(state, width)
+	return flatten(M.prompt_footer(state, width))
 end
 
 local function one_line(value)
@@ -377,6 +429,8 @@ function M.prompt_config(output_win, state, opts)
 		return nil
 	end
 	local geometry = M.prompt_geometry(bounds, opts)
+	local footer = M.prompt_footer(state, geometry.width)
+	local footer_key = flatten(footer)
 	local prompt = {
 		relative = "editor",
 		row = geometry.row,
@@ -385,10 +439,8 @@ function M.prompt_config(output_win, state, opts)
 		height = geometry.height,
 		style = "minimal",
 		border = vim.deepcopy(prompt_border),
-		title = M.prompt_title(state),
-		title_pos = "left",
-		footer = M.prompt_footer(),
-		footer_pos = "right",
+		footer = footer,
+		footer_pos = "left",
 		zindex = 50,
 	}
 	local reserved_rows = geometry.reserved_rows
@@ -419,7 +471,7 @@ function M.prompt_config(output_win, state, opts)
 	end
 	return prompt,
 		reserved_rows,
-		M.prompt_key(state),
+		footer_key,
 		instruction_config,
 		instruction and instruction.lines or nil,
 		instruction and instruction.key or nil
@@ -495,8 +547,8 @@ function M.configure_output_window(winid, reserved_rows)
 	vim.wo[winid].foldmethod = "expr"
 	vim.wo[winid].foldexpr = "v:lua.acp_nvim_output_foldexpr()"
 	vim.wo[winid].foldtext = "v:lua.acp_nvim_output_foldtext()"
-	-- Keep transcript sections open while completed activity groups start collapsed.
-	vim.wo[winid].foldlevel = 1
+	-- Keep the compact Codex-style action previews visible; users can still fold them manually.
+	vim.wo[winid].foldlevel = 2
 	vim.wo[winid].foldcolumn = "1"
 	vim.wo[winid].statuscolumn = "%C "
 	vim.wo[winid].scrolloff = math.max(0, tonumber(reserved_rows) or 0)
@@ -566,6 +618,52 @@ local function quote_style(content)
 	return "AcpTranscriptMeta"
 end
 
+local action_titles = { "You ran", "Running", "Exploring", "Calling", "Explored", "Called", "Ran" }
+
+local function highlight_action_line(bufnr, row, line, block, line_number)
+	local presentation = block.metadata and block.metadata.presentation
+	if presentation ~= "command" and presentation ~= "tool" and presentation ~= "explore" then
+		return false
+	end
+	if line_number == (block.header_line or block.line1) then
+		local bullet_highlight = block.status == "failed" and "AcpActionFailure"
+			or block.status == "in progress" and "AcpActionActive"
+			or "AcpActionSuccess"
+		mark(bufnr, row, 0, { end_col = #"•", hl_group = bullet_highlight, priority = 200 })
+		for _, title in ipairs(action_titles) do
+			local prefix = "• " .. title
+			if line:sub(1, #prefix) == prefix then
+				local title_col = #"• "
+				mark(bufnr, row, title_col, {
+					end_col = title_col + #title,
+					hl_group = "AcpActionTitle",
+					priority = 190,
+				})
+				local detail_col = #prefix + 1
+				if #line > detail_col then
+					mark(bufnr, row, detail_col, {
+						end_col = #line,
+						hl_group = presentation == "tool" and "AcpActionTool" or "AcpActionCommand",
+						priority = 180,
+					})
+				end
+				break
+			end
+		end
+		return true
+	end
+
+	local tree = (line:match("^  │ ") or line:match("^  └ ")) and #"  │ " or line:match("^    ") and 4 or 0
+	if tree > 0 then
+		mark(bufnr, row, 0, { end_col = tree, hl_group = "AcpActionTree", priority = 170 })
+		local highlight = presentation == "explore" and "AcpActionCommand"
+			or line:match("^  │ ") and "AcpActionCommand"
+			or "AcpActionOutput"
+		mark(bufnr, row, tree, { end_col = #line, hl_group = highlight, priority = 160 })
+	end
+	return true
+end
+
 function M.refresh_transcript(bufnr, start_row, chat, end_row)
 	if not valid_buf(bufnr) then
 		return
@@ -587,7 +685,9 @@ function M.refresh_transcript(bufnr, start_row, chat, end_row)
 		local block = chat and chat.block_at and chat:block_at(line_number) or nil
 		local header_kind = transcript.header_kind(line)
 		local parse_legacy = not block or block.kind == "legacy"
-		if
+		if block and block.kind == "activity" and highlight_action_line(bufnr, row, line, block, line_number) then
+			-- Action cells use literal Codex CLI tree glyphs and structured highlights.
+		elseif
 			(block and block.kind == "user" and line_number == block.header_line)
 			or (parse_legacy and header_kind == "user")
 		then

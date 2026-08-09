@@ -1,0 +1,97 @@
+==================
+Codex-style transcript
+==================
+
+U You
+Inspect it.
+
+• Ran seq 1 10
+  └ 1
+    … +6 lines (K to inspect)
+    10
+
+• Called search.find_docs({"query":"tree-sitter"})
+  └ Found it
+
+• Explored
+  └ Search action_block
+    Read grammar.js, highlights.scm
+
+A Codex
+Done.
+```lua
+return true
+```
+
+---
+
+(document
+  (blank_line)
+  (user_header)
+  (text_line
+    (text))
+  (blank_line)
+  (command_action
+    state: (command_marker)
+    subject: (command_subject)
+    (action_result
+      (action_branch)
+      content: (result_text))
+    (action_result_continuation
+      (action_indent)
+      content: (result_text))
+    (action_result_continuation
+      (action_indent)
+      content: (result_text)))
+  (blank_line)
+  (tool_action
+    state: (tool_marker)
+    subject: (tool_subject)
+    (action_result
+      (action_branch)
+      content: (result_text)))
+  (blank_line)
+  (exploration_action
+    state: (exploration_marker)
+    (exploration_result
+      (action_branch)
+      content: (exploration_detail))
+    (exploration_continuation
+      (action_indent)
+      content: (exploration_detail)))
+  (blank_line)
+  (agent_header)
+  (text_line
+    (text))
+  (fenced_code_block
+    (fence_start
+      delimiter: (fence_delimiter)
+      language: (language))
+    (code_fence_content
+      (code_line))
+    (fence_end
+      delimiter: (fence_delimiter))))
+
+==================
+Live action states
+==================
+
+• Running printf output
+  │ echo done
+
+• Calling search.find_docs({"query":"ratatui"})
+
+---
+
+(document
+  (blank_line)
+  (command_action
+    state: (command_marker)
+    subject: (command_subject)
+    (command_continuation
+      (action_pipe)
+      content: (command_detail)))
+  (blank_line)
+  (tool_action
+    state: (tool_marker)
+    subject: (tool_subject)))
