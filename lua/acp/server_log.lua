@@ -167,6 +167,15 @@ local function notice(entry)
 	}
 end
 
+function M.is_background_noise(entry)
+	local metadata = type(entry) == "table" and entry.metadata or nil
+	local server = type(metadata) == "table" and metadata.server_log or nil
+	if type(server) ~= "table" or server.source ~= "codex_models_manager::manager" then
+		return false
+	end
+	return tostring(entry.message or ""):find("failed to refresh available models:", 1, true) == 1
+end
+
 function M.parse(value)
 	local entries = {}
 	for _, raw_line in ipairs(split_lines(M.clean(value))) do

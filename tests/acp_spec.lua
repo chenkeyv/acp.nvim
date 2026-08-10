@@ -70,6 +70,11 @@ local function server_error_stderr()
 	})
 end
 
+local function model_refresh_stderr()
+	return "2026-08-10T08:00:00.000000Z ERROR codex_models_manager::manager: "
+		.. "failed to refresh available models: timeout waiting for child process to exit\n"
+end
+
 local function fake_process()
 	local process = { writes = {} }
 	local handle = {}
@@ -157,6 +162,15 @@ test("Codex server logs become native transcript notices", function()
 	contains(table.concat(plain[1].lines, "\n"), transcript.line("warning", "Codex server"))
 	contains(table.concat(plain[1].lines, "\n"), "connection warning")
 	eq(server_log.parse("could not create PATH aliases\n"), {})
+
+	local refresh = server_log.parse(model_refresh_stderr())
+	eq(#refresh, 1)
+	ok(server_log.is_background_noise(refresh[1]))
+	ok(not server_log.is_background_noise(notice), "tool failures must remain visible")
+	local other_manager_error = server_log.parse(
+		"2026-08-10T08:00:00.000000Z ERROR codex_models_manager::manager: failed to load configured model\n"
+	)
+	ok(not server_log.is_background_noise(other_manager_error[1]), "other model-manager errors must remain visible")
 end)
 
 test("client performs the app-server handshake in order", function()
@@ -1995,6 +2009,13 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		vim.api.nvim_win_close(tool_preview_win, true)
 		eq(vim.api.nvim_buf_get_lines(state.output_buf, 0, state.chat.line_count, false), state.chat:render_lines())
 		eq(vim.api.nvim_buf_line_count(state.output_buf), state.chat.line_count + state.prompt_spacer_rows)
+		local blocks_before_stderr = #state.chat.blocks
+		fake.handlers.on_stderr(model_refresh_stderr())
+		fake.handlers.on_stderr(model_refresh_stderr())
+		eq(#state.chat.blocks, blocks_before_stderr)
+		fake.handlers.on_stderr("connection warning\n")
+		eq(#state.chat.blocks, blocks_before_stderr + 1)
+		eq(state.chat.blocks[#state.chat.blocks].kind, "warning")
 		fake.handlers.on_stderr(server_error_stderr())
 		local server_block = state.chat.blocks[#state.chat.blocks]
 		eq(server_block.kind, "error")

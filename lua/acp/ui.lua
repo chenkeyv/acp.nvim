@@ -2044,13 +2044,17 @@ end
 
 local function handle_stderr(data)
 	for _, entry in ipairs(server_log.parse(data)) do
-		if state and valid_buf(state.output_buf) then
-			append_notice(entry.kind, entry.message, {
-				lines = entry.lines,
-				metadata = entry.metadata,
-			})
-		else
-			notify(entry.message, entry.kind == "error" and vim.log.levels.ERROR or vim.log.levels.WARN)
+		-- Model catalog refreshes run independently of turns. Their timeout is
+		-- non-actionable here; explicit model/list failures still notify users.
+		if not server_log.is_background_noise(entry) then
+			if state and valid_buf(state.output_buf) then
+				append_notice(entry.kind, entry.message, {
+					lines = entry.lines,
+					metadata = entry.metadata,
+				})
+			else
+				notify(entry.message, entry.kind == "error" and vim.log.levels.ERROR or vim.log.levels.WARN)
+			end
 		end
 	end
 end
