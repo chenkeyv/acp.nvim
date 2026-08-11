@@ -102,7 +102,7 @@ end
 local function parse_line(line)
 	local timestamp, level, rest = line:match("^(%d%d%d%d%-%d%d%-%d%dT%S+)%s+([A-Z]+)%s+(.+)$")
 	if not timestamp then
-		return { message = trim(line) }
+		return { message = trim(line) }, false
 	end
 	local source, body = rest:match("^([^%s]+):%s+(.*)$")
 	if not source then
@@ -110,14 +110,14 @@ local function parse_line(line)
 			timestamp = timestamp,
 			level = level,
 			message = normalize_message(rest),
-		}
+		}, true
 	end
 	return {
 		timestamp = timestamp,
 		level = level,
 		source = source,
 		message = normalize_message(body),
-	}
+	}, true
 end
 
 local function kind_for(level)
@@ -178,15 +178,37 @@ end
 
 function M.parse(value)
 	local entries = {}
+	local pending
+	local pending_blank_lines = 0
+	local function flush_pending()
+		if pending and pending.message ~= "" then
+			table.insert(entries, notice(pending))
+		end
+		pending = nil
+		pending_blank_lines = 0
+	end
 	for _, raw_line in ipairs(split_lines(M.clean(value))) do
 		local line = trim(raw_line)
-		if line ~= "" and not line:find("could not create PATH aliases", 1, true) then
-			local entry = parse_line(line)
-			if entry.message ~= "" then
+		if line == "" then
+			if pending then
+				pending_blank_lines = pending_blank_lines + 1
+			end
+		elseif line:find("could not create PATH aliases", 1, true) then
+			flush_pending()
+		else
+			local entry, structured = parse_line(line)
+			if structured then
+				flush_pending()
+				pending = entry
+			elseif pending then
+				pending.message = pending.message .. string.rep("\n", pending_blank_lines + 1) .. entry.message
+				pending_blank_lines = 0
+			elseif entry.message ~= "" then
 				table.insert(entries, notice(entry))
 			end
 		end
 	end
+	flush_pending()
 	return entries
 end
 

@@ -75,6 +75,17 @@ local function model_refresh_stderr()
 		.. "failed to refresh available models: timeout waiting for child process to exit\n"
 end
 
+local function apply_patch_error_stderr()
+	return table.concat({
+		"2026-08-10T08:00:00.000000Z ERROR codex_core::tools::router: ",
+		"apply_patch verification failed: Failed to find expected lines in ",
+		"/Users/keyv/Developer/acp.nvim/README.md:\n\n",
+		"its inset from the chat text area. Prompt, model, reasoning, and context metadata\n",
+		"sit on the lower-left border, while the send and steer hints remain on the\n",
+		"right. A blank top row separates the turn panel from the chat, while the\n",
+	})
+end
+
 local function fake_process()
 	local process = { writes = {} }
 	local handle = {}
@@ -171,6 +182,28 @@ test("Codex server logs become native transcript notices", function()
 		"2026-08-10T08:00:00.000000Z ERROR codex_models_manager::manager: failed to load configured model\n"
 	)
 	ok(not server_log.is_background_noise(other_manager_error[1]), "other model-manager errors must remain visible")
+
+	local patch_notices = server_log.parse(apply_patch_error_stderr())
+	eq(#patch_notices, 1)
+	local patch_notice = patch_notices[1]
+	eq(patch_notice.kind, "error")
+	eq(patch_notice.metadata.server_log.source, "codex_core::tools::router")
+	eq(patch_notice.lines, {
+		"",
+		transcript.line("error", "Codex server · tools/router"),
+		"  apply_patch verification failed: Failed to find expected lines in /Users/keyv/Developer/acp.nvim/README.md:",
+		"",
+		"  its inset from the chat text area. Prompt, model, reasoning, and context metadata",
+		"  sit on the lower-left border, while the send and steer hints remain on the",
+		"  right. A blank top row separates the turn panel from the chat, while the",
+	})
+	local followed_by_warning = server_log.parse(
+		apply_patch_error_stderr() .. "2026-08-10T08:00:01.000000Z WARN codex_core::client: connection warning\n"
+	)
+	eq(#followed_by_warning, 2)
+	eq(followed_by_warning[1].kind, "error")
+	eq(followed_by_warning[2].kind, "warning")
+	eq(followed_by_warning[2].metadata.server_log.source, "codex_core::client")
 end)
 
 test("client performs the app-server handshake in order", function()
@@ -2016,15 +2049,17 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		fake.handlers.on_stderr("connection warning\n")
 		eq(#state.chat.blocks, blocks_before_stderr + 1)
 		eq(state.chat.blocks[#state.chat.blocks].kind, "warning")
-		fake.handlers.on_stderr(server_error_stderr())
+		fake.handlers.on_stderr(apply_patch_error_stderr())
 		local server_block = state.chat.blocks[#state.chat.blocks]
 		eq(server_block.kind, "error")
 		eq(server_block.metadata.server_log.source, "codex_core::tools::router")
 		local server_text = table.concat(server_block.lines, "\n")
 		contains(server_text, "Codex server · tools/router")
-		contains(server_text, "Rejected: This action was rejected due to unacceptable risk.")
+		contains(server_text, "apply_patch verification failed")
+		contains(server_text, "its inset from the chat text area")
+		contains(server_text, "sit on the lower-left border")
+		eq(count(server_text, "Codex server"), 1)
 		ok(not server_text:find("\27", 1, true))
-		ok(not server_text:find("CreateProcess", 1, true))
 		eq(ui.new_chat({ keep_layout = true }), true)
 		eq(#ui._state().chat.blocks, 0)
 		eq(fake.unsubscribed, "thread-1")
