@@ -1418,7 +1418,6 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 			output_keymaps[keymap.desc] = true
 		end
 		for _, description in ipairs({
-			"Center active Codex response or redraw",
 			"Next Codex output section",
 			"Previous Codex output item",
 			"Inspect Codex output item",
@@ -1428,6 +1427,10 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		}) do
 			ok(output_keymaps[description], "missing output keymap: " .. description)
 		end
+		ok(
+			not output_keymaps["Center active Codex response or redraw"],
+			"legacy output centering keymap must be removed"
+		)
 		eq(vim.fn.exists(":AcpOutputMap"), 2)
 		eq(vim.fn.exists(":AcpOutputItemsQuickfix"), 2)
 		eq(vim.fn.exists(":AcpCodeBlockDraft"), 2)
@@ -1876,60 +1879,26 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		ok(last_position.row > 0, "expected the latest response line to remain visible")
 		ok(last_position.row < turn_top, "the vertically stacked turn panel must not cover the latest response")
 
-		local function saved_output_view()
-			return vim.api.nvim_win_call(state.output_win, function()
-				return vim.fn.winsaveview()
-			end)
-		end
-
-		local function chat_center_row()
-			local info = vim.fn.getwininfo(state.output_win)[1]
-			local text_top = info.winrow + (info.winbar or 0)
-			return text_top + math.floor((info.height - 1) / 2)
-		end
-
-		local function assert_latest_response_centered(message)
-			vim.cmd("redraw")
+		local function assert_output_at_end(message)
 			local line = vim.api.nvim_buf_line_count(state.output_buf)
+			eq(vim.api.nvim_win_get_cursor(state.output_win)[1], line)
+			vim.cmd("redraw")
 			local position = vim.fn.screenpos(state.output_win, line, 1)
-			local expected = chat_center_row()
-			ok(
-				math.abs(position.row - expected) <= 1,
-				("%s: expected row %d near %d"):format(message, position.row, expected)
-			)
+			local turn_top = vim.api.nvim_win_get_position(state.instruction_win)[1] + 1
+			ok(position.row > 0, message .. ": expected the final line to be visible")
+			ok(position.row < turn_top, message .. ": expected the final line above the turn panel")
 		end
 
+		assert_output_at_end("streamed output should follow the transcript end")
 		vim.api.nvim_set_current_win(state.output_win)
-		local control_l = vim.api.nvim_replace_termcodes("<C-l>", true, false, true)
-		vim.api.nvim_feedkeys(control_l, "x", false)
-		eq(state.output_position_mode, "center")
-		assert_latest_response_centered("first control-l should center the live response")
-
-		fake.handlers.on_notification("item/agentMessage/delta", {
-			threadId = "thread-1",
-			turnId = "turn-1",
-			itemId = "message-1",
-			delta = "\nCentered continuation 1\nCentered continuation 2",
-		})
-		ok(
-			vim.wait(250, function()
-				return state.chat.by_id["message-1"].text:find("Centered continuation 2", 1, true) ~= nil
-			end, 5),
-			"expected the centered continuation to flush"
-		)
-		eq(state.output_position_mode, "center")
-		assert_latest_response_centered("streaming should retain the centered position")
-
-		local centered_view = saved_output_view()
-		vim.api.nvim_feedkeys(control_l, "x", false)
-		eq(saved_output_view(), centered_view)
-		eq(state.output_position_mode, "center")
-
-		local scroll_up = vim.api.nvim_replace_termcodes("<C-y>", true, false, true)
-		vim.cmd("normal! 4" .. scroll_up)
-		vim.cmd("redraw")
-		local manual_view = saved_output_view()
-		ok(manual_view.topline ~= centered_view.topline, "expected the manual scroll to change the output view")
+		vim.api.nvim_win_call(state.output_win, function()
+			vim.api.nvim_win_set_cursor(state.output_win, { 1, 0 })
+			vim.cmd("normal! zt")
+		end)
+		local manual_view = vim.api.nvim_win_call(state.output_win, function()
+			return vim.fn.winsaveview()
+		end)
+		ok(manual_view.lnum < vim.api.nvim_buf_line_count(state.output_buf), "expected a manual position above the end")
 		fake.handlers.on_notification("item/agentMessage/delta", {
 			threadId = "thread-1",
 			turnId = "turn-1",
@@ -1942,12 +1911,11 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			end, 5),
 			"expected output after manual scrolling to flush"
 		)
-		eq(state.output_position_mode, "manual")
-		eq(saved_output_view().topline, manual_view.topline)
-
-		vim.api.nvim_feedkeys(control_l, "x", false)
-		eq(state.output_position_mode, "center")
-		assert_latest_response_centered("control-l should restore centered follow mode")
+		assert_output_at_end("new output should replace the manual scroll position")
+		local end_view = vim.api.nvim_win_call(state.output_win, function()
+			return vim.fn.winsaveview()
+		end)
+		ok(end_view.topline ~= manual_view.topline, "expected the viewport to return to the transcript end")
 		fake.handlers.on_notification("item/completed", {
 			threadId = "thread-1",
 			turnId = "turn-1",
@@ -1990,7 +1958,7 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(state.busy, false)
 		eq(state.instruction_spinner_timer, nil)
 		contains(vim.api.nvim_buf_get_lines(state.instruction_buf, -2, -1, false)[1], icons.get("idle") .. " completed")
-		eq(state.output_position_mode, "normal")
+		eq(state.output_position_mode, nil)
 		local expected_kinds = { "user" }
 		for _ = 1, 8 do
 			table.insert(expected_kinds, "activity")

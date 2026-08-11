@@ -572,20 +572,6 @@ function M.configure_output_window(winid)
 	vim.wo[winid].winhighlight = "NormalFloat:AcpChatFloat"
 end
 
-function M.center_output(winid, line)
-	if not valid_win(winid) then
-		return nil
-	end
-	local bufnr = vim.api.nvim_win_get_buf(winid)
-	line = math.max(1, math.min(math.floor(tonumber(line) or 1), vim.api.nvim_buf_line_count(bufnr)))
-	local ok, saved_view = pcall(vim.api.nvim_win_call, winid, function()
-		vim.api.nvim_win_set_cursor(winid, { line, 0 })
-		vim.cmd("normal! zz")
-		return vim.fn.winsaveview()
-	end)
-	return ok and saved_view or nil
-end
-
 local function mark(bufnr, row, col, opts)
 	pcall(vim.api.nvim_buf_set_extmark, bufnr, transcript_ns, row, col, opts)
 end

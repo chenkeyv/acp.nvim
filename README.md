@@ -152,6 +152,8 @@ tail and refreshes decorations only through that block. Unchanged history is
 not reparsed, the ACP parser and language injection remain paused until the
 turn ends, and typing or scrolling can defer the final semantic refresh by
 `semantic_debounce_ms`. Cursor-only updates are capped by `cursor_interval_ms`.
+Every transcript mutation returns the chat to its final line, so manual
+scrolling remains available only until the next content update arrives.
 The chat window disables editor indent guides and wrapped-line indentation, and
 the output and sessions buffers keep no undo history. Each command or tool gets
 one level-two Codex-style cell; compatible read/list/search commands coalesce
