@@ -170,6 +170,14 @@ local function content_segments(text)
 	return segments
 end
 
+local function content_without_terminal_blanks(text)
+	local lines = split_lines(text)
+	while #lines > 0 and tostring(lines[#lines] or ""):match("^%s*$") do
+		table.remove(lines)
+	end
+	return lines, table.concat(lines, "\n")
+end
+
 local function refresh_block_ranges(block)
 	if not block.line1 or not block.line2 then
 		return
@@ -267,6 +275,30 @@ local function touch_block(block)
 	semantics.invalidate(block)
 end
 
+local function normalize_terminal_spacing(block)
+	if not block then
+		return 0
+	end
+	local minimum = math.max(1, tonumber(block.header_offset) or 1)
+	local removed = 0
+	while #block.lines > minimum and tostring(block.lines[#block.lines] or ""):match("^%s*$") do
+		table.remove(block.lines)
+		if block.rows then
+			table.remove(block.rows)
+		end
+		removed = removed + 1
+	end
+	if removed == 0 then
+		return 0
+	end
+	if block.content_offset then
+		local _, visible_text = content_without_terminal_blanks(block.text or "")
+		block.children = visible_text ~= "" and content_segments(visible_text) or {}
+	end
+	touch_block(block)
+	return removed
+end
+
 local function touch_model(model)
 	model.revision = (tonumber(model.revision) or 0) + 1
 	model.semantic_cache = nil
@@ -298,9 +330,17 @@ end
 
 function Model:_append_block(block)
 	local old_line_count = self.line_count
+	local previous = self.blocks[#self.blocks]
+	local removed = normalize_terminal_spacing(previous)
+	if removed > 0 then
+		previous.line2 = previous.line2 - removed
+		self.line_count = self.line_count - removed
+		refresh_block_ranges(previous)
+	end
+	local start_row = self.line_count
 	block.index = #self.blocks + 1
-	block.line1 = old_line_count + 1
-	block.line2 = old_line_count + #block.lines
+	block.line1 = start_row + 1
+	block.line2 = start_row + #block.lines
 	self.line_count = block.line2
 	table.insert(self.blocks, block)
 	self.by_id[block.id] = block
@@ -308,8 +348,8 @@ function Model:_append_block(block)
 	refresh_block_ranges(block)
 	touch_model(self)
 	return {
-		type = "insert",
-		start_row = old_line_count,
+		type = removed > 0 and "replace" or "insert",
+		start_row = start_row,
 		end_row = old_line_count == 0 and 1 or old_line_count,
 		lines = copy_lines(block.lines),
 		block = block,
@@ -469,6 +509,18 @@ function Model:append_text(id, text)
 	if text == "" then
 		return nil
 	end
+	block.text = (block.text or "") .. text
+	if block.index < #self.blocks then
+		local content_lines, visible_text = content_without_terminal_blanks(block.text)
+		local content_offset = tonumber(block.content_offset) or (tonumber(block.header_offset) or 1) + 1
+		local lines = {}
+		for index = 1, math.min(content_offset - 1, #block.lines) do
+			table.insert(lines, block.lines[index])
+		end
+		vim.list_extend(lines, content_lines)
+		block.children = visible_text ~= "" and content_segments(visible_text) or {}
+		return self:_replace_block_lines(block, lines)
+	end
 	local old_line2 = block.line2
 	local parts = split_lines(text)
 	parts[1] = (block.lines[#block.lines] or "") .. parts[1]
@@ -480,7 +532,6 @@ function Model:append_text(id, text)
 	local delta = #parts - 1
 	block.line2 = block.line2 + delta
 	shift_after(self, block, delta)
-	block.text = (block.text or "") .. text
 	block.children = content_segments(block.text)
 	refresh_block_ranges(block)
 	touch_model(self)
@@ -1058,6 +1109,9 @@ function Model:reindex()
 			block.header_offset = math.max(2, tonumber(block.header_offset) or 2)
 			local suffix = block.kind == "user" and block.metadata.steer and " (steer)" or nil
 			block.lines[block.header_offset] = render.header(block.kind, suffix)
+		end
+		if index < #self.blocks then
+			normalize_terminal_spacing(block)
 		end
 		block.revision = tonumber(block.revision) or 1
 		if block.rows and #block.rows ~= #block.lines then

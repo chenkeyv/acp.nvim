@@ -496,6 +496,66 @@ test("chat blocks preserve roles, action cells, code, and failures", function()
 	eq(range.block_id, "agent-1")
 end)
 
+test("top-level blocks collapse terminal blank lines at boundaries", function()
+	local chat = blocks.new()
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	local function apply(operation)
+		ok(operation, "expected an incremental chat operation")
+		vim.api.nvim_buf_set_lines(bufnr, operation.start_row, operation.end_row, false, operation.lines)
+		eq(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), chat:render_lines())
+	end
+
+	apply(chat:add_user("Question\n\n", {}))
+	local agent_operation, agent = chat:ensure_agent("agent-spacing")
+	eq(agent_operation.type, "replace")
+	apply(agent_operation)
+	apply(chat:append_text(agent.id, "Answer\n\n"))
+	local user_operation = chat:add_user("Next question", {})
+	eq(user_operation.type, "replace")
+	apply(user_operation)
+	eq(chat:render_lines(), {
+		"",
+		render.header("user"),
+		"Question",
+		"",
+		render.header("agent"),
+		"Answer",
+		"",
+		render.header("user"),
+		"Next question",
+	})
+
+	apply(chat:append_text(agent.id, "Continuation\n\n"))
+	eq(agent.text, "Answer\n\nContinuation\n\n")
+	eq(chat:render_lines(), {
+		"",
+		render.header("user"),
+		"Question",
+		"",
+		render.header("agent"),
+		"Answer",
+		"",
+		"Continuation",
+		"",
+		render.header("user"),
+		"Next question",
+	})
+	for index, block in ipairs(chat.blocks) do
+		eq(block.lines[1], "")
+		if index < #chat.blocks then
+			ok(block.lines[#block.lines] ~= "", "completed cells must end before the next separator")
+			eq(chat.blocks[index + 1].line1, block.line2 + 1)
+		end
+	end
+	eq(chat.line_count, #chat:render_lines())
+
+	local legacy = vim.deepcopy(chat)
+	table.insert(legacy.blocks[1].lines, "")
+	local adopted = blocks.adopt(legacy)
+	ok(adopted.blocks[1].lines[#adopted.blocks[1].lines] ~= "", "adoption must normalize legacy spacing")
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
 test("live chat consumers use structural rows instead of reparsing rendered text", function()
 	local chat = blocks.new()
 	chat:add_user("Review `lua/acp/view.lua:12`.", {})
