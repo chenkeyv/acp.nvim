@@ -7,16 +7,20 @@ local transcript_ns = vim.api.nvim_create_namespace("acp.nvim.transcript")
 
 M.transcript_namespace = transcript_ns
 
-local prompt_border = {
-	{ "╭", "AcpPromptBorder" },
-	{ "─", "AcpPromptBorder" },
-	{ "╮", "AcpPromptBorder" },
-	{ "│", "AcpPromptBorder" },
-	{ "╯", "AcpPromptBorder" },
-	{ "─", "AcpPromptBorder" },
-	{ "╰", "AcpPromptBorder" },
-	{ "│", "AcpPromptBorder" },
-}
+local function rounded_border(highlight)
+	return {
+		{ "╭", highlight },
+		{ "─", highlight },
+		{ "╮", highlight },
+		{ "│", highlight },
+		{ "╯", highlight },
+		{ "─", highlight },
+		{ "╰", highlight },
+		{ "│", highlight },
+	}
+end
+
+local prompt_border = rounded_border("AcpPromptBorder")
 
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -43,6 +47,18 @@ local function format_count(value)
 	return tostring(number)
 end
 
+local function remaining_context(tokens)
+	if type(tokens) ~= "table" then
+		return nil
+	end
+	local window = tonumber(tokens.modelContextWindow)
+	local used = tonumber(tokens.totalTokens)
+	if not window or window <= 0 or not used then
+		return nil
+	end
+	return math.max(0, window - math.max(0, used)), window
+end
+
 local function statusline_chunk(text, highlight)
 	return ("%%#%s#%s%%*"):format(highlight, clean(text))
 end
@@ -54,6 +70,8 @@ end
 local function add_title_chunk(chunks, text, highlight)
 	if #chunks > 0 then
 		table.insert(chunks, { "  ", "AcpPromptTitleMeta" })
+	else
+		text = " " .. text .. " "
 	end
 	table.insert(chunks, { text, highlight })
 end
@@ -63,7 +81,7 @@ function M.define_highlights()
 	for name, definition in pairs({
 		AcpPromptFloat = { link = "NormalFloat" },
 		AcpPromptBorder = { fg = "#7aa2f7" },
-		AcpPromptTitle = { fg = "#9ece6a", bold = true },
+		AcpChatFloat = { link = "NormalFloat" },
 		AcpPromptTitleMeta = { link = "Comment" },
 		AcpPromptTitleModel = { fg = "#bb9af7", bold = true },
 		AcpPromptTitleContext = { fg = "#2ac3de", bold = true },
@@ -188,15 +206,20 @@ end
 function M.prompt_title(state)
 	state = state or {}
 	local chunks = {}
-	add_title_chunk(chunks, " Prompt ", "AcpPromptTitle")
 	if state.model and state.model ~= "" then
 		local model = state.effort and (state.model .. " · " .. state.effort) or state.model
 		add_title_chunk(chunks, model, "AcpPromptTitleModel")
 	end
-	local context_window = state.tokens and state.tokens.modelContextWindow
-	if context_window then
-		add_title_chunk(chunks, "ctx " .. format_count(context_window), "AcpPromptTitleContext")
+	local context_left, context_window = remaining_context(state.tokens)
+	if context_left then
+		local percent_left = math.floor((context_left / context_window) * 100 + 0.5)
+		add_title_chunk(
+			chunks,
+			("ctx %d%% · %s"):format(percent_left, format_count(context_window)),
+			"AcpPromptTitleContext"
+		)
 	end
+	local primary_chunks = #chunks
 	local context_count = #(state.contexts or {})
 	if context_count > 0 then
 		add_title_chunk(
@@ -205,7 +228,7 @@ function M.prompt_title(state)
 			"AcpPromptTitleContext"
 		)
 	end
-	return chunks
+	return chunks, primary_chunks
 end
 
 local function prompt_hints(compact)
@@ -221,17 +244,22 @@ end
 
 function M.prompt_footer(state, width)
 	width = math.max(1, math.floor(tonumber(width) or 1))
-	local metadata = M.prompt_title(state)
+	local metadata, primary_chunks = M.prompt_title(state)
+	local protected_chunks = math.max(1, primary_chunks)
 	local hints = prompt_hints(false)
 	if chunks_width(metadata) + chunks_width(hints) + 1 > width then
 		hints = prompt_hints(true)
 	end
-	while #metadata > 1 and chunks_width(metadata) + chunks_width(hints) + 1 > width do
+	while #metadata > protected_chunks and chunks_width(metadata) + chunks_width(hints) + 1 > width do
 		table.remove(metadata)
 		table.remove(metadata)
 	end
 	if chunks_width(metadata) + chunks_width(hints) + 1 > width then
 		hints = {}
+	end
+	while #metadata > 1 and chunks_width(metadata) + 1 > width do
+		table.remove(metadata)
+		table.remove(metadata)
 	end
 	if chunks_width(metadata) + 1 > width then
 		metadata = {}
@@ -338,103 +366,127 @@ function M.instruction_block(state, width, max_height)
 	}
 end
 
-function M.prompt_geometry(bounds, opts)
+function M.stack_geometry(bounds, state, opts)
 	bounds = bounds or {}
 	opts = opts or {}
 	local row = math.max(0, math.floor(tonumber(bounds.row) or 0))
 	local col = math.max(0, math.floor(tonumber(bounds.col) or 0))
-	local available_width = math.max(3, math.floor(tonumber(bounds.width) or 3))
-	local available_height = math.max(3, math.floor(tonumber(bounds.height) or 3))
-	local padding = math.max(0, math.floor(tonumber(opts.input_padding) or 2))
-	local desired_outer_height = math.max(3, math.floor(tonumber(opts.input_height) or 6))
+	local outer_width = math.floor(tonumber(bounds.width) or 0)
+	local available_height = math.floor(tonumber(bounds.height) or 0)
+	-- One chat row below its winbar, one status row, and the bordered prompt
+	-- are the smallest useful stack.
+	if outer_width < 3 or available_height < 6 then
+		return nil
+	end
 
-	local horizontal_inset = available_width - padding * 2 >= 24 and padding or 0
-	local outer_width = math.max(3, available_width - horizontal_inset * 2)
-	local content_width = math.max(1, outer_width - 2)
+	local content_width = outer_width - 2
+	local minimum_chat_height = 2
+	local minimum_prompt_outer_height = 3
+	local desired_prompt_outer_height = math.max(3, math.floor(tonumber(opts.input_height) or 6))
+	local desired_bottom_padding = math.max(0, math.floor(tonumber(opts.input_padding) or 2))
+	local requested_turn_height = math.max(1, math.floor(tonumber(opts.instruction_height) or 4))
 
-	local bottom_inset = available_height >= desired_outer_height + padding and padding or 0
-	local outer_height = math.min(desired_outer_height, available_height - bottom_inset)
-	outer_height = math.max(3, outer_height)
-	local content_height = math.max(1, outer_height - 2)
+	local bottom_padding =
+		math.min(desired_bottom_padding, available_height - minimum_chat_height - minimum_prompt_outer_height - 1)
+	local prompt_capacity = available_height - bottom_padding - minimum_chat_height - 1
+	local prompt_outer_height =
+		math.max(minimum_prompt_outer_height, math.min(desired_prompt_outer_height, prompt_capacity))
+	local turn_capacity = available_height - bottom_padding - prompt_outer_height - minimum_chat_height
+	local turn = M.instruction_block(state, content_width, math.min(requested_turn_height, turn_capacity))
+	local turn_height = #turn.lines
+	local chat_height = available_height - bottom_padding - prompt_outer_height - turn_height
 
 	return {
-		row = row + math.max(0, available_height - outer_height - bottom_inset),
-		col = col + horizontal_inset,
-		width = content_width,
-		height = content_height,
 		outer_width = outer_width,
-		outer_height = outer_height,
-		reserved_rows = math.min(available_height - 1, outer_height + bottom_inset),
+		bottom_padding = bottom_padding,
+		chat = {
+			row = row,
+			col = col,
+			width = outer_width,
+			height = chat_height,
+		},
+		turn = {
+			row = row + chat_height,
+			col = col + 1,
+			width = content_width,
+			height = turn_height,
+		},
+		prompt = {
+			row = row + chat_height + turn_height,
+			col = col,
+			width = content_width,
+			height = prompt_outer_height - 2,
+			outer_height = prompt_outer_height,
+		},
+		turn_lines = turn.lines,
+		turn_key = turn.key,
 	}
 end
 
-local function output_bounds(winid)
+local function host_bounds(winid)
 	if not valid_win(winid) then
 		return nil
 	end
-	local position = vim.api.nvim_win_get_position(winid)
-	local info = vim.fn.getwininfo(winid)[1] or {}
-	local textoff = math.max(0, tonumber(info.textoff) or 0)
 	return {
-		row = position[1] + math.max(0, tonumber(info.winbar) or 0),
-		col = position[2] + textoff,
-		width = math.max(3, vim.api.nvim_win_get_width(winid) - textoff),
-		height = math.max(3, tonumber(info.height) or vim.api.nvim_win_get_height(winid)),
+		row = 0,
+		col = 0,
+		width = vim.api.nvim_win_get_width(winid),
+		height = vim.api.nvim_win_get_height(winid),
 	}
 end
 
-function M.composer_layout(output_win, state, opts)
+function M.stack_layout(host_win, state, opts)
 	opts = opts or {}
-	local bounds = output_bounds(output_win)
-	if not bounds then
+	local geometry = M.stack_geometry(host_bounds(host_win), state, opts)
+	if not geometry then
 		return nil
 	end
-	local geometry = M.prompt_geometry(bounds, opts)
-	local footer = M.prompt_footer(state, geometry.width)
+	local footer = M.prompt_footer(state, geometry.prompt.width)
 	local footer_key = flatten(footer)
+	local chat = {
+		relative = "win",
+		win = host_win,
+		row = geometry.chat.row,
+		col = geometry.chat.col,
+		width = geometry.chat.width,
+		height = geometry.chat.height,
+		style = "minimal",
+		border = "none",
+		zindex = 49,
+	}
 	local prompt = {
-		relative = "editor",
-		row = geometry.row,
-		col = geometry.col,
-		width = geometry.width,
-		height = geometry.height,
+		relative = "win",
+		win = host_win,
+		row = geometry.prompt.row,
+		col = geometry.prompt.col,
+		width = geometry.prompt.width,
+		height = geometry.prompt.height,
 		style = "minimal",
 		border = vim.deepcopy(prompt_border),
 		footer = footer,
 		footer_pos = "left",
 		zindex = 50,
 	}
-	local reserved_rows = geometry.reserved_rows
-	local instruction
-	local instruction_config
-	local available_instruction_height = math.max(0, math.floor(geometry.row - bounds.row))
-	local requested_instruction_height = math.max(1, math.floor(tonumber(opts.instruction_height) or 4))
-	local instruction_height = math.min(available_instruction_height, requested_instruction_height)
-	if instruction_height > 0 then
-		instruction = M.instruction_block(state, geometry.width, instruction_height)
-	end
-	if instruction then
-		local attached_rows = #instruction.lines
-		instruction_config = {
-			relative = "win",
-			row = -attached_rows - 1,
-			col = 0,
-			width = geometry.width,
-			height = attached_rows,
-			style = "minimal",
-			border = "none",
-			focusable = false,
-			zindex = 51,
-		}
-		reserved_rows = math.min(bounds.height - 1, reserved_rows + attached_rows)
-	end
+	local instruction_config = {
+		relative = "win",
+		win = host_win,
+		row = geometry.turn.row,
+		col = geometry.turn.col,
+		width = geometry.turn.width,
+		height = geometry.turn.height,
+		style = "minimal",
+		border = "none",
+		focusable = false,
+		zindex = 51,
+	}
 	return {
+		chat = chat,
 		prompt = prompt,
 		prompt_key = footer_key,
 		turn = instruction_config,
-		turn_lines = instruction and instruction.lines or nil,
-		turn_key = instruction and instruction.key or nil,
-		reserved_rows = reserved_rows,
+		turn_lines = geometry.turn_lines,
+		turn_key = geometry.turn_key,
+		geometry = geometry,
 	}
 end
 
@@ -479,7 +531,7 @@ function M.configure_prompt_window(winid)
 	vim.wo[winid].cursorline = false
 	vim.wo[winid].winbar = ""
 	vim.wo[winid].fillchars = "eob: "
-	vim.wo[winid].winhighlight = "NormalFloat:AcpPromptFloat,FloatBorder:AcpPromptBorder,FloatTitle:AcpPromptTitle"
+	vim.wo[winid].winhighlight = "NormalFloat:AcpPromptFloat,FloatBorder:AcpPromptBorder"
 end
 
 function M.configure_instruction_window(winid)
@@ -497,7 +549,7 @@ function M.configure_instruction_window(winid)
 	vim.wo[winid].winhighlight = "NormalFloat:AcpInstructionFloat"
 end
 
-function M.configure_output_window(winid, reserved_rows)
+function M.configure_output_window(winid)
 	if not valid_win(winid) then
 		return
 	end
@@ -511,13 +563,16 @@ function M.configure_output_window(winid, reserved_rows)
 	vim.wo[winid].foldtext = "v:lua.acp_nvim_output_foldtext()"
 	-- Keep the compact Codex-style action previews visible; users can still fold them manually.
 	vim.wo[winid].foldlevel = 2
-	vim.wo[winid].foldcolumn = "1"
-	vim.wo[winid].statuscolumn = "%C "
-	vim.wo[winid].scrolloff = math.max(0, tonumber(reserved_rows) or 0)
+	vim.wo[winid].foldcolumn = "0"
+	-- Native blank gutter padding keeps transcript text away from the split edge
+	-- without changing buffer text or reintroducing fold and sign markers.
+	vim.wo[winid].statuscolumn = "  "
+	vim.wo[winid].scrolloff = 0
 	vim.wo[winid].fillchars = "eob: "
+	vim.wo[winid].winhighlight = "NormalFloat:AcpChatFloat"
 end
 
-function M.center_output(winid, line, reserved_rows)
+function M.center_output(winid, line)
 	if not valid_win(winid) then
 		return nil
 	end
@@ -526,11 +581,6 @@ function M.center_output(winid, line, reserved_rows)
 	local ok, saved_view = pcall(vim.api.nvim_win_call, winid, function()
 		vim.api.nvim_win_set_cursor(winid, { line, 0 })
 		vim.cmd("normal! zz")
-		local offset = math.ceil(math.max(0, tonumber(reserved_rows) or 0) / 2)
-		if offset > 0 then
-			local scroll_down = vim.api.nvim_replace_termcodes("<C-e>", true, false, true)
-			vim.cmd(("normal! %d%s"):format(offset, scroll_down))
-		end
 		return vim.fn.winsaveview()
 	end)
 	return ok and saved_view or nil

@@ -57,24 +57,15 @@ local function close_turn(state)
 	close_window(winid)
 end
 
-local function attached_turn_config(layout, prompt_win)
-	if not layout.turn then
-		return nil
-	end
-	local desired = vim.deepcopy(layout.turn)
-	desired.win = prompt_win
-	return desired
-end
-
-local function sync_turn(state, layout)
-	local desired = attached_turn_config(layout, state.input_win)
+local function sync_turn(state, layout, host_win)
+	local desired = layout.turn
 	if not desired or type(layout.turn_lines) ~= "table" or #layout.turn_lines == 0 then
 		close_turn(state)
 		return
 	end
 	local bufnr = set_turn_content(state, layout.turn_lines, layout.turn_key)
-	local prompt_tab = vim.api.nvim_win_get_tabpage(state.input_win)
-	if valid_win(state.instruction_win) and vim.api.nvim_win_get_tabpage(state.instruction_win) ~= prompt_tab then
+	local host_tab = vim.api.nvim_win_get_tabpage(host_win)
+	if valid_win(state.instruction_win) and vim.api.nvim_win_get_tabpage(state.instruction_win) ~= host_tab then
 		close_turn(state)
 	end
 	if not valid_win(state.instruction_win) then
@@ -86,11 +77,11 @@ local function sync_turn(state, layout)
 	view.configure_instruction_window(state.instruction_win)
 end
 
-local function apply(state, output_win, opts, create)
-	if not state or not valid_win(output_win) or not valid_buf(state.input_buf) then
+local function apply(state, host_win, opts, create)
+	if not state or not valid_win(host_win) or not valid_buf(state.input_buf) then
 		return nil
 	end
-	local layout = view.composer_layout(output_win, state, opts)
+	local layout = view.stack_layout(host_win, state, opts)
 	if not layout then
 		return nil
 	end
@@ -112,50 +103,40 @@ local function apply(state, output_win, opts, create)
 	end
 	vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
 	view.configure_prompt_window(state.input_win)
-	sync_turn(state, layout)
+	sync_turn(state, layout, host_win)
 	return {
 		layout = layout,
 		geometry_changed = geometry_changed,
 	}
 end
 
-function M.open(state, output_win, opts)
-	return apply(state, output_win, opts, true)
+function M.open(state, host_win, opts)
+	return apply(state, host_win, opts, true)
 end
 
-function M.sync(state, output_win, opts)
-	return apply(state, output_win, opts, false)
+function M.sync(state, host_win, opts)
+	return apply(state, host_win, opts, false)
 end
 
-function M.refresh_turn(state, output_win, opts)
-	if not M.is_open(state, output_win) then
+function M.refresh_turn(state, host_win, opts)
+	if not M.is_open(state, host_win) then
 		return false
 	end
-	local layout = view.composer_layout(output_win, state, opts)
+	local layout = view.stack_layout(host_win, state, opts)
 	if not layout or not layout.turn then
 		close_turn(state)
 		return false
 	end
-	-- Spinner frames only change the turn content. Keep the prompt geometry as
-	-- the source of truth so transient text-column measurements cannot resize
-	-- either member of the composer between layout events.
-	local prompt = vim.api.nvim_win_get_config(state.input_win)
-	local turn = view.instruction_block(state, prompt.width, layout.turn.height)
-	layout.turn.width = prompt.width
-	layout.turn.height = #turn.lines
-	layout.turn.row = -#turn.lines - 1
-	layout.turn_lines = turn.lines
-	layout.turn_key = turn.key
-	sync_turn(state, layout)
+	sync_turn(state, layout, host_win)
 	return true
 end
 
-function M.is_open(state, output_win)
+function M.is_open(state, host_win)
 	if not state or not valid_win(state.input_win) or not view.is_floating(state.input_win) then
 		return false
 	end
-	return not valid_win(output_win)
-		or vim.api.nvim_win_get_tabpage(state.input_win) == vim.api.nvim_win_get_tabpage(output_win)
+	return not valid_win(host_win)
+		or vim.api.nvim_win_get_tabpage(state.input_win) == vim.api.nvim_win_get_tabpage(host_win)
 end
 
 function M.handle_win_closed(state, winid)

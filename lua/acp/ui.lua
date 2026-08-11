@@ -122,8 +122,6 @@ local function fresh_state(cwd)
 		threads_loading = false,
 		thread_waiters = {},
 		thread_rows = {},
-		prompt_reserved_rows = 0,
-		prompt_spacer_rows = 0,
 		prompt_chrome_key = nil,
 		composer_layout_pending = false,
 		pending_output_text = nil,
@@ -154,6 +152,8 @@ local function apply_state_defaults(value)
 	end
 	value.prompt_layout_pending = nil
 	value._position_prompt = nil
+	value.prompt_reserved_rows = nil
+	value.prompt_spacer_rows = nil
 	return instructions.normalize(value)
 end
 
@@ -170,57 +170,11 @@ local function with_modifiable(bufnr, callback)
 	end
 end
 
-local function strip_prompt_space()
-	if not state or not valid_buf(state.output_buf) then
-		return
-	end
-	local rows = math.max(0, tonumber(state.prompt_spacer_rows) or 0)
-	if rows == 0 then
-		return
-	end
-	local count = vim.api.nvim_buf_line_count(state.output_buf)
-	local start = math.max(0, count - rows)
-	vim.api.nvim_buf_set_lines(state.output_buf, start, -1, false, {})
-	state.prompt_spacer_rows = 0
-end
-
-local function restore_prompt_space()
-	if not state or not valid_buf(state.output_buf) then
-		return
-	end
-	local rows = math.max(0, tonumber(state.prompt_reserved_rows) or 0)
-	if rows == 0 then
-		state.prompt_spacer_rows = 0
-		return
-	end
-	local blanks = {}
-	for _ = 1, rows do
-		table.insert(blanks, "")
-	end
-	vim.api.nvim_buf_set_lines(state.output_buf, -1, -1, false, blanks)
-	state.prompt_spacer_rows = rows
-end
-
-local function set_prompt_reserved_rows(rows)
-	if not state or not valid_buf(state.output_buf) then
-		return
-	end
-	rows = math.max(0, math.floor(tonumber(rows) or 0))
-	with_modifiable(state.output_buf, function()
-		strip_prompt_space()
-		state.prompt_reserved_rows = rows
-		restore_prompt_space()
-	end)
-end
-
 local function output_content_line_count()
 	if not state or not valid_buf(state.output_buf) then
 		return 1
 	end
-	return math.max(
-		1,
-		vim.api.nvim_buf_line_count(state.output_buf) - math.max(0, tonumber(state.prompt_spacer_rows) or 0)
-	)
+	return math.max(1, vim.api.nvim_buf_line_count(state.output_buf))
 end
 
 local function at_output_bottom()
@@ -274,7 +228,7 @@ local function center_output_position()
 	end
 	state.output_position_mode = "center"
 	state.output_position_syncing = true
-	local saved_view = view.center_output(state.output_win, output_content_line_count(), state.prompt_reserved_rows)
+	local saved_view = view.center_output(state.output_win, output_content_line_count())
 	state.output_position_syncing = false
 	if not saved_view then
 		reset_output_position()
@@ -357,9 +311,7 @@ local function set_output(lines, opts)
 	cancel_action_output()
 	output_ui.pause_language_injection(state)
 	with_modifiable(state.output_buf, function()
-		state.prompt_spacer_rows = 0
 		vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, lines)
-		restore_prompt_space()
 	end)
 	refresh_output_view(0)
 	if saved_view and valid_win(state.output_win) then
@@ -602,7 +554,7 @@ local function update_chrome()
 		and status ~= "disconnected"
 	instructions.sync_spinner(state, spinner_active, refresh_composer)
 	update_output_winbar()
-	if composer.is_open(state, state.output_win) and sync_composer then
+	if composer.is_open(state, state.output_host_win) and sync_composer then
 		sync_composer()
 	end
 	if valid_win(state.sessions_win) then
@@ -695,19 +647,21 @@ function M.close()
 	instructions.stop_spinner(state)
 	composer.close(state)
 	if not close_tab(chat_tab, return_win) then
+		close_window(state.output_win)
 		close_window(state.sessions_win)
-		if valid_win(state.output_win) then
-			local output_tab = vim.api.nvim_win_get_tabpage(state.output_win)
-			if #vim.api.nvim_list_tabpages() == 1 and #vim.api.nvim_tabpage_list_wins(output_tab) == 1 then
-				vim.api.nvim_set_current_win(state.output_win)
+		if valid_win(state.output_host_win) then
+			local host_tab = vim.api.nvim_win_get_tabpage(state.output_host_win)
+			if #vim.api.nvim_list_tabpages() == 1 and #vim.api.nvim_tabpage_list_wins(host_tab) == 1 then
+				vim.api.nvim_set_current_win(state.output_host_win)
 				vim.cmd("enew!")
 			else
-				close_window(state.output_win)
+				close_window(state.output_host_win)
 			end
 		end
 	end
 	state.sessions_win = nil
 	state.output_win = nil
+	state.output_host_win = nil
 	state.tabpage = nil
 	if valid_win(return_win) then
 		pcall(vim.api.nvim_set_current_win, return_win)
@@ -729,6 +683,17 @@ local function create_buffers()
 		vim.bo[state.sessions_buf].filetype = "acp-sessions"
 		vim.bo[state.sessions_buf].modifiable = false
 		render_sessions()
+	end
+	if not valid_buf(state.output_host_buf) then
+		created = true
+		state.output_host_buf = vim.api.nvim_create_buf(false, true)
+		pcall(vim.api.nvim_buf_set_name, state.output_host_buf, "acp://codex/host")
+		vim.bo[state.output_host_buf].buftype = "nofile"
+		vim.bo[state.output_host_buf].bufhidden = "hide"
+		vim.bo[state.output_host_buf].swapfile = false
+		vim.bo[state.output_host_buf].undolevels = -1
+		vim.bo[state.output_host_buf].filetype = "acp-host"
+		vim.bo[state.output_host_buf].modifiable = false
 	end
 	if not valid_buf(state.output_buf) then
 		created = true
@@ -781,8 +746,23 @@ local function configure_window(winid, output)
 	vim.wo[winid].linebreak = true
 	vim.wo[winid].cursorline = not output
 	if output then
-		view.configure_output_window(winid, state and state.prompt_reserved_rows)
+		view.configure_output_window(winid)
 	end
+end
+
+local function configure_host_window(winid)
+	if not valid_win(winid) then
+		return
+	end
+	vim.wo[winid].number = false
+	vim.wo[winid].relativenumber = false
+	vim.wo[winid].signcolumn = "no"
+	vim.wo[winid].foldcolumn = "0"
+	vim.wo[winid].statuscolumn = ""
+	vim.wo[winid].wrap = false
+	vim.wo[winid].cursorline = false
+	vim.wo[winid].winbar = ""
+	vim.wo[winid].fillchars = "eob: "
 end
 
 local function configure_sessions_window(winid)
@@ -792,42 +772,64 @@ local function configure_sessions_window(winid)
 	vim.wo[winid].winfixwidth = true
 end
 
-local function apply_composer_result(result)
+local function sync_output_float(layout, create)
+	if not layout or not layout.chat or not valid_buf(state.output_buf) then
+		return false, false
+	end
+	local geometry_changed = false
+	if not valid_win(state.output_win) or not view.is_floating(state.output_win) then
+		if not create then
+			return false, false
+		end
+		state.output_win = vim.api.nvim_open_win(state.output_buf, false, layout.chat)
+		geometry_changed = true
+	else
+		local current = vim.api.nvim_win_get_config(state.output_win)
+		geometry_changed = not view.same_float_geometry(current, layout.chat)
+		if geometry_changed then
+			vim.api.nvim_win_set_config(state.output_win, layout.chat)
+		end
+	end
+	vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
+	configure_window(state.output_win, true)
+	update_output_winbar()
+	return true, geometry_changed
+end
+
+local function apply_composer_result(result, create_output)
 	if not result then
 		return false
 	end
-	local reserved_rows = result.layout.reserved_rows
-	view.configure_output_window(state.output_win, reserved_rows)
-	local reserved_rows_changed = state.prompt_reserved_rows ~= reserved_rows
-	if reserved_rows_changed then
-		set_prompt_reserved_rows(reserved_rows)
+	local applied, output_geometry_changed = sync_output_float(result.layout, create_output)
+	if not applied then
+		return false
 	end
-	if state.output_position_mode == "center" and (result.geometry_changed or reserved_rows_changed) then
+	if state.output_position_mode == "center" and (result.geometry_changed or output_geometry_changed) then
 		center_output_position()
 	end
 	return true
 end
 
 sync_composer = function()
-	if not state or not valid_win(state.output_win) or not composer.is_open(state, state.output_win) then
+	if not state or not valid_win(state.output_host_win) or not composer.is_open(state, state.output_host_win) then
 		return nil
 	end
-	local result = composer.sync(state, state.output_win, config.window)
-	if not apply_composer_result(result) then
+	local result = composer.sync(state, state.output_host_win, config.window)
+	if not apply_composer_result(result, false) then
 		return nil
 	end
 	return result
 end
 
 refresh_composer = function()
-	if not composer.refresh_turn(state, state and state.output_win, config.window) then
+	if not composer.refresh_turn(state, state and state.output_host_win, config.window) then
 		instructions.stop_spinner(state)
 	end
 end
 
 local function open_composer()
-	local result = composer.open(state, state.output_win, config.window)
-	if not apply_composer_result(result) then
+	local result = composer.open(state, state.output_host_win, config.window)
+	if not apply_composer_result(result, true) then
 		return false
 	end
 	return true
@@ -840,26 +842,34 @@ end
 local function open_layout()
 	state._sync_composer = sync_composer
 	if
-		valid_win(state.output_win)
-		and composer.is_open(state, state.output_win)
-		and valid_win(state.sessions_win)
-		and vim.api.nvim_win_get_tabpage(state.output_win) == vim.api.nvim_win_get_tabpage(state.sessions_win)
+		normal_window_in_tab(state.output_host_win, state.tabpage)
+		and valid_win(state.output_win)
+		and view.is_floating(state.output_win)
+		and composer.is_open(state, state.output_host_win)
+		and normal_window_in_tab(state.sessions_win, state.tabpage)
+		and vim.api.nvim_win_get_tabpage(state.output_win) == state.tabpage
 	then
-		state.tabpage = vim.api.nvim_win_get_tabpage(state.output_win)
+		vim.api.nvim_set_current_tabpage(state.tabpage)
+		vim.api.nvim_win_set_buf(state.output_host_win, state.output_host_buf)
 		vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
 		vim.api.nvim_win_set_buf(state.input_win, state.input_buf)
 		vim.api.nvim_win_set_buf(state.sessions_win, state.sessions_buf)
+		configure_host_window(state.output_host_win)
 		configure_window(state.output_win, true)
 		configure_sessions_window(state.sessions_win)
 		render_sessions()
 		refresh_output_view(0)
 		pcall(vim.cmd, "redraw")
+		if not sync_composer() then
+			error("Could not synchronize the Codex float stack")
+		end
 		update_chrome()
 		focus_input(false)
 		return
 	end
 
 	local previous_output = state.output_win
+	local previous_host = state.output_host_win
 	local previous_sessions = state.sessions_win
 	composer.close(state)
 	local tabpage = valid_tab(state.tabpage) and state.tabpage or nil
@@ -870,41 +880,62 @@ local function open_layout()
 		vim.api.nvim_set_current_tabpage(tabpage)
 	end
 
-	local output_win = normal_window_in_tab(previous_output, tabpage) and previous_output or nil
-	if not output_win then
+	local host_win = normal_window_in_tab(previous_host, tabpage) and previous_host or nil
+	if not host_win and normal_window_in_tab(previous_output, tabpage) then
+		host_win = previous_output
+	end
+	if not host_win then
 		for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
-			if normal_window_in_tab(winid, tabpage) then
-				output_win = winid
+			if normal_window_in_tab(winid, tabpage) and winid ~= previous_sessions then
+				host_win = winid
 				break
 			end
 		end
 	end
-	if not output_win then
-		error("Codex tab has no normal window for the chat buffer")
+	if not host_win and normal_window_in_tab(previous_sessions, tabpage) then
+		vim.api.nvim_set_current_win(previous_sessions)
+		vim.cmd("rightbelow vnew")
+		host_win = vim.api.nvim_get_current_win()
 	end
-	for _, winid in pairs({ previous_output, previous_sessions }) do
-		if valid_win(winid) and winid ~= output_win then
+	if not host_win then
+		error("Codex tab has no normal host window")
+	end
+
+	local output_win = valid_win(previous_output)
+			and view.is_floating(previous_output)
+			and vim.api.nvim_win_get_tabpage(previous_output) == tabpage
+			and previous_output
+		or nil
+	local sessions_win = normal_window_in_tab(previous_sessions, tabpage)
+			and previous_sessions ~= host_win
+			and previous_sessions
+		or nil
+	if not sessions_win then
+		vim.api.nvim_set_current_win(host_win)
+		local sessions_width = math.max(16, tonumber(config.window.sessions_width) or 30)
+		vim.cmd(("topleft %dvsplit"):format(sessions_width))
+		sessions_win = vim.api.nvim_get_current_win()
+	end
+	for _, winid in pairs({ previous_output, previous_host, previous_sessions }) do
+		if valid_win(winid) and winid ~= host_win and winid ~= output_win and winid ~= sessions_win then
 			close_window(winid)
 		end
 	end
 
 	state.tabpage = tabpage
 	state.output_win = output_win
-	state.sessions_win = nil
-	vim.api.nvim_set_current_win(state.output_win)
-	vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
-	configure_window(state.output_win, true)
-	vim.wo[state.output_win].winbar = view.chat_winbar(state)
-
+	state.output_host_win = host_win
+	state.sessions_win = sessions_win
+	vim.api.nvim_set_current_win(state.output_host_win)
+	vim.api.nvim_win_set_buf(state.output_host_win, state.output_host_buf)
+	configure_host_window(state.output_host_win)
 	local sessions_width = math.max(16, tonumber(config.window.sessions_width) or 30)
-	vim.cmd(("topleft %dvsplit"):format(sessions_width))
-	state.sessions_win = vim.api.nvim_get_current_win()
 	vim.api.nvim_win_set_buf(state.sessions_win, state.sessions_buf)
 	configure_sessions_window(state.sessions_win)
 	pcall(vim.api.nvim_win_set_width, state.sessions_win, sessions_width)
 	vim.wo[state.sessions_win].winbar =
 		view.sessions_winbar(state.sessions_count or 1, state.threads_loading, state.cwd)
-	vim.api.nvim_set_current_win(state.output_win)
+	vim.api.nvim_set_current_win(state.output_host_win)
 
 	if not open_composer() then
 		error("Could not create the Codex composer")
@@ -1448,10 +1479,12 @@ function M.new_chat(opts)
 	else
 		local windows = {
 			sessions_buf = state.sessions_buf,
+			output_host_buf = state.output_host_buf,
 			output_buf = state.output_buf,
 			input_buf = state.input_buf,
 			instruction_buf = state.instruction_buf,
 			sessions_win = state.sessions_win,
+			output_host_win = state.output_host_win,
 			output_win = state.output_win,
 			input_win = state.input_win,
 			instruction_win = state.instruction_win,
@@ -2119,8 +2152,9 @@ local function schedule_composer_sync()
 	if
 		not state
 		or state.composer_layout_pending
+		or not valid_win(state.output_host_win)
 		or not valid_win(state.output_win)
-		or not composer.is_open(state, state.output_win)
+		or not composer.is_open(state, state.output_host_win)
 	then
 		return
 	end
@@ -2245,8 +2279,16 @@ local function register_autocmds()
 	vim.api.nvim_create_autocmd("WinClosed", {
 		group = group,
 		callback = function(event)
-			if composer.handle_win_closed(state, event.match) == "prompt" then
+			local winid = tonumber(event.match)
+			if composer.handle_win_closed(state, winid) == "prompt" then
 				instructions.stop_spinner(state)
+			end
+			if state and winid == state.output_win then
+				state.output_win = nil
+			elseif state and winid == state.output_host_win then
+				state.output_host_win = nil
+			elseif state and winid == state.sessions_win then
+				state.sessions_win = nil
 			end
 		end,
 	})
@@ -2309,6 +2351,9 @@ local function register_runtime()
 	if state then
 		if valid_win(state.sessions_win) then
 			configure_sessions_window(state.sessions_win)
+		end
+		if valid_win(state.output_host_win) then
+			configure_host_window(state.output_host_win)
 		end
 		if valid_win(state.output_win) then
 			configure_window(state.output_win, true)
@@ -2373,11 +2418,7 @@ function M._adopt_runtime(runtime)
 		end
 		if valid_buf(state.output_buf) then
 			blocks.bind(state.output_buf, state.chat)
-			local content_count = math.max(
-				1,
-				vim.api.nvim_buf_line_count(state.output_buf) - math.max(0, tonumber(state.prompt_spacer_rows) or 0)
-			)
-			local current = vim.api.nvim_buf_get_lines(state.output_buf, 0, content_count, false)
+			local current = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)
 			local expected = state.chat:render_lines()
 			if not vim.deep_equal(current, expected) then
 				set_output(expected, { preserve_view = true })
@@ -2417,7 +2458,13 @@ function M._reset()
 		client:stop()
 	end
 	if state then
-		local buffers = { state.sessions_buf, state.input_buf, state.instruction_buf, state.output_buf }
+		local buffers = {
+			state.sessions_buf,
+			state.output_host_buf,
+			state.input_buf,
+			state.instruction_buf,
+			state.output_buf,
+		}
 		M.close()
 		blocks.unbind(state.output_buf)
 		for _, bufnr in pairs(buffers) do

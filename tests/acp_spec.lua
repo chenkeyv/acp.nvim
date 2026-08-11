@@ -907,22 +907,29 @@ test("large block transcripts keep lookup and streaming edits bounded", function
 	ok(chat:semantic_data(vim.fn.getcwd()) ~= semantic, "expected a streamed edit to invalidate model-wide semantics")
 end)
 
-test("chat view keeps the prompt inset and styles transcript roles", function()
-	eq(
-		view.prompt_geometry({ row = 1, col = 31, width = 89, height = 30 }, {
-			input_height = 6,
-			input_padding = 2,
-		}),
-		{
-			row = 23,
-			col = 33,
-			width = 83,
-			height = 4,
-			outer_width = 85,
-			outer_height = 6,
-			reserved_rows = 8,
-		}
-	)
+test("chat view stacks floating surfaces and styles transcript roles", function()
+	local stack = view.stack_geometry({ row = 1, col = 31, width = 89, height = 30 }, { status = "ready" }, {
+		input_height = 6,
+		input_padding = 2,
+		instruction_height = 4,
+	})
+	eq({
+		outer_width = stack.outer_width,
+		bottom_padding = stack.bottom_padding,
+		chat = stack.chat,
+		turn = stack.turn,
+		prompt = stack.prompt,
+	}, {
+		outer_width = 89,
+		bottom_padding = 2,
+		chat = { row = 1, col = 31, width = 89, height = 20 },
+		turn = { row = 21, col = 32, width = 87, height = 2 },
+		prompt = { row = 23, col = 31, width = 87, height = 4, outer_height = 6 },
+	})
+	eq(#stack.turn_lines, 2)
+	eq(stack.turn_lines[1], string.rep(" ", 87))
+	contains(stack.turn_lines[2], icons.get("idle") .. " ready")
+	eq(vim.fn.strdisplaywidth(stack.turn_lines[2]), 87)
 	local instruction_block = view.instruction_block({
 		status = "responding",
 		busy = true,
@@ -951,23 +958,32 @@ test("chat view keeps the prompt inset and styles transcript roles", function()
 	local prompt_footer = chunks_text(view.prompt_footer({
 		model = "gpt-5.6",
 		effort = "high",
-		tokens = { modelContextWindow = 1050000 },
+		tokens = { totalTokens = 50000, modelContextWindow = 1050000 },
 		contexts = { { type = "file" } },
 	}, 83))
 	eq(vim.fn.strdisplaywidth(prompt_footer), 83)
-	contains(prompt_footer, "Prompt")
+	ok(not prompt_footer:find("Prompt", 1, true))
 	contains(prompt_footer, "gpt-5.6 · high")
-	contains(prompt_footer, "ctx 1.1m")
+	contains(prompt_footer, "ctx 95% · 1.1m")
 	contains(prompt_footer, "+1 context")
 	contains(prompt_footer, "<C-s> steer")
 	contains(prompt_footer, "<C-CR> send")
 	ok(
-		prompt_footer:find("Prompt", 1, true) < prompt_footer:find("<C-s> steer", 1, true),
-		"expected prompt metadata before the lower-right key hints"
+		prompt_footer:find("gpt-5.6 · high", 1, true) < prompt_footer:find("ctx 95% · 1.1m", 1, true),
+		"expected model and effort before remaining context"
+	)
+	ok(
+		prompt_footer:find("ctx 95% · 1.1m", 1, true) < prompt_footer:find("<C-s> steer", 1, true),
+		"expected remaining context before the lower-right key hints"
 	)
 	local narrow_footer = chunks_text(view.prompt_footer({ model = "gpt-5.6", effort = "high" }, 20))
 	eq(vim.fn.strdisplaywidth(narrow_footer), 20)
-	contains(narrow_footer, "Prompt")
+	contains(narrow_footer, "gpt-5.6 · high")
+	ok(not narrow_footer:find("Prompt", 1, true))
+	contains(
+		chunks_text(view.prompt_title({ tokens = { totalTokens = 1200, modelContextWindow = 1000 } })),
+		"ctx 0% · 1k"
+	)
 	local idle_block = view.instruction_block({ status = "ready" }, 28, 4)
 	eq(#idle_block.lines, 2)
 	eq(idle_block.lines[1], string.rep(" ", 28))
@@ -1373,8 +1389,9 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(state.tabpage, chat_tab)
 		eq(#vim.api.nvim_list_tabpages(), tab_count + 1)
 		eq(vim.api.nvim_tabpage_list_wins(origin_tab), origin_windows)
-		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 4)
+		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 5)
 		eq(vim.bo[state.sessions_buf].filetype, "acp-sessions")
+		eq(vim.bo[state.output_host_buf].filetype, "acp-host")
 		eq(vim.bo[state.output_buf].filetype, "acp")
 		ok(
 			vim.tbl_contains(
@@ -1385,13 +1402,14 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		)
 		eq(vim.bo[state.input_buf].filetype, "acp-prompt")
 		eq(vim.bo[state.sessions_buf].undolevels, -1)
+		eq(vim.bo[state.output_host_buf].undolevels, -1)
 		eq(vim.bo[state.output_buf].undolevels, -1)
 		eq(vim.wo[state.output_win].foldmethod, "expr")
 		eq(vim.wo[state.output_win].foldexpr, "v:lua.acp_nvim_output_foldexpr()")
 		eq(vim.wo[state.output_win].foldlevel, 2)
-		eq(vim.wo[state.output_win].foldcolumn, "1")
+		eq(vim.wo[state.output_win].foldcolumn, "0")
 		eq(vim.wo[state.output_win].signcolumn, "no")
-		eq(vim.wo[state.output_win].statuscolumn, "%C ")
+		eq(vim.wo[state.output_win].statuscolumn, "  ")
 		eq(vim.wo[state.output_win].breakindent, false)
 		eq(vim.wo[state.output_win].showbreak, "")
 		eq(vim.b[state.output_buf].indent_guide, false)
@@ -1422,43 +1440,56 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 			"row",
 			{
 				{ "leaf", state.sessions_win },
-				{ "leaf", state.output_win },
+				{ "leaf", state.output_host_win },
 			},
 		})
+		local chat_float = vim.api.nvim_win_get_config(state.output_win)
 		local prompt = vim.api.nvim_win_get_config(state.input_win)
 		local turn_panel = vim.api.nvim_win_get_config(state.instruction_win)
-		eq(prompt.relative, "editor")
+		eq(chat_float.relative, "win")
+		eq(chat_float.win, state.output_host_win)
+		eq(chat_float.zindex, 49)
+		eq(chat_float.row, 0)
+		eq(chat_float.col, 0)
+		eq(chat_float.border, "none")
+		eq(prompt.relative, "win")
+		eq(prompt.win, state.output_host_win)
 		eq(prompt.zindex, 50)
 		ok(not chunks_text(prompt.title):find("Prompt", 1, true))
 		local prompt_footer = chunks_text(prompt.footer)
-		contains(prompt_footer, "Prompt")
+		ok(not prompt_footer:find("Prompt", 1, true))
 		contains(prompt_footer, "<C-s> steer")
 		contains(prompt_footer, "<C-CR> send")
 		eq(prompt.footer_pos, "left")
 		eq(vim.fn.strdisplaywidth(prompt_footer), prompt.width)
 		eq(turn_panel.relative, "win")
-		eq(turn_panel.win, state.input_win)
+		eq(turn_panel.win, state.output_host_win)
 		eq(turn_panel.focusable, false)
-		eq(turn_panel.col, 0)
+		eq(turn_panel.col, 1)
 		eq(turn_panel.width, prompt.width)
-		eq(turn_panel.row + turn_panel.height, -1)
+		eq(chat_float.width, prompt.width + 2)
+		eq(chat_float.row + chat_float.height, turn_panel.row)
+		eq(turn_panel.row + turn_panel.height, prompt.row)
+		eq(
+			prompt.row + prompt.height + 2 + ui.get_config().window.input_padding,
+			vim.api.nvim_win_get_height(state.output_host_win)
+		)
 		eq(turn_panel.border, "none")
 		eq(turn_panel.height, 2)
-		local prompt_position = vim.api.nvim_win_get_position(state.input_win)
-		local turn_position = vim.api.nvim_win_get_position(state.instruction_win)
-		eq(turn_position[1] + turn_panel.height, prompt_position[1])
-		eq(turn_position[2], prompt_position[2] + 1)
 		contains(table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n"), "new chat")
-		local output_position = vim.api.nvim_win_get_position(state.output_win)
+		vim.cmd("redraw")
 		local output_info = vim.fn.getwininfo(state.output_win)[1]
-		eq(prompt.col, output_position[2] + output_info.textoff + 2)
-		ok(prompt.width < vim.api.nvim_win_get_width(state.output_win))
-		ok(vim.wo[state.output_win].scrolloff > 0)
+		eq(output_info.textoff, 2)
+		eq(prompt.width + 2, vim.api.nvim_win_get_width(state.output_win))
+		eq(vim.api.nvim_win_get_width(state.output_win), vim.api.nvim_win_get_width(state.output_host_win))
+		eq(vim.wo[state.output_win].scrolloff, 0)
 		eq(vim.wo[state.output_win].fillchars, "eob: ")
 		eq(vim.wo[state.input_win].fillchars, "eob: ")
+		ok(not vim.wo[state.output_win].winhighlight:find("FloatBorder", 1, true))
 		contains(vim.wo[state.input_win].winhighlight, "AcpPromptBorder")
 		eq(vim.api.nvim_win_get_position(state.sessions_win)[2], 0)
 		eq(vim.api.nvim_win_get_tabpage(state.output_win), chat_tab)
+		eq(vim.api.nvim_win_get_tabpage(state.output_host_win), chat_tab)
 		eq(vim.api.nvim_win_get_tabpage(state.input_win), chat_tab)
 		eq(vim.api.nvim_win_get_tabpage(state.sessions_win), chat_tab)
 
@@ -1469,7 +1500,7 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 			vim.wait(100, function()
 				return not vim.api.nvim_win_is_valid(attached_turn)
 			end),
-			"closing the composer prompt should close its attached turn panel"
+			"closing the composer prompt should close its sibling turn panel"
 		)
 		ui.open()
 		state = ui._state()
@@ -1479,17 +1510,17 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.api.nvim_get_current_tabpage(), chat_tab)
 		eq(state.tabpage, chat_tab)
 		eq(#vim.api.nvim_list_tabpages(), tab_count + 1)
-		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 4)
-		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
+		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 5)
+		eq(vim.api.nvim_win_get_config(state.input_win).relative, "win")
 		eq(vim.api.nvim_tabpage_list_wins(origin_tab), origin_windows)
 
 		vim.api.nvim_win_close(state.sessions_win, true)
 		vim.cmd("AcpSessions")
 		state = ui._state()
-		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 4)
+		eq(#vim.api.nvim_tabpage_list_wins(chat_tab), 5)
 		eq(vim.api.nvim_get_current_win(), state.sessions_win)
 		eq(vim.api.nvim_win_get_position(state.sessions_win)[2], 0)
-		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
+		eq(vim.api.nvim_win_get_config(state.input_win).relative, "win")
 
 		local old_prompt_width = vim.api.nvim_win_get_config(state.input_win).width
 		vim.api.nvim_win_set_width(state.sessions_win, 20)
@@ -1502,12 +1533,12 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		)
 		local resized_prompt = vim.api.nvim_win_get_config(state.input_win)
 		local resized_turn = vim.api.nvim_win_get_config(state.instruction_win)
-		eq(resized_turn.win, state.input_win)
+		local resized_chat = vim.api.nvim_win_get_config(state.output_win)
+		eq(resized_turn.win, state.output_host_win)
 		eq(resized_turn.width, resized_prompt.width)
-		local resized_prompt_position = vim.api.nvim_win_get_position(state.input_win)
-		local resized_turn_position = vim.api.nvim_win_get_position(state.instruction_win)
-		eq(resized_turn_position[1] + resized_turn.height, resized_prompt_position[1])
-		eq(resized_turn_position[2], resized_prompt_position[2] + 1)
+		eq(resized_chat.width, resized_prompt.width + 2)
+		eq(resized_chat.row + resized_chat.height, resized_turn.row)
+		eq(resized_turn.row + resized_turn.height, resized_prompt.row)
 
 		local chat_windows = vim.api.nvim_tabpage_list_wins(chat_tab)
 		state.thread_id = "thread-1"
@@ -1694,11 +1725,14 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(fake.turns[1].thread_id, "thread-1")
 		eq(fake.turns[1].payload.input[1].text, "Simplify this plugin")
 		eq(state.busy, true)
+		local stable_chat_width = vim.api.nvim_win_get_config(state.output_win).width
 		local stable_prompt_width = vim.api.nvim_win_get_config(state.input_win).width
 		local stable_instruction_width = vim.api.nvim_win_get_config(state.instruction_win).width
 		local function assert_action_status_width()
+			eq(vim.api.nvim_win_get_config(state.output_win).width, stable_chat_width)
 			eq(vim.api.nvim_win_get_config(state.input_win).width, stable_prompt_width)
 			eq(vim.api.nvim_win_get_config(state.instruction_win).width, stable_instruction_width)
+			eq(stable_chat_width, stable_prompt_width + 2)
 			eq(stable_instruction_width, stable_prompt_width)
 			for _, line in ipairs(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false)) do
 				eq(vim.fn.strdisplaywidth(line), stable_instruction_width)
@@ -1835,12 +1869,12 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			state.output_cache.changedtick ~= vim.api.nvim_buf_get_changedtick(state.output_buf),
 			"full semantic parsing should stay paused during an active turn"
 		)
-		local content_line = vim.api.nvim_buf_line_count(state.output_buf) - state.prompt_spacer_rows
+		local content_line = vim.api.nvim_buf_line_count(state.output_buf)
 		vim.cmd("redraw")
 		local last_position = vim.fn.screenpos(state.output_win, content_line, 1)
-		local prompt_top = vim.api.nvim_win_get_config(state.input_win).row + 1
+		local turn_top = vim.api.nvim_win_get_position(state.instruction_win)[1] + 1
 		ok(last_position.row > 0, "expected the latest response line to remain visible")
-		ok(last_position.row < prompt_top, "the floating prompt must not cover the latest response")
+		ok(last_position.row < turn_top, "the vertically stacked turn panel must not cover the latest response")
 
 		local function saved_output_view()
 			return vim.api.nvim_win_call(state.output_win, function()
@@ -1848,22 +1882,17 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			end)
 		end
 
-		local function unobscured_center_row()
-			local stack_win = state.instruction_win
-					and vim.api.nvim_win_is_valid(state.instruction_win)
-					and state.instruction_win
-				or state.input_win
-			local stack_top = vim.api.nvim_win_get_position(stack_win)[1] + 1
+		local function chat_center_row()
 			local info = vim.fn.getwininfo(state.output_win)[1]
 			local text_top = info.winrow + (info.winbar or 0)
-			return math.floor((text_top + stack_top - 1) / 2)
+			return text_top + math.floor((info.height - 1) / 2)
 		end
 
 		local function assert_latest_response_centered(message)
 			vim.cmd("redraw")
-			local line = vim.api.nvim_buf_line_count(state.output_buf) - state.prompt_spacer_rows
+			local line = vim.api.nvim_buf_line_count(state.output_buf)
 			local position = vim.fn.screenpos(state.output_win, line, 1)
-			local expected = unobscured_center_row()
+			local expected = chat_center_row()
 			ok(
 				math.abs(position.row - expected) <= 1,
 				("%s: expected row %d near %d"):format(message, position.row, expected)
@@ -1951,6 +1980,13 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		eq(count(output, "Implemented."), 1)
 		eq(state.diff, "--- a/file\n+++ b/file")
 		eq(state.tokens.totalTokens, 42)
+		local live_prompt_footer = chunks_text(vim.api.nvim_win_get_config(state.input_win).footer)
+		contains(live_prompt_footer, "gpt-test · high")
+		contains(live_prompt_footer, "ctx 96% · 1k")
+		ok(
+			live_prompt_footer:find("gpt-test · high", 1, true) < live_prompt_footer:find("ctx 96% · 1k", 1, true),
+			"expected live model and effort before remaining context"
+		)
 		eq(state.busy, false)
 		eq(state.instruction_spinner_timer, nil)
 		contains(vim.api.nvim_buf_get_lines(state.instruction_buf, -2, -1, false)[1], icons.get("idle") .. " completed")
@@ -2041,7 +2077,7 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		contains(tool_preview, "Found action cells")
 		vim.api.nvim_win_close(tool_preview_win, true)
 		eq(vim.api.nvim_buf_get_lines(state.output_buf, 0, state.chat.line_count, false), state.chat:render_lines())
-		eq(vim.api.nvim_buf_line_count(state.output_buf), state.chat.line_count + state.prompt_spacer_rows)
+		eq(vim.api.nvim_buf_line_count(state.output_buf), state.chat.line_count)
 		local blocks_before_stderr = #state.chat.blocks
 		fake.handlers.on_stderr(model_refresh_stderr())
 		fake.handlers.on_stderr(model_refresh_stderr())
@@ -2135,25 +2171,24 @@ test("control-s steers the active turn instead of queueing", function()
 		end
 		local stable_prompt_geometry = geometry(state.input_win)
 		local initial_instruction_geometry = geometry(state.instruction_win)
-		local base_reserved_rows = state.prompt_reserved_rows - initial_instruction_geometry.height
-		local base_spacer_rows = state.prompt_spacer_rows - initial_instruction_geometry.height
+		local initial_chat_geometry = geometry(state.output_win)
 		eq(initial_instruction_geometry.height, 2)
 		local function assert_prompt_stack(height)
 			eq(geometry(state.input_win), stable_prompt_geometry)
 			local instruction_geometry = geometry(state.instruction_win)
+			local chat_geometry = geometry(state.output_win)
 			eq(instruction_geometry.relative, initial_instruction_geometry.relative)
 			eq(instruction_geometry.col, initial_instruction_geometry.col)
 			eq(instruction_geometry.width, initial_instruction_geometry.width)
 			eq(instruction_geometry.height, height)
-			eq(instruction_geometry.row + instruction_geometry.height, -1)
+			eq(instruction_geometry.row + instruction_geometry.height, stable_prompt_geometry.row)
 			local instruction_config = vim.api.nvim_win_get_config(state.instruction_win)
-			eq(instruction_config.win, state.input_win)
-			local prompt_position = vim.api.nvim_win_get_position(state.input_win)
-			local instruction_position = vim.api.nvim_win_get_position(state.instruction_win)
-			eq(instruction_position[1] + height, prompt_position[1])
-			eq(instruction_position[2], prompt_position[2] + 1)
-			eq(state.prompt_reserved_rows, base_reserved_rows + height)
-			eq(state.prompt_spacer_rows, base_spacer_rows + height)
+			eq(instruction_config.win, state.output_host_win)
+			eq(chat_geometry.row + chat_geometry.height, instruction_geometry.row)
+			eq(chat_geometry.width, stable_prompt_geometry.width + 2)
+			eq(chat_geometry.height, initial_chat_geometry.height - (height - initial_instruction_geometry.height))
+			eq(state.prompt_reserved_rows, nil)
+			eq(state.prompt_spacer_rows, nil)
 			local lines = vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false)
 			eq(#lines, height)
 			for _, line in ipairs(lines) do
@@ -2185,11 +2220,11 @@ test("control-s steers the active turn instead of queueing", function()
 		local prompt_config = vim.api.nvim_win_get_config(state.input_win)
 		local instruction_config = vim.api.nvim_win_get_config(state.instruction_win)
 		eq(instruction_config.relative, "win")
-		eq(instruction_config.win, state.input_win)
+		eq(instruction_config.win, state.output_host_win)
 		eq(instruction_config.focusable, false)
-		eq(instruction_config.col, 0)
+		eq(instruction_config.col, 1)
 		eq(instruction_config.width, prompt_config.width)
-		eq(instruction_config.row + instruction_config.height, -1)
+		eq(instruction_config.row + instruction_config.height, prompt_config.row)
 		eq(instruction_config.border, "none")
 		assert_prompt_stack(3)
 		local instruction_text = table.concat(vim.api.nvim_buf_get_lines(state.instruction_buf, 0, -1, false), "\n")
@@ -2361,7 +2396,10 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 	local tabpage = state.tabpage
 	local sessions_buf = state.sessions_buf
 	local sessions_win = state.sessions_win
+	local output_host_buf = state.output_host_buf
+	local output_host_win = state.output_host_win
 	local output_buf = state.output_buf
+	local output_win = state.output_win
 	local input_buf = state.input_buf
 	local input_win = state.input_win
 	local instruction_buf = state.instruction_buf
@@ -2424,7 +2462,10 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 		eq(state.tabpage, tabpage)
 		eq(state.sessions_buf, sessions_buf)
 		eq(state.sessions_win, sessions_win)
+		eq(state.output_host_buf, output_host_buf)
+		eq(state.output_host_win, output_host_win)
 		eq(state.output_buf, output_buf)
+		eq(state.output_win, output_win)
 		eq(state.input_buf, input_buf)
 		eq(state.input_win, input_win)
 		eq(state.instruction_buf, instruction_buf)
@@ -2435,10 +2476,15 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 			"Preserve this queued instruction"
 		)
 		eq(vim.bo[state.output_buf].filetype, "acp")
-		eq(vim.api.nvim_win_get_config(state.input_win).relative, "editor")
+		local restored_chat = vim.api.nvim_win_get_config(state.output_win)
+		eq(restored_chat.relative, "win")
+		eq(restored_chat.win, state.output_host_win)
+		local restored_prompt = vim.api.nvim_win_get_config(state.input_win)
+		eq(restored_prompt.relative, "win")
+		eq(restored_prompt.win, state.output_host_win)
 		local restored_turn = vim.api.nvim_win_get_config(state.instruction_win)
 		eq(restored_turn.relative, "win")
-		eq(restored_turn.win, state.input_win)
+		eq(restored_turn.win, state.output_host_win)
 		eq(vim.api.nvim_buf_get_lines(input_buf, 0, -1, false), { "preserve this draft" })
 
 		live_client.on_notification("item/agentMessage/delta", {

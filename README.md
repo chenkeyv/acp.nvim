@@ -16,8 +16,8 @@ phase.
 - one long-lived `codex app-server` process per Neovim instance
 - new, recent, and resumed Codex threads, including VS Code-created threads
 - a persistent left sessions split with the current chat pinned at the top
-- one inset composer built from a floating prompt and its attached turn panel,
-  with tool-aware chat styling and icons
+- one host-relative vertical stack of chat, turn/status, and prompt floats, with
+  tool-aware chat styling and icons
 - streamed agent messages and plans
 - Codex CLI-style command, tool, exploration, and file-change cells
 - model and reasoning-effort selectors from the server catalog
@@ -89,17 +89,22 @@ require("acp").setup({
 `command = "codex"` is also accepted and expands to the default app-server
 command. A command table is used exactly as supplied.
 
-The composer floats over reserved blank rows at the bottom of the chat, so it
-does not cover the latest response. Its two visually separate floats share one
-geometry and lifecycle: the compact borderless turn panel is positioned relative
-to the prompt window, and follows it automatically when the chat moves or
-resizes. `input_height` includes the prompt frame and `input_padding` controls
-its inset from the chat text area. Prompt, model, reasoning, and context metadata
-sit on the lower-left border, while the send and steer hints remain on the
-lower-right. A blank top row separates the turn panel from the chat, while the
-current status stays anchored to the bottom and steer or queued follow-ups fill
-upward immediately above it. The panel grows with its content up to
-`instruction_height`, including the spacer and status rows; pending entries
+The sessions list remains a native left split. On the right, a blank normal host
+owns three sibling floats stacked vertically: the borderless chat, the compact
+borderless turn panel, and the bordered prompt. This leaves the prompt as the
+stack's only visible border. The surfaces never overlap, so
+the transcript contains no composer-protection spacer rows. One host-relative
+geometry keeps their widths and edges aligned as the tab resizes.
+`input_height` includes the prompt frame, while `input_padding` controls the
+vertical gap below the stack. A blank two-column native gutter pads transcript
+text without showing fold or sign markers. Model, reasoning, remaining-context
+percentage and window size, and attached-context metadata sit on the prompt's
+lower-left border, while the send and steer hints remain on the lower-right.
+Model/reasoning and remaining context are kept ahead of other metadata and key
+hints when space is tight. A blank top row separates the turn content from the
+chat, while the current status stays anchored to the bottom and steer or queued
+follow-ups fill upward immediately above it. The panel grows with its content up
+to `instruction_height`, including the spacer and status rows; pending entries
 expand and collapse it without changing its width. The active status icon spins
 in place during a turn and stops on completion, error, close, or reload. Queued
 entries disappear when their turn starts, while steer entries disappear when the
