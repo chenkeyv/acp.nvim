@@ -527,6 +527,10 @@ function Client:unsubscribe_thread(thread_id, callback)
 	return self:request("thread/unsubscribe", { threadId = thread_id }, callback)
 end
 
+function Client:set_thread_name(thread_id, name, callback)
+	return self:request("thread/name/set", { threadId = thread_id, name = name }, callback)
+end
+
 function Client:review(thread_id, target, delivery, callback)
 	return self:request("review/start", {
 		threadId = thread_id,

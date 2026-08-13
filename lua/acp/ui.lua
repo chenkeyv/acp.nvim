@@ -1011,7 +1011,7 @@ local function flush_thread_waiters(ok, value)
 	end
 end
 
-local function ensure_thread(callback)
+local function ensure_thread(callback, name)
 	if state.thread_id then
 		callback(true, state.thread_id)
 		return
@@ -1036,6 +1036,13 @@ local function ensure_thread(callback)
 			append_notice("error", message)
 			flush_thread_waiters(false, message)
 			return
+		end
+		if present(name) and client.set_thread_name then
+			client:set_thread_name(state.thread_id, name, function(_, name_err)
+				if name_err then
+					notify(("Could not name the new Codex chat: %s"):format(name_err), vim.log.levels.WARN)
+				end
+			end)
 		end
 		flush_thread_waiters(true, state.thread_id)
 	end)
@@ -1161,8 +1168,10 @@ local function local_command(text)
 		compact_thread()
 	elseif name == "status" then
 		show_status()
+	elseif name == "clear" then
+		return M.new_chat({ name = args ~= "" and args or nil }) and true or "keep"
 	elseif name == "new" then
-		M.new_chat()
+		return M.new_chat() and true or "keep"
 	elseif name == "threads" then
 		open_threads()
 	elseif name == "login" then
@@ -1184,8 +1193,11 @@ local function submit_prompt(follow_up)
 		notify("Prompt is empty", vim.log.levels.WARN)
 		return
 	end
-	if local_command(text) then
-		set_input("")
+	local handled = local_command(text)
+	if handled then
+		if handled ~= "keep" then
+			set_input("")
+		end
 		return
 	end
 	local envelope = prepared_prompt(text)
@@ -1374,6 +1386,10 @@ function M.new_chat(opts)
 		notify("Stop or wait for the active Codex turn before starting a new chat", vim.log.levels.WARN)
 		return false
 	end
+	if present(opts.name) and (not client or type(client.set_thread_name) ~= "function") then
+		notify("Reload acp.nvim before naming a new Codex chat", vim.log.levels.WARN)
+		return false
+	end
 	local previous_thread = state and state.thread_id
 	if not state then
 		state = fresh_state(current_cwd())
@@ -1413,6 +1429,9 @@ function M.new_chat(opts)
 		set_input("")
 		vim.b[state.input_buf].acp_cwd = state.cwd
 		vim.b[state.input_buf].acp_thread_id = nil
+	end
+	if present(opts.name) then
+		ensure_thread(function() end, opts.name)
 	end
 	render_sessions()
 	update_chrome()

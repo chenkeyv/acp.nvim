@@ -302,6 +302,9 @@ test("client exposes the Codex completion request contracts", function()
 	client:search_files("comp", { "/tmp/project" }, function(result, err)
 		results.files = { result = result, err = err }
 	end)
+	client:set_thread_name("thread-1", "release prep", function(result, err)
+		results.name = { result = result, err = err }
+	end)
 
 	eq(process.writes[1].method, "skills/list")
 	eq(process.writes[1].params, { cwds = { "/tmp/project" } })
@@ -309,13 +312,17 @@ test("client exposes the Codex completion request contracts", function()
 	eq(process.writes[2].params, { forceRefresh = false, threadId = "thread-1" })
 	eq(process.writes[3].method, "fuzzyFileSearch")
 	eq(process.writes[3].params, { query = "comp", roots = { "/tmp/project" } })
+	eq(process.writes[4].method, "thread/name/set")
+	eq(process.writes[4].params, { threadId = "thread-1", name = "release prep" })
 
 	client:handle_message({ id = 0, result = { data = { { cwd = "/tmp/project", skills = {} } } } })
 	client:handle_message({ id = 1, result = { apps = { { id = "github", callable = true, enabled = true } } } })
 	client:handle_message({ id = 2, result = { files = { { path = "lua/acp/ui.lua" } } } })
+	client:handle_message({ id = 3, result = {} })
 	eq(results.skills.result.data[1].cwd, "/tmp/project")
 	eq(results.apps.result[1].id, "github")
 	eq(results.files.result.files[1].path, "lua/acp/ui.lua")
+	eq(results.name.result, {})
 	client:stop()
 end)
 
@@ -2458,6 +2465,100 @@ test("sessions split lists and resumes Codex threads", function()
 	end
 end)
 
+test("clear slash command resets the chat locally and preserves busy input", function()
+	ui._reset()
+	ui.setup({ auto_context = false, command = { "missing-codex" } })
+	local fake = { starts = 0, turns = {}, unsubscribed = {} }
+
+	function fake:set_handlers(handlers)
+		self.handlers = handlers
+	end
+
+	function fake:list_threads(_, callback)
+		callback({})
+	end
+
+	function fake:start_thread(opts, callback)
+		self.starts = self.starts + 1
+		local id = "clear-thread-" .. self.starts
+		callback({
+			thread = { id = id, cwd = opts.cwd, turns = {} },
+			cwd = opts.cwd,
+		})
+	end
+
+	function fake:start_turn(thread_id, payload, callback)
+		table.insert(self.turns, { thread_id = thread_id, payload = payload })
+		callback({ turn = { id = "clear-turn-1", status = "inProgress" } })
+	end
+
+	function fake:unsubscribe_thread(thread_id, callback)
+		table.insert(self.unsubscribed, thread_id)
+		callback({})
+	end
+
+	function fake:set_thread_name(thread_id, name, callback)
+		self.named = { thread_id = thread_id, name = name }
+		callback({})
+	end
+
+	function fake:stop() end
+
+	ui._set_client(fake)
+	local passed, err = pcall(function()
+		ui.open()
+		local state = ui._state()
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Keep this old chat" })
+		ui.send()
+		eq(state.thread_id, "clear-thread-1")
+		eq(#fake.turns, 1)
+		fake.handlers.on_notification("turn/completed", {
+			threadId = state.thread_id,
+			turn = { id = "clear-turn-1", status = "completed" },
+		})
+		state.contexts = { { type = "file", path = "/tmp/old" } }
+		state.diff = "old diff"
+		state.tokens = { totalTokens = 12 }
+
+		local output_buf = state.output_buf
+		local input_buf = state.input_buf
+		local output_win = state.output_win
+		local input_win = state.input_win
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "/clear release prep" })
+		ui.send()
+		state = ui._state()
+
+		eq(fake.unsubscribed, { "clear-thread-1" })
+		eq(fake.named, { thread_id = "clear-thread-2", name = "release prep" })
+		eq(fake.starts, 2)
+		eq(#fake.turns, 1)
+		eq(state.output_buf, output_buf)
+		eq(state.input_buf, input_buf)
+		eq(state.output_win, output_win)
+		eq(state.input_win, input_win)
+		eq(state.chat.blocks, {})
+		eq(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), { "" })
+		eq(vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false), { "" })
+		eq(state.contexts, {})
+		eq(state.diff, "")
+		eq(state.tokens, nil)
+		eq(state.thread_id, "clear-thread-2")
+		eq(state.status, "ready")
+
+		state.busy = true
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "/clear" })
+		ui.send()
+		eq(vim.api.nvim_buf_get_lines(state.input_buf, 0, -1, false), { "/clear" })
+		eq(state.thread_id, "clear-thread-2")
+		eq(fake.starts, 2)
+		eq(#fake.turns, 1)
+	end)
+	ui._reset()
+	if not passed then
+		error(err, 2)
+	end
+end)
+
 test("native Codex tab starts a thread, streams a turn, and tracks its diff", function()
 	ui._reset()
 	ui.setup({ auto_context = false, command = { "missing-codex" } })
@@ -3239,6 +3340,7 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 			render.header("agent")
 		)
 		ok(new_ui._client() == process_client, "expected the same app-server client")
+		ok(type(new_ui._client().set_thread_name) == "function", "expected reloaded client command methods")
 		ok(live_client.handle == process_handle, "expected the same process handle")
 		ok(live_client.pending == pending_requests, "expected the same pending request table")
 		ok(live_client.line_buffer == line_buffer, "expected the same stream buffer")

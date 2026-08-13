@@ -227,7 +227,10 @@ require("acp").setup({
 | `:AcpReload` | Reload plugin Lua while preserving the current Codex session and tab |
 
 The prompt also accepts `/model`, `/reasoning`, `/review`, `/compact`,
-`/status`, `/new`, `/threads`, `/login`, and `/reload`.
+`/status`, `/clear [name]`, `/new`, `/threads`, `/login`, and `/reload`.
+`/clear` resets the visible transcript and starts a fresh chat in the same ACP
+tab; an optional name is applied to the new thread. Like `/new`, it is disabled
+while a turn is active.
 
 With Blink installed, completion opens automatically after `/`, `$`, and `@`:
 
