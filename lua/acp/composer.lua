@@ -64,6 +64,7 @@ local function sync_turn(state, layout, host_win)
 		return
 	end
 	local bufnr = set_turn_content(state, layout.turn_lines, layout.turn_key)
+	view.refresh_instruction(bufnr, layout.turn_highlights)
 	local host_tab = vim.api.nvim_win_get_tabpage(host_win)
 	if valid_win(state.instruction_win) and vim.api.nvim_win_get_tabpage(state.instruction_win) ~= host_tab then
 		close_turn(state)

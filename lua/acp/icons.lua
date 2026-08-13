@@ -6,6 +6,7 @@ local nerd = {
 	agent = "󰚩",
 	arrow_right = "",
 	blink = "󰂫",
+	brain = "󰧑",
 	busy = "󰔟",
 	call = "󰃷",
 	changes = "󰏫",
@@ -66,25 +67,35 @@ local nerd = {
 
 local text = {
 	agent = "A",
+	arrow_right = ">",
+	brain = "?",
 	busy = "*",
 	changes = "~",
 	code = "{}",
 	command = ">",
 	context = "@",
+	edit = "E",
 	error = "!",
 	history = "+",
+	hierarchy = "%",
 	idle = "+",
 	info = "i",
+	inspect = "?",
+	model = "M",
 	note = "-",
+	package = "#",
+	restore = "~",
 	section = "#",
 	send = ">",
 	status = "*",
+	stop = "x",
+	terminal = "$",
 	tool = "T",
 	user = "U",
 	warning = "!",
 }
 
-local spinner = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local spinner = { "◐", "◓", "◑", "◒" }
 local text_spinner = { "|", "/", "-", "\\" }
 
 for name, glyph in pairs(nerd) do

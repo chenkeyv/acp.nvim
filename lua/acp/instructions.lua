@@ -163,8 +163,8 @@ function M.sync_spinner(state, active, refresh)
 	state.instruction_spinner_frame = math.max(1, tonumber(state.instruction_spinner_frame) or 1)
 	state.instruction_spinner_timer = timer
 	timer:start(
-		90,
-		90,
+		150,
+		150,
 		vim.schedule_wrap(function()
 			if state.instruction_spinner_timer ~= timer then
 				return

@@ -11,6 +11,7 @@ local render = require("acp.render")
 local requests = require("acp.requests")
 local server_log = require("acp.server_log")
 local treesitter = require("acp.treesitter")
+local turn = require("acp.turn")
 local view = require("acp.view")
 
 local M = {}
@@ -159,7 +160,8 @@ local function apply_state_defaults(value)
 	value.output_position_mode = nil
 	value.output_position_view = nil
 	value.output_position_syncing = nil
-	return instructions.normalize(value)
+	instructions.normalize(value)
+	return turn.normalize(value)
 end
 
 local function with_modifiable(bufnr, callback)
@@ -485,11 +487,7 @@ local function update_chrome()
 	if not state then
 		return
 	end
-	local status = tostring(state.status or ""):lower()
-	local spinner_active = valid_win(state.input_win)
-		and (state.busy or state.starting or status == "stopping")
-		and not status:find("error", 1, true)
-		and status ~= "disconnected"
+	local spinner_active = valid_win(state.input_win) and turn.is_active(state)
 	instructions.sync_spinner(state, spinner_active, refresh_composer)
 	update_output_winbar()
 	if composer.is_open(state, state.output_host_win) and sync_composer then
@@ -501,14 +499,13 @@ local function update_chrome()
 	end
 end
 
-local function set_status(status)
+local function set_status(status, kind)
 	if not state then
 		return
 	end
-	if state.status == status then
+	if not turn.transition(state, status, kind) then
 		return
 	end
-	state.status = status
 	update_chrome()
 end
 
@@ -1967,30 +1964,31 @@ function M._handle_notification(method, params)
 				return chat:start_item(item)
 			end)
 		end
-		set_status(render.item_status(item))
+		local item_state = render.item_state(item)
+		set_status(item_state.label, item_state.kind)
 	elseif method == "item/agentMessage/delta" then
 		consume_steering_instructions()
 		local block_id = ensure_agent_item(params.itemId)
 		state.streamed_items[params.itemId] = true
 		append_text(block_id, params.delta or "")
-		set_status("responding")
+		set_status("responding", "responding")
 	elseif method == "item/plan/delta" then
 		consume_steering_instructions()
 		local block_id = ensure_plan_item(params.itemId)
 		state.streamed_items[params.itemId] = true
 		append_text(block_id, params.delta or "")
-		set_status("planning")
+		set_status("planning", "planning")
 	elseif method == "item/reasoning/summaryTextDelta" or method == "item/reasoning/textDelta" then
 		consume_steering_instructions()
-		set_status("thinking")
+		set_status("thinking", "thinking")
 	elseif method == "item/commandExecution/outputDelta" then
 		append_action_output(params.itemId, params.delta or "")
-		set_status("running command")
+		set_status("running command", "command")
 	elseif method == "item/mcpToolCall/progress" then
 		append_chat_block(function(chat)
 			return chat:update_item_progress(params.itemId, params.message)
 		end)
-		set_status(params.message or "using tool")
+		set_status(params.message or "using tool", "tool")
 	elseif method == "item/completed" then
 		flush_output_text()
 		flush_action_output()

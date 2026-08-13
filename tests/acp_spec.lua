@@ -16,6 +16,7 @@ local requests = require("acp.requests")
 local server_log = require("acp.server_log")
 local transcript = require("acp.transcript")
 local treesitter = require("acp.treesitter")
+local turn = require("acp.turn")
 local ui = require("acp.ui")
 local version = require("acp.version")
 local view = require("acp.view")
@@ -1679,6 +1680,69 @@ test("large block transcripts keep lookup and streaming edits bounded", function
 	ok(chat:semantic_data(vim.fn.getcwd()) ~= semantic, "expected a streamed edit to invalidate model-wide semantics")
 end)
 
+test("turn states track phase time and use semantic presentations", function()
+	local state = { status = "ready" }
+	turn.normalize(state, 1000)
+	eq(state.status_kind, "idle")
+	eq(turn.elapsed_ms(state, 2000), nil)
+
+	ok(turn.transition(state, "thinking", "thinking", 1000))
+	eq(state.status_started_at_ms, 1000)
+	ok(not turn.transition(state, "thinking", "thinking", 2500), "repeated deltas must keep the phase clock")
+	eq(state.status_started_at_ms, 1000)
+	local thinking = turn.describe(state, 61500)
+	eq(thinking.kind, "thinking")
+	eq(thinking.icon, icons.spinner(1))
+	eq(thinking.group, "AcpTurnThinking")
+	eq(thinking.duration, "1m 00s")
+
+	ok(turn.transition(state, "running command", "command", 62000))
+	eq(state.status_started_at_ms, 62000)
+	local command = turn.describe(state, 65050)
+	eq(command.icon, icons.spinner(1))
+	eq(command.duration, "3s")
+	eq(render.item_state({ type = "commandExecution", command = "printf secret" }), {
+		label = "running command",
+		kind = "command",
+	})
+
+	ok(turn.transition(state, "completed", nil, 68000))
+	eq(state.status_started_at_ms, nil)
+	eq(turn.describe(state, 90000).duration, "1m 07s")
+	eq(turn.describe(state, 90000).group, "AcpTurnSuccess")
+
+	local block = view.instruction_block({
+		status = "using workspace/search",
+		status_kind = "tool",
+		status_started_at_ms = 1000,
+		instruction_spinner_frame = 2,
+	}, 34, 2, 4500)
+	contains(block.lines[2], icons.spinner(2) .. " using workspace/search · 3s")
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, block.lines)
+	view.define_highlights()
+	view.refresh_instruction(bufnr, block.highlights)
+	local groups = {}
+	for _, extmark in
+		ipairs(vim.api.nvim_buf_get_extmarks(bufnr, view.instruction_namespace, 0, -1, { details = true }))
+	do
+		local details = extmark[4] or {}
+		groups[details.hl_group] = true
+		eq(details.line_hl_group, nil, "turn states must not highlight the entire row")
+	end
+	ok(groups.AcpTurnTool)
+	ok(groups.AcpTurnTimer)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+
+	local narrow = view.instruction_block({
+		status = "using a very long tool progress message",
+		status_kind = "tool",
+		status_started_at_ms = 1000,
+	}, 18, 2, 66500)
+	eq(vim.fn.strdisplaywidth(narrow.lines[2]), 18)
+	contains(narrow.lines[2], "1m 05s")
+end)
+
 test("chat view stacks floating surfaces and styles transcript roles", function()
 	local stack = view.stack_geometry({ row = 1, col = 31, width = 89, height = 30 }, { status = "ready" }, {
 		input_height = 6,
@@ -1704,18 +1768,21 @@ test("chat view stacks floating surfaces and styles transcript roles", function(
 	eq(vim.fn.strdisplaywidth(stack.turn_lines[2]), 87)
 	local instruction_block = view.instruction_block({
 		status = "responding",
+		status_kind = "responding",
+		status_started_at_ms = 1000,
+		instruction_spinner_frame = 3,
 		busy = true,
 		pending_instructions = {
 			{ id = "steer-1", kind = "steer", text = "Keep the public API unchanged" },
 			{ id = "queue-1", kind = "queued", text = "Run the tests afterward" },
 		},
-	}, 52, 4)
+	}, 52, 4, 13500)
 	eq(#instruction_block.lines, 4)
 	eq(instruction_block.lines[1], string.rep(" ", 52))
 	contains(instruction_block.lines[2], icons.get("send") .. " steer")
 	contains(instruction_block.lines[2], "Keep the public API unchanged")
 	contains(instruction_block.lines[3], icons.get("history") .. " queued")
-	contains(instruction_block.lines[4], icons.spinner(1) .. " responding")
+	contains(instruction_block.lines[4], icons.spinner(3) .. " responding · 12s")
 	for _, line in ipairs(instruction_block.lines) do
 		eq(vim.fn.strdisplaywidth(line), 52)
 	end
@@ -1769,15 +1836,18 @@ test("chat view stacks floating surfaces and styles transcript roles", function(
 	eq(vim.fn.strdisplaywidth(idle_block.lines[2]), 28)
 	local default_height_block = view.instruction_block({
 		status = "running command",
+		status_kind = "command",
+		status_started_at_ms = 1000,
+		instruction_spinner_frame = 2,
 		busy = true,
 		pending_instructions = {
 			{ id = "queue-default", kind = "queued", text = "Run the tests" },
 		},
-	}, 28)
+	}, 28, nil, 3500)
 	eq(#default_height_block.lines, 3)
 	eq(default_height_block.lines[1], string.rep(" ", 28))
 	contains(default_height_block.lines[2], icons.get("history") .. " queued")
-	contains(default_height_block.lines[3], icons.spinner(1) .. " running command")
+	contains(default_height_block.lines[3], icons.spinner(2) .. " running command · 2s")
 	local clipped_instructions = view.instruction_block({
 		status = "running",
 		busy = true,
@@ -2685,11 +2755,11 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		assert_action_status_width()
 		local initial_spinner = vim.api.nvim_buf_get_lines(state.instruction_buf, -2, -1, false)[1]
 		ok(
-			vim.wait(400, function()
+			vim.wait(500, function()
 				local current = vim.api.nvim_buf_get_lines(state.instruction_buf, -2, -1, false)[1]
 				return current ~= initial_spinner
 			end, 10),
-			"expected the active turn icon to spin"
+			"expected the muted turn activity indicator to animate"
 		)
 		assert_action_status_width()
 		fake.handlers.on_notification("item/started", {

@@ -2,12 +2,15 @@ local icons = require("acp.icons")
 local output = require("acp.output")
 local syntax = require("acp.syntax")
 local treesitter = require("acp.treesitter")
+local turn = require("acp.turn")
 
 local M = {}
 
 local transcript_ns = vim.api.nvim_create_namespace("acp.nvim.transcript")
+local instruction_ns = vim.api.nvim_create_namespace("acp.nvim.instructions")
 
 M.transcript_namespace = transcript_ns
+M.instruction_namespace = instruction_ns
 
 local function rounded_border(highlight)
 	return {
@@ -90,6 +93,24 @@ function M.define_highlights()
 		AcpPromptKey = { fg = "#e0af68", bold = true },
 		AcpPromptHint = { link = "Comment" },
 		AcpInstructionFloat = { link = "NormalFloat" },
+		AcpTurnIdle = { link = "Comment" },
+		AcpTurnStarting = { fg = "#e0af68", bold = true },
+		AcpTurnLoading = { fg = "#bb9af7", bold = true },
+		AcpTurnRunning = { fg = "#7aa2f7", bold = true },
+		AcpTurnThinking = { fg = "#bb9af7", bold = true },
+		AcpTurnPlanning = { fg = "#2ac3de", bold = true },
+		AcpTurnResponding = { fg = "#7dcfff", bold = true },
+		AcpTurnCommand = { fg = "#9ece6a", bold = true },
+		AcpTurnTool = { fg = "#e0af68", bold = true },
+		AcpTurnChanges = { fg = "#f7768e", bold = true },
+		AcpTurnReview = { fg = "#ff9e64", bold = true },
+		AcpTurnCompacting = { fg = "#73daca", bold = true },
+		AcpTurnSteering = { fg = "#89ddff", bold = true },
+		AcpTurnStopping = { link = "DiagnosticWarn" },
+		AcpTurnRetrying = { fg = "#ff9e64", bold = true },
+		AcpTurnSuccess = { link = "DiagnosticOk" },
+		AcpTurnError = { link = "DiagnosticError" },
+		AcpTurnTimer = { link = "Comment" },
 		AcpChatTitle = { fg = "#7aa2f7", bold = true },
 		AcpChatMeta = { link = "Comment" },
 		AcpChatSeparator = { link = "Comment" },
@@ -163,16 +184,6 @@ local function current_section(state)
 	if state.chat and state.chat.section_at then
 		return state.chat:section_at(cursor[1])
 	end
-end
-
-local function status_icon(state)
-	local status = tostring(state.status or "idle"):lower()
-	if status:find("error", 1, true) or status == "disconnected" then
-		return icons.get("error")
-	elseif state.busy or state.starting or status == "stopping" then
-		return icons.spinner(state.instruction_spinner_frame)
-	end
-	return icons.get("idle")
 end
 
 function M.chat_winbar(state)
@@ -349,16 +360,31 @@ local function ordered_instructions(instructions)
 	return ordered
 end
 
-function M.instruction_block(state, width, max_height)
+local function status_content(state, width, timestamp)
+	local status = turn.describe(state, timestamp)
+	local prefix = status.icon .. " "
+	local duration = status.duration and (" · " .. status.duration) or ""
+	local label_width = math.max(1, width - vim.fn.strdisplaywidth(prefix .. duration))
+	local label = truncate_display(status.label, label_width)
+	local content = prefix .. label .. duration
+	content = truncate_display(content, width)
+
+	local state_end = math.min(#content, #prefix + #label)
+	local timer_start = #prefix + #label
+	local timer_end = math.min(#content, timer_start + #duration)
+	return fit_display(content, width),
+		{
+			{ start_col = 0, end_col = state_end, group = status.group },
+			{ start_col = timer_start, end_col = #content, group = "AcpTurnTimer" },
+		}
+end
+
+function M.instruction_block(state, width, max_height, timestamp)
 	state = state or {}
 	local instructions = type(state.pending_instructions) == "table" and state.pending_instructions or {}
 	width = math.max(1, math.floor(tonumber(width) or 1))
 	max_height = math.max(1, math.floor(tonumber(max_height) or (#instructions + 2)))
-	local status = one_line(state.status)
-	if status == "" then
-		status = (state.busy or state.starting) and "working" or "ready"
-	end
-	local status_line = fit_display(("%s %s"):format(status_icon(state), status), width)
+	local status_line, status_highlights = status_content(state, width, timestamp)
 	local lines = {}
 	local ordered = ordered_instructions(instructions)
 	local has_top_spacer = max_height > 1
@@ -388,9 +414,13 @@ function M.instruction_block(state, width, max_height)
 		table.insert(lines, 1, string.rep(" ", width))
 	end
 	table.insert(lines, status_line)
+	for _, highlight in ipairs(status_highlights) do
+		highlight.row = #lines - 1
+	end
 	return {
 		lines = lines,
 		key = table.concat(lines, "\0"),
+		highlights = status_highlights,
 	}
 end
 
@@ -448,6 +478,7 @@ function M.stack_geometry(bounds, state, opts)
 		},
 		turn_lines = turn.lines,
 		turn_key = turn.key,
+		turn_highlights = turn.highlights,
 	}
 end
 
@@ -514,6 +545,7 @@ function M.stack_layout(host_win, state, opts)
 		turn = instruction_config,
 		turn_lines = geometry.turn_lines,
 		turn_key = geometry.turn_key,
+		turn_highlights = geometry.turn_highlights,
 		geometry = geometry,
 	}
 end
@@ -575,6 +607,24 @@ function M.configure_instruction_window(winid)
 	vim.wo[winid].winbar = ""
 	vim.wo[winid].fillchars = "eob: "
 	vim.wo[winid].winhighlight = "NormalFloat:AcpInstructionFloat"
+end
+
+function M.refresh_instruction(bufnr, highlights)
+	if not valid_buf(bufnr) then
+		return
+	end
+	vim.api.nvim_buf_clear_namespace(bufnr, instruction_ns, 0, -1)
+	for _, highlight in ipairs(highlights or {}) do
+		local start_col = math.max(0, tonumber(highlight.start_col) or 0)
+		local end_col = math.max(start_col, tonumber(highlight.end_col) or start_col)
+		if end_col > start_col then
+			pcall(vim.api.nvim_buf_set_extmark, bufnr, instruction_ns, tonumber(highlight.row) or 0, start_col, {
+				end_col = end_col,
+				hl_group = highlight.group,
+				priority = 100,
+			})
+		end
+	end
 end
 
 function M.configure_output_window(winid)

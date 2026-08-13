@@ -107,10 +107,16 @@ lower-left border, while the send and steer hints remain on the lower-right.
 Model/reasoning and remaining context are kept ahead of other metadata and key
 hints when space is tight. A blank top row separates the turn content from the
 chat, while the current status stays anchored to the bottom and steer or queued
-follow-ups fill upward immediately above it. The panel grows with its content up
-to `instruction_height`, including the spacer and status rows; pending entries
-expand and collapse it without changing its width. The active status icon spins
-in place during a turn and stops on completion, error, close, or reload. Queued
+follow-ups fill upward immediately above it. Each active phase shows its elapsed
+working time and a smooth spinner in the state-colored status-icon slot; the
+phase clock resets when Codex moves between thinking, planning, responding,
+commands, tools, file changes, review, and other states. Completed and failed
+states retain the total active run time. Command status stays
+generic (`running command`) because the complete command already appears in the
+chat action cell. The panel grows with its content up to `instruction_height`,
+including the spacer and status rows; pending entries expand and collapse it
+without changing its width. The active animation stops on completion, error,
+close, or reload. Queued
 entries disappear when their turn starts, while steer entries disappear when the
 continuation begins producing output. Transient status and queue details stay in
 this panel instead of being repeated elsewhere.

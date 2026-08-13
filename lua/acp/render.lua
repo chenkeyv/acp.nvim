@@ -51,27 +51,31 @@ function M.transcript_line(kind, content)
 end
 
 function M.item_status(item)
+	return M.item_state(item).label
+end
+
+function M.item_state(item)
 	if type(item) ~= "table" then
-		return "working"
+		return { label = "working", kind = "running" }
 	end
 	if item.type == "commandExecution" then
-		return ("running %s"):format(item.command or "command")
+		return { label = "running command", kind = "command" }
 	elseif item.type == "fileChange" then
-		return "applying file changes"
+		return { label = "applying file changes", kind = "changes" }
 	elseif item.type == "mcpToolCall" then
-		return ("using %s/%s"):format(item.server or "mcp", item.tool or "tool")
+		return { label = ("using %s/%s"):format(item.server or "mcp", item.tool or "tool"), kind = "tool" }
 	elseif item.type == "dynamicToolCall" then
-		return ("using %s"):format(item.tool or "tool")
+		return { label = ("using %s"):format(item.tool or "tool"), kind = "tool" }
 	elseif item.type == "reasoning" then
-		return "thinking"
+		return { label = "thinking", kind = "thinking" }
 	elseif item.type == "agentMessage" then
-		return "responding"
+		return { label = "responding", kind = "responding" }
 	elseif item.type == "contextCompaction" then
-		return "compacting"
+		return { label = "compacting", kind = "compacting" }
 	elseif item.type == "enteredReviewMode" then
-		return "reviewing changes"
+		return { label = "reviewing changes", kind = "review" }
 	end
-	return "working"
+	return { label = "working", kind = "running" }
 end
 
 local function file_change_lines(item)
