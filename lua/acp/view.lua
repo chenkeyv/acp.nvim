@@ -1,6 +1,7 @@
 local icons = require("acp.icons")
 local output = require("acp.output")
 local syntax = require("acp.syntax")
+local treesitter = require("acp.treesitter")
 
 local M = {}
 
@@ -847,6 +848,11 @@ function M.refresh_transcript(bufnr, start_row, chat, end_row)
 		)
 	else
 		end_row = -1
+	end
+	if not treesitter.available() then
+		vim.api.nvim_buf_clear_namespace(bufnr, transcript_ns, 0, -1)
+		treesitter.stop(bufnr)
+		return
 	end
 	vim.api.nvim_buf_clear_namespace(bufnr, transcript_ns, start_row, end_row)
 	local lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row, false)

@@ -1190,6 +1190,23 @@ test("Codex-style command cells compact the command invocation itself", function
 	local detail_text = table.concat(chat:activity_detail_lines(activity_block.line1), "\n")
 	contains(detail_text, command)
 	contains(detail_text, "echo third")
+
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.bo[bufnr].filetype = "acp"
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, chat:render_lines())
+	view.define_highlights()
+	view.refresh_transcript(bufnr, 0, chat)
+	local active = treesitter.start(bufnr)
+	if treesitter.status().available then
+		ok(active, "expected the ACP highlighter to start for the preview-hint regression")
+	end
+	local header_meta = highlight_at(bufnr, activity_block.line1 + 1, "K to inspect", "AcpActionMeta")
+	eq(header_meta.hl_group_link, "Comment")
+	ok(header_meta.priority > 150, "preview metadata must override Bash token highlights")
+	local meta_text = highlighted_text(bufnr, "AcpActionMeta")
+	ok(vim.tbl_contains(meta_text, "… (K to inspect)"))
+	ok(vim.tbl_contains(meta_text, "… +4 lines (K to inspect)"))
+	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
 test("Codex-style tools and exploration use Calling and Explored hierarchies", function()
@@ -1340,6 +1357,75 @@ test("ACP Tree-sitter grammar is distributable and keeps the acp filetype", func
 	contains(parser_source, "#define LANGUAGE_VERSION 15")
 	treesitter.setup()
 	eq(vim.treesitter.language.get_lang("acp"), "acp")
+end)
+
+test("Tree-sitter highlighting has no parser fallbacks", function()
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.bo[bufnr].filetype = "acp"
+	local original_add = vim.treesitter.language.add
+	local original_start = vim.treesitter.start
+	local original_stop = vim.treesitter.stop
+	local checked_languages = {}
+	local started_languages = {}
+	local stopped = 0
+	vim.treesitter.language.add = function(language)
+		table.insert(checked_languages, language)
+		return false, nil, "missing parser"
+	end
+	vim.treesitter.start = function(_, language)
+		table.insert(started_languages, language)
+		return true
+	end
+	vim.treesitter.stop = function()
+		stopped = stopped + 1
+	end
+
+	local passed, err = pcall(function()
+		local active, mode = treesitter.start(bufnr)
+		ok(not active)
+		eq(mode, "unavailable")
+		eq(checked_languages, { "acp" })
+		eq(started_languages, {})
+		eq(stopped, 1)
+
+		local chat = blocks.new()
+		chat:add_user("Use `plain text`.", {})
+		chat:add_item({
+			id = "no-parser-command",
+			type = "commandExecution",
+			command = "printf '%s\\n' \"$HOME\" && rg action",
+			status = "completed",
+			exitCode = 0,
+			aggregatedOutput = "done",
+		})
+		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, chat:render_lines())
+		vim.api.nvim_buf_set_extmark(bufnr, view.transcript_namespace, 0, 0, {
+			line_hl_group = "AcpActionCommand",
+		})
+		view.refresh_transcript(bufnr, 1, chat)
+		eq(vim.api.nvim_buf_get_extmarks(bufnr, view.transcript_namespace, 0, -1, {}), {})
+		eq(checked_languages, { "acp", "acp" })
+		eq(stopped, 2)
+	end)
+
+	vim.treesitter.language.add = original_add
+	vim.treesitter.start = original_start
+	vim.treesitter.stop = original_stop
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("Bash highlighting has no lexical fallback", function()
+	local original_parser = vim.treesitter.get_string_parser
+	vim.treesitter.get_string_parser = function()
+		error("missing Bash parser")
+	end
+	local passed, spans = pcall(require("acp.syntax").shell_spans, [[printf '%s\n' "$HOME" && rg action]])
+	vim.treesitter.get_string_parser = original_parser
+	ok(passed, spans)
+	eq(spans, {})
 end)
 
 test("structural adoption normalizes spacing and action rows", function()
@@ -2086,13 +2172,7 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.bo[state.sessions_buf].filetype, "acp-sessions")
 		eq(vim.bo[state.output_host_buf].filetype, "acp-host")
 		eq(vim.bo[state.output_buf].filetype, "acp")
-		ok(
-			vim.tbl_contains(
-				{ "treesitter-acp", "treesitter-markdown" },
-				vim.b[state.output_buf].acp_language_injection
-			),
-			"expected an ACP parser or the Markdown injection fallback"
-		)
+		eq(vim.b[state.output_buf].acp_language_injection, "treesitter-acp")
 		eq(vim.bo[state.input_buf].filetype, "acp-prompt")
 		eq(vim.b[state.input_buf].completion, true)
 		eq(vim.b[state.input_buf].acp_cwd, state.cwd)

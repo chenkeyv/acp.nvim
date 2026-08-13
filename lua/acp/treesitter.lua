@@ -85,11 +85,11 @@ local function load_installed_language(language)
 	return false, err
 end
 
-local function start_language(bufnr, language)
+local function start_language(bufnr, language, known_available)
 	if not vim.treesitter or not vim.treesitter.start or not vim.treesitter.language then
 		return false
 	end
-	local available = language_available(language)
+	local available = known_available == true or language_available(language)
 	if not available then
 		return false
 	end
@@ -217,17 +217,24 @@ function M.register_commands()
 	register_install_command()
 end
 
+function M.available()
+	return language_available("acp")
+end
+
 function M.start(bufnr)
 	if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
 		return false, "unavailable"
 	end
-	if start_language(bufnr, "acp") then
+	local available = M.available()
+	if not available then
+		M.stop(bufnr)
+		return false, "unavailable"
+	end
+	if start_language(bufnr, "acp", true) then
 		return true, "treesitter-acp"
 	end
-	if start_language(bufnr, "markdown") then
-		return true, "treesitter-markdown"
-	end
-	return false, "fence-detection"
+	M.stop(bufnr)
+	return false, "unavailable"
 end
 
 function M.stop(bufnr)

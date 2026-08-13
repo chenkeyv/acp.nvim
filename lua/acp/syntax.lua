@@ -67,45 +67,12 @@ local function treesitter_spans(text)
 	return ok and spans or {}
 end
 
-local function lexical_spans(text)
-	local spans = {}
-	local function append(pattern, group)
-		local start = 1
-		while true do
-			local first, last = text:find(pattern, start)
-			if not first then
-				return
-			end
-			table.insert(spans, { start_col = first - 1, end_col = last, group = group })
-			start = last + 1
-		end
-	end
-
-	local first, last = text:find("^%s*[^%s|&;]+")
-	if first then
-		local command_start = text:find("%S", first)
-		table.insert(spans, {
-			start_col = (command_start or first) - 1,
-			end_col = last,
-			group = "AcpShellCommand",
-		})
-	end
-	append("'[^']*'", "AcpShellString")
-	append('"[^"]*"', "AcpShellString")
-	append("%$[%w_]+", "AcpShellVariable")
-	append("&&", "AcpShellOperator")
-	append("||", "AcpShellOperator")
-	append("[|;]", "AcpShellOperator")
-	return spans
-end
-
 function M.shell_spans(value)
 	local text = preview_text(value)
 	if text == "" then
 		return {}
 	end
-	local spans = treesitter_spans(text)
-	return #spans > 0 and spans or lexical_spans(text)
+	return treesitter_spans(text)
 end
 
 return M

@@ -47,12 +47,12 @@ function M.check()
 	elseif status.registered then
 		vim.health.warn("ACP parser is registered but not installed", {
 			"Run :AcpInstallParser",
-			"The chat keeps structural fallback highlighting until the parser is installed",
+			"Chat highlighting is disabled until the parser is installed",
 		})
 	else
 		vim.health.warn("ACP parser is not installed and nvim-treesitter is unavailable", {
 			"Install nvim-treesitter, then run :AcpInstallParser",
-			"The chat keeps structural fallback highlighting without it",
+			"Chat highlighting is disabled until the ACP parser is available",
 		})
 	end
 end

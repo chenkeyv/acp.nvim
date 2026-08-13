@@ -46,10 +46,9 @@ runner.
 
 The included ACP Tree-sitter grammar is optional. With `nvim-treesitter` on the
 runtime path, acp.nvim registers its local parser. Run `:AcpInstallParser` to
-compile or update it from the grammar bundled with the plugin. Until it is
-installed, chats retain the `acp` filetype and structural command/tool
-highlighting, with Neovim's bundled Markdown parser used only for fenced-code
-injection.
+compile or update it from the grammar bundled with the plugin. Chats retain the
+`acp` filetype without it, but transcript and injected-language highlighting are
+disabled until the ACP parser is available.
 
 No npm ACP adapter is required.
 
