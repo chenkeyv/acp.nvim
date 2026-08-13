@@ -19,18 +19,6 @@ local shell_capture_groups = {
 	variable = "AcpShellVariable",
 }
 
-local function preview_text(value)
-	local text = tostring(value or "")
-	local marker = text:find("… (K to inspect)", 1, true)
-	if marker then
-		text = text:sub(1, marker - 1):gsub("%s+$", "")
-	end
-	if text:match("^… %+%d+ lines") then
-		return ""
-	end
-	return text
-end
-
 local function capture_group(name)
 	name = tostring(name or "")
 	if exact_shell_capture_groups[name] then
@@ -68,7 +56,7 @@ local function treesitter_spans(text)
 end
 
 function M.shell_spans(value)
-	local text = preview_text(value)
+	local text = tostring(value or "")
 	if text == "" then
 		return {}
 	end

@@ -678,30 +678,6 @@ local function highlight_action_verb(bufnr, row, line, start_col, kind)
 	end
 end
 
-local function highlight_preview_meta(bufnr, row, line)
-	local hint_col = line:find("(K to inspect)", 1, true)
-	if not hint_col then
-		return
-	end
-	local ellipsis_col
-	local search_col = 1
-	while true do
-		local next_col = line:find("…", search_col, true)
-		if not next_col or next_col >= hint_col then
-			break
-		end
-		ellipsis_col = next_col
-		search_col = next_col + #"…"
-	end
-	if ellipsis_col then
-		mark(bufnr, row, ellipsis_col - 1, {
-			end_col = #line,
-			hl_group = "AcpActionMeta",
-			priority = 180,
-		})
-	end
-end
-
 local function highlight_tool(bufnr, row, line, start_col, kind)
 	local detail = line:sub(start_col + 1)
 	local name_end = detail:find("(", 1, true)
@@ -796,7 +772,6 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 				highlight_shell(bufnr, row, line, detail_col)
 			end
 		end
-		highlight_preview_meta(bufnr, row, line)
 		return true
 	end
 
@@ -804,9 +779,9 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 	if tree > 0 then
 		mark(bufnr, row, 0, { end_col = tree, hl_group = "AcpActionTree", priority = 170 })
 		local content = line:sub(tree + 1)
-		local highlight = row_info.role == "action_command" and "AcpActionText"
+		local highlight = row_info.is_meta and "AcpActionMeta"
+			or row_info.role == "action_command" and "AcpActionText"
 			or content:match("^Error:") and "AcpActionFailure"
-			or content:match("^… %+%d+ lines") and "AcpActionMeta"
 			or content == "(no output)" and "AcpActionMeta"
 			or "AcpActionOutput"
 		mark(bufnr, row, tree, {
@@ -820,7 +795,6 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 			highlight_shell(bufnr, row, line, tree)
 		end
 	end
-	highlight_preview_meta(bufnr, row, line)
 	return true
 end
 

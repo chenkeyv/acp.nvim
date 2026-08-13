@@ -7,7 +7,9 @@ Inspect it.
 
 • Ran seq 1 10
   └ 1
-    … +6 lines (K to inspect)
+    ... +6 lines
+    8
+    9
     10
 
 • Called search.find_docs({"query":"tree-sitter"})
@@ -37,6 +39,12 @@ return true
     subject: (command_subject)
     (action_result
       (action_branch)
+      content: (result_text))
+    (action_result_continuation
+      (action_indent)
+      content: (result_text))
+    (action_result_continuation
+      (action_indent)
       content: (result_text))
     (action_result_continuation
       (action_indent)

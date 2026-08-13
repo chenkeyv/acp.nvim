@@ -2,11 +2,9 @@ local output = require("acp.output")
 
 local M = {}
 
-M.command_output_preview_limit = 3
-M.output_preview_limit = M.command_output_preview_limit
-M.tool_output_preview_limit = 3
+M.preview_tail_lines = 3
+M.preview_limit = M.preview_tail_lines + 2
 M.tool_preview_width = 80
-M.command_preview_limit = 3
 M.command_preview_width = 80
 
 local action_types = {
@@ -71,28 +69,17 @@ local function merge_item(base, update)
 	return merged
 end
 
-local function preview(lines, limit)
-	limit = math.max(1, tonumber(limit) or M.output_preview_limit)
-	if #lines <= limit then
-		return vim.deepcopy(lines), 0
-	end
-	if limit == 1 then
-		return { ("… +%d lines (K to inspect)"):format(#lines) }, #lines
+local function preview(lines)
+	local visible_lines = M.preview_tail_lines + 1
+	if #lines <= visible_lines then
+		return vim.deepcopy(lines)
 	end
 
-	local visible = limit - 1
-	local head = math.ceil(visible / 2)
-	local tail = visible - head
-	local omitted = #lines - head - tail
-	local values = {}
-	for index = 1, head do
+	local values = { lines[1], ("... +%d lines"):format(#lines - visible_lines) }
+	for index = #lines - M.preview_tail_lines + 1, #lines do
 		table.insert(values, lines[index])
 	end
-	table.insert(values, ("… +%d lines (K to inspect)"):format(omitted))
-	for index = #lines - tail + 1, #lines do
-		table.insert(values, lines[index])
-	end
-	return values, omitted
+	return values
 end
 
 local function truncate_display(value, width)
@@ -102,7 +89,7 @@ local function truncate_display(value, width)
 		return value
 	end
 
-	local suffix = "… (K to inspect)"
+	local suffix = "..."
 	local target = math.max(0, width - vim.fn.strdisplaywidth(suffix))
 	local low = 0
 	local high = vim.fn.strchars(value)
@@ -207,7 +194,7 @@ local function tool_invocation(item, max_width)
 	local arguments = encode(item.arguments)
 	local invocation = arguments and (name .. "(" .. arguments .. ")") or name
 	if max_width and arguments and vim.fn.strdisplaywidth(invocation) > max_width then
-		invocation = name .. "(…)"
+		invocation = name .. "(...)"
 	end
 	return max_width and truncate_display(invocation, max_width) or invocation
 end
@@ -332,7 +319,7 @@ local function command_rows(child)
 	end
 	local title = M.is_active(child) and "Running" or (item.source == "userShell" and "You ran" or "Ran")
 	local header_prefix = ("• %s "):format(title)
-	local visible_command = preview(command, M.command_preview_limit)
+	local visible_command = preview(command)
 	local rows = {
 		row(
 			header_prefix
@@ -354,7 +341,7 @@ local function command_rows(child)
 		table.insert(
 			rows,
 			row(prefix .. line, "action_command", {
-				is_meta = line:match("… %+%d+ lines") ~= nil,
+				is_meta = line:match("^%.%.%. %+%d+ lines$") ~= nil,
 				syntax = "bash",
 				tree_width = #prefix,
 			})
@@ -366,15 +353,19 @@ local function command_rows(child)
 		if not M.is_active(child) then
 			table.insert(rows, row("  └ (no output)", "action_output", { tree_width = #"  └ " }))
 		end
-		child.preview_omitted = 0
 		return rows
 	end
-	local visible, omitted = preview(output_lines, M.command_output_preview_limit)
-	child.preview_omitted = omitted
+	local visible = preview(output_lines)
 	for index, line in ipairs(visible) do
 		local prefix = index == 1 and "  └ " or "    "
 		line = truncate_display(line, M.command_preview_width - vim.fn.strdisplaywidth(prefix))
-		table.insert(rows, row(prefix .. line, "action_output", { tree_width = #prefix }))
+		table.insert(
+			rows,
+			row(prefix .. line, "action_output", {
+				is_meta = line:match("^%.%.%. %+%d+ lines$") ~= nil,
+				tree_width = #prefix,
+			})
+		)
 	end
 	return rows
 end
@@ -397,12 +388,17 @@ local function tool_rows(child)
 		),
 	}
 	local details = tool_result_lines(child)
-	local visible, omitted = preview(details, M.tool_output_preview_limit)
-	child.preview_omitted = omitted
+	local visible = preview(details)
 	for index, line in ipairs(visible) do
 		local prefix = index == 1 and "  └ " or "    "
 		line = truncate_display(line, M.tool_preview_width - vim.fn.strdisplaywidth(prefix))
-		table.insert(rows, row(prefix .. line, "action_output", { tree_width = #prefix }))
+		table.insert(
+			rows,
+			row(prefix .. line, "action_output", {
+				is_meta = line:match("^%.%.%. %+%d+ lines$") ~= nil,
+				tree_width = #prefix,
+			})
+		)
 	end
 	return rows
 end

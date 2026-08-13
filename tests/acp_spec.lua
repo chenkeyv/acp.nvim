@@ -940,7 +940,7 @@ test("live chat consumers use structural rows instead of reparsing rendered text
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
-test("Codex-style command cells stream a bounded head-tail preview", function()
+test("Codex-style command cells show the first and final three output lines", function()
 	local chat = blocks.new()
 	local _, activity_block = chat:start_item({
 		id = "command-preview",
@@ -957,15 +957,18 @@ test("Codex-style command cells stream a bounded head-tail preview", function()
 	end
 	local update = chat:append_command_output("command-preview", table.concat(output_lines, "\n"))
 	eq(update.type, "replace")
-	eq(#activity_block.lines, 3 + action.output_preview_limit)
+	eq(#activity_block.lines, 3 + action.preview_limit)
 	eq(activity_block.lines, {
 		"",
 		"• Running printf output",
 		"  │ echo done",
 		"  └ line 1",
-		"    … +8 lines (K to inspect)",
+		"    ... +6 lines",
+		"    line 8",
+		"    line 9",
 		"    line 10",
 	})
+	ok(not table.concat(activity_block.lines, "\n"):find("K to inspect", 1, true))
 	for _, line in ipairs(vim.list_slice(activity_block.lines, 4)) do
 		ok(
 			vim.fn.strdisplaywidth(line) <= action.command_preview_width,
@@ -989,8 +992,8 @@ test("Codex-style command cells stream a bounded head-tail preview", function()
 	contains(detail_text, "line 1")
 	contains(detail_text, "line 10")
 	contains(detail_text, "✓ • 420ms")
-	eq(#activity_block.lines, 3 + action.command_output_preview_limit)
-	eq(activity_block.lines[5], "    … +8 lines (K to inspect)")
+	eq(#activity_block.lines, 3 + action.preview_limit)
+	eq(activity_block.lines[5], "    ... +6 lines")
 	local activity = chat:activity_at(activity_block.line1)
 	eq(activity.counts, { command = 1, tool = 0, file = 0 })
 	eq(activity.presentation, "command")
@@ -1174,7 +1177,7 @@ test("live action cells use structural Bash and semantic tool highlighting", fun
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
-test("Codex-style command cells compact the command invocation itself", function()
+test("Codex-style command cells use the shared first-and-final-three preview", function()
 	local command_lines = {
 		"printf output " .. string.rep("界", 100),
 		"echo second",
@@ -1193,11 +1196,14 @@ test("Codex-style command cells compact the command invocation itself", function
 		commandActions = {},
 	})
 
-	eq(#activity_block.lines, 1 + action.command_preview_limit)
+	eq(#activity_block.lines, 1 + action.preview_limit)
 	contains(activity_block.lines[2], "• Running printf output")
-	contains(activity_block.lines[2], "… (K to inspect)")
-	eq(activity_block.lines[3], "  │ … +4 lines (K to inspect)")
-	eq(activity_block.lines[4], "  │ echo done")
+	contains(activity_block.lines[2], "...")
+	eq(activity_block.lines[3], "  │ ... +2 lines")
+	eq(activity_block.lines[4], "  │ echo fourth")
+	eq(activity_block.lines[5], "  │ echo fifth")
+	eq(activity_block.lines[6], "  │ echo done")
+	ok(not table.concat(activity_block.lines, "\n"):find("K to inspect", 1, true))
 	for _, line in ipairs(vim.list_slice(activity_block.lines, 2)) do
 		ok(
 			vim.fn.strdisplaywidth(line) <= action.command_preview_width,
@@ -1216,14 +1222,12 @@ test("Codex-style command cells compact the command invocation itself", function
 	view.refresh_transcript(bufnr, 0, chat)
 	local active = treesitter.start(bufnr)
 	if treesitter.status().available then
-		ok(active, "expected the ACP highlighter to start for the preview-hint regression")
+		ok(active, "expected the ACP highlighter to start for the preview-marker regression")
 	end
-	local header_meta = highlight_at(bufnr, activity_block.line1 + 1, "K to inspect", "AcpActionMeta")
-	eq(header_meta.hl_group_link, "Comment")
-	ok(header_meta.priority > 150, "preview metadata must override Bash token highlights")
+	local omission_meta = highlight_at(bufnr, activity_block.line1 + 2, "... +2 lines", "AcpActionMeta")
+	eq(omission_meta.hl_group_link, "Comment")
 	local meta_text = highlighted_text(bufnr, "AcpActionMeta")
-	ok(vim.tbl_contains(meta_text, "… (K to inspect)"))
-	ok(vim.tbl_contains(meta_text, "… +4 lines (K to inspect)"))
+	ok(vim.tbl_contains(meta_text, "... +2 lines"))
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
@@ -1334,11 +1338,14 @@ test("MCP and dynamic tools keep compact transcript previews and complete detail
 	}) do
 		local chat = blocks.new()
 		local _, tool_block = chat:add_item(item)
-		eq(#tool_block.lines, 2 + action.tool_output_preview_limit)
-		contains(tool_block.lines[2], "search.inspect(…)")
+		eq(#tool_block.lines, 2 + action.preview_limit)
+		contains(tool_block.lines[2], "search.inspect(...)")
 		ok(not table.concat(tool_block.lines, "\n"):find(long_argument, 1, true))
-		eq(tool_block.lines[4], "    … +10 lines (K to inspect)")
-		eq(tool_block.lines[5], "    Result 12")
+		eq(tool_block.lines[4], "    ... +8 lines")
+		eq(tool_block.lines[5], "    Result 10")
+		eq(tool_block.lines[6], "    Result 11")
+		eq(tool_block.lines[7], "    Result 12")
+		ok(not table.concat(tool_block.lines, "\n"):find("K to inspect", 1, true))
 		for _, line in ipairs(vim.list_slice(tool_block.lines, 2)) do
 			ok(
 				vim.fn.strdisplaywidth(line) <= action.tool_preview_width,
@@ -2672,12 +2679,12 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		ok(
 			vim.wait(250, function()
 				local block = state.chat.by_id["command-1"]
-				return block and table.concat(block.lines, "\n"):find("… +8 lines", 1, true) ~= nil
+				return block and table.concat(block.lines, "\n"):find("... +6 lines", 1, true) ~= nil
 			end, 5),
 			"expected bounded command output to flush promptly"
 		)
 		local command_block = state.chat.by_id["command-1"]
-		eq(#command_block.lines, action.output_preview_limit + 2)
+		eq(#command_block.lines, action.preview_limit + 2)
 		fake.handlers.on_notification("item/completed", {
 			threadId = "thread-1",
 			turnId = "turn-1",

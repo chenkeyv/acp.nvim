@@ -46,7 +46,7 @@
   (#match? @acp.action.failure "^Error:"))
 
 ((result_text) @acp.action.meta
-  (#match? @acp.action.meta "^(… \\+|\\(no output\\))"))
+  (#match? @acp.action.meta "^(\\.\\.\\. \\+|\\(no output\\))"))
 
 (fence_delimiter) @acp.code.fence
 (language) @acp.code.language
