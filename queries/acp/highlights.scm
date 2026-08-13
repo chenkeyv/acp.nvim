@@ -32,7 +32,7 @@
 ((tool_arguments) @acp.action.arguments
   (#set! priority 90))
 (exploration_verb) @acp.action.verb
-(exploration_target) @acp.action.command
+(exploration_target) @acp.action.text
 
 [
   (action_pipe)

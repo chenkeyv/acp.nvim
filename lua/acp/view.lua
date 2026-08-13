@@ -111,6 +111,7 @@ function M.define_highlights()
 		AcpActionRead = { fg = "#9ece6a", bold = true },
 		AcpActionList = { fg = "#e0af68", bold = true },
 		AcpActionEdit = { fg = "#f7768e", bold = true },
+		AcpActionText = { link = "Normal" },
 		AcpActionNamespace = { link = "Comment" },
 		AcpActionArguments = { link = "String" },
 		AcpActionPunctuation = { link = "Delimiter" },
@@ -135,6 +136,7 @@ function M.define_highlights()
 		["@acp.action.active"] = { link = "AcpActionActive" },
 		["@acp.action.success"] = { link = "AcpActionSuccess" },
 		["@acp.action.command"] = { link = "AcpActionCommand" },
+		["@acp.action.text"] = { link = "AcpActionText" },
 		["@acp.action.tool"] = { link = "AcpActionTool" },
 		["@acp.action.namespace"] = { link = "AcpActionNamespace" },
 		["@acp.action.arguments"] = { link = "AcpActionArguments" },
@@ -664,6 +666,38 @@ local function highlight_action_verb(bufnr, row, line, start_col, kind)
 			hl_group = group,
 			priority = 150,
 		})
+		local target_col = start_col + last
+		if target_col < #line then
+			mark(bufnr, row, target_col, {
+				end_col = #line,
+				hl_group = "AcpActionText",
+				priority = 140,
+			})
+		end
+	end
+end
+
+local function highlight_preview_meta(bufnr, row, line)
+	local hint_col = line:find("(K to inspect)", 1, true)
+	if not hint_col then
+		return
+	end
+	local ellipsis_col
+	local search_col = 1
+	while true do
+		local next_col = line:find("…", search_col, true)
+		if not next_col or next_col >= hint_col then
+			break
+		end
+		ellipsis_col = next_col
+		search_col = next_col + #"…"
+	end
+	if ellipsis_col then
+		mark(bufnr, row, ellipsis_col - 1, {
+			end_col = #line,
+			hl_group = "AcpActionMeta",
+			priority = 180,
+		})
 	end
 end
 
@@ -750,10 +784,10 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 		if detail_col and #line > detail_col then
 			mark(bufnr, row, detail_col, {
 				end_col = #line,
-				hl_group = row_info.detail_kind == "tool" and "AcpActionTool" or "AcpActionCommand",
-				-- ACP captures sit above this fallback, while injected Bash/JSON captures
-				-- sit above both and can style the command or arguments token by token.
-				priority = 80,
+				hl_group = row_info.detail_kind == "tool" and "AcpActionTool" or "AcpActionText",
+				-- Injected Bash/JSON captures sit above this structural span and can
+				-- style the command or arguments token by token.
+				priority = row_info.detail_kind == "tool" and 80 or 110,
 			})
 			if row_info.detail_kind == "tool" then
 				highlight_tool(bufnr, row, line, detail_col, row_info.action_kind)
@@ -761,6 +795,7 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 				highlight_shell(bufnr, row, line, detail_col)
 			end
 		end
+		highlight_preview_meta(bufnr, row, line)
 		return true
 	end
 
@@ -768,18 +803,23 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 	if tree > 0 then
 		mark(bufnr, row, 0, { end_col = tree, hl_group = "AcpActionTree", priority = 170 })
 		local content = line:sub(tree + 1)
-		local highlight = row_info.role == "action_command" and "AcpActionCommand"
+		local highlight = row_info.role == "action_command" and "AcpActionText"
 			or content:match("^Error:") and "AcpActionFailure"
 			or content:match("^… %+%d+ lines") and "AcpActionMeta"
 			or content == "(no output)" and "AcpActionMeta"
 			or "AcpActionOutput"
-		mark(bufnr, row, tree, { end_col = #line, hl_group = highlight, priority = 80 })
+		mark(bufnr, row, tree, {
+			end_col = #line,
+			hl_group = highlight,
+			priority = row_info.role == "action_command" and 110 or 80,
+		})
 		if row_info.action_kind then
 			highlight_action_verb(bufnr, row, line, tree, row_info.action_kind)
 		elseif row_info.syntax == "bash" and not row_info.is_meta then
 			highlight_shell(bufnr, row, line, tree)
 		end
 	end
+	highlight_preview_meta(bufnr, row, line)
 	return true
 end
 

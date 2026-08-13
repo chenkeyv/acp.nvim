@@ -1013,6 +1013,26 @@ local function highlighted_text(bufnr, group)
 	return values
 end
 
+local function highlight_at(bufnr, line, text, group)
+	local row = line - 1
+	local source = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
+	local first = source:find(text, 1, true)
+	ok(first ~= nil, ("expected line %d to contain %q"):format(line, text))
+	local inspected = vim.inspect_pos(bufnr, row, first - 1, {
+		extmarks = true,
+		semantic_tokens = true,
+		syntax = true,
+		treesitter = true,
+	})
+	for _, extmark in ipairs(inspected.extmarks or {}) do
+		local opts = extmark.opts or {}
+		if opts.hl_group == group then
+			return opts
+		end
+	end
+	error(("expected %s at %q"):format(group, text), 2)
+end
+
 test("live action cells use structural Bash and semantic tool highlighting", function()
 	local chat = blocks.new()
 	chat:add_item({
@@ -1100,6 +1120,9 @@ test("live action cells use structural Bash and semantic tool highlighting", fun
 	})
 	local bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, chat:render_lines())
+	-- Simulate an existing session that still has the pre-change cyan command
+	-- group. Reload-safe structural targets must not inherit this stale color.
+	vim.api.nvim_set_hl(0, "AcpActionCommand", { fg = "#2ac3de" })
 	view.define_highlights()
 	view.refresh_transcript(bufnr, 0, chat)
 
@@ -1116,11 +1139,19 @@ test("live action cells use structural Bash and semantic tool highlighting", fun
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionRead"), "Read"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionList"), "list_files"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionList"), "List"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionText"), " action"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionText"), " lua/acp/view.lua"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionText"), " lua/acp"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionEdit"), "apply_patch"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionEdit"), "update"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionTool"), "target"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionNamespace"), "docs"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionArguments"), [[{"query":"action cells"}]]))
+	local explore_block = chat.by_id["explore-search"]
+	local target_highlight = highlight_at(bufnr, explore_block.line1 + 2, "action", "AcpActionText")
+	eq(target_highlight.hl_group_link, "Normal")
+	ok(target_highlight.priority > 90, "normal action targets must override the ACP parser capture")
+	eq(vim.api.nvim_get_hl(0, { name = "AcpActionCommand" }).fg, tonumber("2ac3de", 16))
 
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
@@ -1666,7 +1697,8 @@ test("chat view stacks floating surfaces and styles transcript roles", function(
 	ok(groups.AcpUserHeader)
 	ok(groups.AcpAgentHeader)
 	ok(groups.AcpActionSuccess)
-	ok(groups.AcpActionCommand)
+	ok(groups.AcpActionText)
+	ok(groups.AcpShellCommand)
 	ok(groups.AcpActionTool)
 	ok(groups.AcpTranscriptTool)
 	ok(groups.AcpTranscriptWarning)
@@ -1679,6 +1711,7 @@ test("chat view stacks floating surfaces and styles transcript roles", function(
 		"@acp.action.success",
 		"@acp.action.namespace",
 		"@acp.action.tool",
+		"@acp.action.text",
 		"@acp.action.arguments",
 		"@acp.action.verb",
 		"@acp.action.failure",
