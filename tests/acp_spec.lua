@@ -1937,6 +1937,7 @@ test("output UI restores semantic visuals and section drafting", function()
 	for _, extmark in ipairs(visual_marks) do
 		local details = extmark[4] or {}
 		ok(not details.virt_text, "semantic icons and code languages should not be virtual text")
+		ok(details.line_hl_group == nil, "code blocks should not add row highlights")
 		if details.hl_group == "AcpOutputReference" then
 			reference_highlighted = true
 		end

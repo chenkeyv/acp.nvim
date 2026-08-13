@@ -1088,17 +1088,6 @@ function M.refresh(state)
 		})
 	end
 
-	for _, block in ipairs(blocks) do
-		local first = block.start_line + 1
-		local last = block.closed and block.end_line - 1 or block.end_line
-		for line = first, last do
-			pcall(vim.api.nvim_buf_set_extmark, bufnr, visual_ns, line - 1, 0, {
-				line_hl_group = "AcpInjectedCode",
-				priority = 8,
-			})
-		end
-	end
-
 	M.refresh_map(state)
 end
 

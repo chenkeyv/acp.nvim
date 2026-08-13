@@ -177,7 +177,6 @@ end
 function M.define_highlights()
 	for name, definition in pairs({
 		AcpBadge = { link = "Visual" },
-		AcpInjectedCode = { link = "Visual" },
 		AcpInjectedLanguage = { fg = "#1a1b26", bg = "#7aa2f7", bold = true },
 		AcpOutputPulse = { link = "IncSearch" },
 		AcpOutputPulseSoft = { link = "Search" },
