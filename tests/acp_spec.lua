@@ -15,6 +15,7 @@ local server_log = require("acp.server_log")
 local transcript = require("acp.transcript")
 local treesitter = require("acp.treesitter")
 local ui = require("acp.ui")
+local version = require("acp.version")
 local view = require("acp.view")
 
 local tests = {}
@@ -109,6 +110,38 @@ local function fake_process()
 
 	return process
 end
+
+test("version contract accepts only Neovim 0.13+ development builds", function()
+	ok(version.is_supported({ major = 0, minor = 13, patch = 0, api_prerelease = true }))
+	ok(version.is_supported({ major = 0, minor = 14, patch = 0, api_prerelease = true }))
+	ok(not version.is_supported({ major = 0, minor = 12, patch = 9, api_prerelease = true }))
+	ok(not version.is_supported({ major = 0, minor = 13, patch = 0, api_prerelease = false }))
+	ok(not version.is_supported({ major = 0, minor = 14, patch = 0, api_prerelease = false }))
+	contains(version.error_message({ major = 0, minor = 13, patch = 0 }), "stable releases are not supported")
+	local supported = version.current()
+	ok(supported, "the test suite requires a supported Neovim nightly")
+end)
+
+test("plugin loading rejects unsupported Neovim before marking itself loaded", function()
+	local original_current = version.current
+	local original_loaded = vim.g.loaded_acp_nvim
+	version.current = function()
+		return false, { major = 0, minor = 13, patch = 0, prerelease = nil, api_prerelease = false }
+	end
+	vim.g.loaded_acp_nvim = nil
+	local plugin = vim.fs.joinpath(vim.fn.getcwd(), "plugin", "acp.lua")
+	local loaded, err = pcall(dofile, plugin)
+	local marked_loaded = vim.g.loaded_acp_nvim
+	local init = vim.fs.joinpath(vim.fn.getcwd(), "lua", "acp", "init.lua")
+	local required, require_err = pcall(dofile, init)
+	version.current = original_current
+	vim.g.loaded_acp_nvim = original_loaded
+	ok(not loaded, "stable Neovim should be rejected")
+	contains(err, "stable releases are not supported")
+	eq(marked_loaded, nil)
+	ok(not required, "explicit require should reject stable Neovim")
+	contains(require_err, "stable releases are not supported")
+end)
 
 local function with_permission_select(replacement, callback)
 	local original = permission.select
@@ -679,8 +712,9 @@ test("Codex-style command cells stream a bounded head-tail preview", function()
 		highlights[extmark[4] and extmark[4].hl_group or ""] = true
 	end
 	ok(highlights.AcpActionSuccess)
-	ok(highlights.AcpActionTitle)
 	ok(highlights.AcpActionOutput)
+	ok(next(vim.api.nvim_get_hl(0, { name = "@acp.action.active", link = false })) ~= nil)
+	ok(next(vim.api.nvim_get_hl(0, { name = "@acp.action.arguments", link = false })) ~= nil)
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
@@ -763,7 +797,10 @@ test("ACP Tree-sitter grammar is distributable and keeps the acp filetype", func
 	local parser = treesitter.parser_config()
 	eq(parser.location, "tree-sitter-acp")
 	eq(parser.queries, "queries/acp")
+	eq(parser.revision, treesitter.parser_revision())
+	ok(parser.revision ~= "missing")
 	for _, path in ipairs({
+		"tree-sitter-acp/tree-sitter.json",
 		"tree-sitter-acp/grammar.js",
 		"tree-sitter-acp/src/parser.c",
 		"tree-sitter-acp/src/node-types.json",
@@ -772,6 +809,9 @@ test("ACP Tree-sitter grammar is distributable and keeps the acp filetype", func
 	}) do
 		ok(vim.fn.filereadable(vim.fs.joinpath(parser.path, path)) == 1, "missing parser artifact: " .. path)
 	end
+	local parser_source =
+		table.concat(vim.fn.readfile(vim.fs.joinpath(parser.path, "tree-sitter-acp/src/parser.c")), "\n")
+	contains(parser_source, "#define LANGUAGE_VERSION 15")
 	treesitter.setup()
 	eq(vim.treesitter.language.get_lang("acp"), "acp")
 end)
@@ -947,13 +987,13 @@ test("large block transcripts keep lookup and streaming edits bounded", function
 		}
 	end
 
-	local started = (vim.uv or vim.loop).hrtime()
+	local started = vim.uv.hrtime()
 	local chat = blocks.from_thread(thread)
 	eq(chat.line_count, 5500)
 	for line = 1, chat.line_count, 5 do
 		ok(chat:block_at(line))
 	end
-	local elapsed_ms = ((vim.uv or vim.loop).hrtime() - started) / 1000000
+	local elapsed_ms = (vim.uv.hrtime() - started) / 1000000
 	ok(elapsed_ms < 1000, ("expected 5,500-line block indexing under 1s, got %.2fms"):format(elapsed_ms))
 	local semantic = chat:semantic_data(vim.fn.getcwd())
 	ok(chat:semantic_data(vim.fn.getcwd()) == semantic, "expected model-wide semantics to reuse the current revision")
@@ -1044,6 +1084,12 @@ test("chat view stacks floating surfaces and styles transcript roles", function(
 		chunks_text(view.prompt_title({ tokens = { totalTokens = 1200, modelContextWindow = 1000 } })),
 		"ctx 0% · 1k"
 	)
+	contains(
+		chunks_text(view.prompt_title({
+			tokens = { totalTokens = 177080, modelContextWindow = 258400 },
+		})),
+		"ctx 31% · 258.4k"
+	)
 	local idle_block = view.instruction_block({ status = "ready" }, 28, 4)
 	eq(#idle_block.lines, 2)
 	eq(idle_block.lines[1], string.rep(" ", 28))
@@ -1124,7 +1170,7 @@ test("chat view stacks floating surfaces and styles transcript roles", function(
 	end
 	ok(groups.AcpUserHeader)
 	ok(groups.AcpAgentHeader)
-	ok(groups.AcpActionTitle)
+	ok(groups.AcpActionSuccess)
 	ok(groups.AcpActionCommand)
 	ok(groups.AcpActionTool)
 	ok(groups.AcpTranscriptTool)
@@ -1133,6 +1179,17 @@ test("chat view stacks floating surfaces and styles transcript roles", function(
 	ok(groups.AcpSectionHeader)
 	ok(groups.AcpCodeFence)
 	ok(groups.AcpInlineCode)
+	for _, capture in ipairs({
+		"@acp.action.active",
+		"@acp.action.success",
+		"@acp.action.namespace",
+		"@acp.action.tool",
+		"@acp.action.arguments",
+		"@acp.action.verb",
+		"@acp.action.failure",
+	}) do
+		ok(next(vim.api.nvim_get_hl(0, { name = capture, link = false })) ~= nil, "missing highlight: " .. capture)
+	end
 	local styled_text = table.concat(direct_lines, "\n")
 	for _, name in ipairs({ "user", "agent", "changes", "warning", "error", "section" }) do
 		contains(styled_text, icons.get(name))
@@ -1410,6 +1467,7 @@ test("setup exposes only the focused Codex command surface", function()
 		"AcpDiff",
 		"AcpActions",
 		"AcpLogin",
+		"AcpInstallParser",
 		"AcpSend",
 		"AcpStop",
 		"AcpClose",
@@ -1986,10 +2044,45 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			turnId = "turn-1",
 			diff = "--- a/file\n+++ b/file",
 		})
+		fake.handlers.on_notification("item/started", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			item = { id = "compaction-1", type = "contextCompaction" },
+		})
+		eq(state.status, "compacting")
+		local compacting_output = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+		contains(compacting_output, "Conversation context compacted.")
+		fake.handlers.on_notification("item/completed", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+			item = { id = "compaction-1", type = "contextCompaction" },
+		})
+		fake.handlers.on_notification("thread/compacted", {
+			threadId = "thread-1",
+			turnId = "turn-1",
+		})
+		local compacted_output = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+		contains(compacted_output, "Conversation context compacted.")
+		eq(count(compacted_output, "Conversation context compacted."), 1)
+		fake.handlers.on_notification("thread/compacted", {
+			threadId = "thread-1",
+			turnId = "turn-legacy-compaction",
+		})
+		fake.handlers.on_notification("item/started", {
+			threadId = "thread-1",
+			turnId = "turn-legacy-compaction",
+			item = { id = "compaction-legacy", type = "contextCompaction" },
+		})
+		local legacy_first_output = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+		eq(count(legacy_first_output, "Conversation context compacted."), 2)
 		fake.handlers.on_notification("thread/tokenUsage/updated", {
 			threadId = "thread-1",
 			turnId = "turn-1",
-			tokenUsage = { total = { totalTokens = 42 }, modelContextWindow = 1000 },
+			tokenUsage = {
+				total = { totalTokens = 30927358 },
+				last = { totalTokens = 177080 },
+				modelContextWindow = 258400,
+			},
 		})
 		fake.handlers.on_notification("turn/completed", {
 			threadId = "thread-1",
@@ -2007,12 +2100,13 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		contains(output, "Implemented.")
 		eq(count(output, "Implemented."), 1)
 		eq(state.diff, "--- a/file\n+++ b/file")
-		eq(state.tokens.totalTokens, 42)
+		eq(state.tokens.totalTokens, 177080)
+		eq(state.token_totals.totalTokens, 30927358)
 		local live_prompt_footer = chunks_text(vim.api.nvim_win_get_config(state.input_win).footer)
 		contains(live_prompt_footer, "gpt-test · high")
-		contains(live_prompt_footer, "ctx 96% · 1k")
+		contains(live_prompt_footer, "ctx 31% · 258.4k")
 		ok(
-			live_prompt_footer:find("gpt-test · high", 1, true) < live_prompt_footer:find("ctx 96% · 1k", 1, true),
+			live_prompt_footer:find("gpt-test · high", 1, true) < live_prompt_footer:find("ctx 31% · 258.4k", 1, true),
 			"expected live model and effort before remaining context"
 		)
 		eq(state.busy, false)
@@ -2024,6 +2118,8 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			table.insert(expected_kinds, "activity")
 		end
 		table.insert(expected_kinds, "agent")
+		table.insert(expected_kinds, "notice")
+		table.insert(expected_kinds, "notice")
 		eq(
 			vim.tbl_map(function(block)
 				return block.kind
@@ -2336,7 +2432,7 @@ test("control-s steers the active turn instead of queueing", function()
 	end
 end)
 
-test("health reports the direct app-server architecture", function()
+test("health reports the direct app-server architecture and parser status", function()
 	ui.setup({ command = "sh" })
 	local reports = {}
 	local original = {
@@ -2366,9 +2462,10 @@ test("health reports the direct app-server architecture", function()
 		error(err, 2)
 	end
 	local text = table.concat(reports, "\n")
-	contains(text, "Neovim supports vim.system")
+	contains(text, "Supported Neovim nightly: 0.13")
 	contains(text, "Codex executable found: sh")
 	contains(text, "codex app-server directly")
+	contains(text, "ACP parser")
 end)
 
 test("hot reload preserves the live client, thread, draft, and Codex tab", function()

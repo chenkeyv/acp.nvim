@@ -66,6 +66,8 @@ function M.item_status(item)
 		return "thinking"
 	elseif item.type == "agentMessage" then
 		return "responding"
+	elseif item.type == "contextCompaction" then
+		return "compacting"
 	elseif item.type == "enteredReviewMode" then
 		return "reviewing changes"
 	end

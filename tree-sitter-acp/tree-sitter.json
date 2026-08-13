@@ -1,0 +1,29 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "acp",
+      "camelcase": "Acp",
+      "title": "acp.nvim transcript",
+      "scope": "source.acp",
+      "file-types": [
+        "acp"
+      ],
+      "injection-regex": "^acp$",
+      "class-name": "TreeSitterAcp"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Tree-sitter grammar for acp.nvim chat transcripts",
+    "authors": [
+      {
+        "name": "acp.nvim contributors"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/chenkeyv/acp.nvim"
+    }
+  }
+}

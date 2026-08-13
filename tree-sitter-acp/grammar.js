@@ -58,11 +58,40 @@ module.exports = grammar({
 				repeat(choice($.exploration_result, $.exploration_continuation)),
 			),
 
-		command_marker: () => token(prec(5, /• (You ran|Running|Ran)/)),
-		tool_marker: () => token(prec(5, /• (Calling|Called)/)),
-		exploration_marker: () => token(prec(5, /• (Exploring|Explored)/)),
+		command_marker: ($) => choice($.command_active_marker, $.command_complete_marker),
+		tool_marker: ($) => choice($.tool_active_marker, $.tool_complete_marker),
+		exploration_marker: ($) => choice($.exploration_active_marker, $.exploration_complete_marker),
+		command_active_marker: () => token(prec(6, "• Running")),
+		command_complete_marker: () => token(prec(6, /• (You ran|Ran)/)),
+		tool_active_marker: () => token(prec(6, "• Calling")),
+		tool_complete_marker: () => token(prec(6, "• Called")),
+		exploration_active_marker: () => token(prec(6, "• Exploring")),
+		exploration_complete_marker: () => token(prec(6, "• Explored")),
 		command_subject: () => token(prec(1, /[^\r\n]+/)),
-		tool_subject: () => token(prec(1, /[^\r\n]+/)),
+		tool_subject: ($) =>
+			seq(
+				field("name", $.tool_name),
+				optional(
+					seq(
+						field("open", $.tool_arguments_open),
+						optional(field("arguments", $.tool_arguments)),
+						field("close", $.tool_arguments_close),
+					),
+				),
+			),
+		tool_name: ($) =>
+			seq(
+				optional(field("namespace", $.tool_namespace)),
+				field("method", $.tool_method),
+			),
+		tool_namespace: () => token(prec(3, /[^\s.(\r\n]+\./)),
+		tool_method: () => token.immediate(prec(2, /[^\s.(\r\n]+/)),
+		tool_arguments_open: () => token.immediate("("),
+		tool_arguments: ($) => choice($.tool_json_arguments, $.tool_raw_arguments),
+		tool_json_arguments: () =>
+			token.immediate(prec(2, choice(/\{[^\r\n]*\}/, /\[[^\r\n]*\]/))),
+		tool_raw_arguments: () => token.immediate(prec(1, /[^)\r\n]+/)),
+		tool_arguments_close: () => token.immediate(")"),
 
 		command_continuation: ($) =>
 			seq($.action_pipe, optional(field("content", $.command_detail)), $._newline),
@@ -80,7 +109,13 @@ module.exports = grammar({
 		action_indent: () => token(prec(5, "    ")),
 		command_detail: () => token(prec(1, /[^\r\n]+/)),
 		result_text: () => token(prec(1, /[^\r\n]+/)),
-		exploration_detail: () => token(prec(1, /[^\r\n]+/)),
+		exploration_detail: ($) =>
+			seq(
+				field("verb", $.exploration_verb),
+				optional(seq(" ", field("target", $.exploration_target))),
+			),
+		exploration_verb: () => token(prec(2, /(Read|List|Search)/)),
+		exploration_target: () => token(prec(1, /[^\r\n]+/)),
 
 		fenced_code_block: ($) => seq($.fence_start, optional($.code_fence_content), $.fence_end),
 		fence_start: ($) =>

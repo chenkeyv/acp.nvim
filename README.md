@@ -37,14 +37,16 @@ runner.
 
 ## Requirements
 
-- Neovim 0.10 or newer
+- Neovim nightly 0.13-dev or newer; stable releases are intentionally unsupported
 - a recent Codex CLI on `PATH`
 - an authenticated Codex session (`codex login` or `:AcpLogin`)
 
 The included ACP Tree-sitter grammar is optional. With `nvim-treesitter` on the
-runtime path, acp.nvim registers its local parser so it can be installed with
-`:TSInstall acp`. Until it is installed, chats retain the `acp` filetype and use
-Neovim's bundled Markdown parser only for fenced-code injection.
+runtime path, acp.nvim registers its local parser. Run `:AcpInstallParser` to
+compile or update it from the grammar bundled with the plugin. Until it is
+installed, chats retain the `acp` filetype and structural command/tool
+highlighting, with Neovim's bundled Markdown parser used only for fenced-code
+injection.
 
 No npm ACP adapter is required.
 
@@ -207,6 +209,7 @@ require("acp").setup({
 | `:AcpOutputHelp` | Open the cursor-aware transcript workflow selector |
 | `:AcpActions` | Open the native action selector |
 | `:AcpLogin` | Inspect account state or start ChatGPT login |
+| `:AcpInstallParser` | Compile or update the optional ACP Tree-sitter parser |
 | `:AcpSend` | Send the prompt buffer |
 | `:AcpStop` | Interrupt the active turn |
 | `:AcpClose` | Close the Codex tab without stopping app-server |
@@ -264,8 +267,8 @@ future work.
 
 ## Health and tests
 
-Run `:checkhealth acp` to verify Neovim, the Codex executable, and direct
-app-server configuration.
+Run `:checkhealth acp` to verify Neovim, the Codex executable, direct app-server
+configuration, and ACP Tree-sitter parser status.
 
 ```sh
 NVIM_LOG_FILE=/tmp/acp.nvim-nvim.log nvim --headless -u tests/minimal_init.lua \

@@ -155,12 +155,7 @@ function M.sync_spinner(state, active, refresh)
 	if state.instruction_spinner_timer then
 		return
 	end
-	local uv = vim.uv or vim.loop
-	if not uv or not uv.new_timer then
-		state.instruction_spinner_frame = 1
-		return
-	end
-	local timer = uv.new_timer()
+	local timer = vim.uv.new_timer()
 	if not timer then
 		state.instruction_spinner_frame = 1
 		return

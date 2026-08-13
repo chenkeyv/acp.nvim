@@ -135,6 +135,9 @@ local function fresh_state(cwd)
 		output_winbar = nil,
 		chat = blocks.new(),
 		tokens = nil,
+		token_totals = nil,
+		compaction_items = {},
+		compaction_turns = {},
 	}
 end
 
@@ -938,12 +941,24 @@ local function apply_thread_response(result)
 	state.effort = present(result.reasoningEffort) and result.reasoningEffort or state.effort
 	state.service_tier = present(result.serviceTier) and result.serviceTier or state.service_tier
 	state.diff = render.thread_diff(thread)
+	state.tokens = nil
+	state.token_totals = nil
 	state.streamed_items = {}
 	state.items = {}
+	state.compaction_items = {}
+	state.compaction_turns = {}
 	for _, history_turn in ipairs(thread.turns or {}) do
 		for _, item in ipairs(history_turn.items or {}) do
 			if item.id then
 				state.items[item.id] = item
+			end
+			if item.type == "contextCompaction" then
+				if item.id then
+					state.compaction_items[tostring(item.id)] = true
+				end
+				if history_turn.id then
+					state.compaction_turns[tostring(history_turn.id)] = "modern"
+				end
 			end
 		end
 	end
@@ -1804,6 +1819,38 @@ local function notification_thread_id(method, params)
 	return nil
 end
 
+local function show_context_compaction(item, turn_id)
+	local item_id = present(item.id) and tostring(item.id) or nil
+	if item_id and state.compaction_items[item_id] then
+		return
+	end
+	if item_id then
+		state.compaction_items[item_id] = true
+	end
+	local turn_key = present(turn_id) and tostring(turn_id) or nil
+	if turn_key and state.compaction_turns[turn_key] == "legacy" then
+		state.compaction_turns[turn_key] = "modern"
+		return
+	end
+	append_chat_block(function(chat)
+		return chat:add_item(item)
+	end)
+	if turn_key then
+		state.compaction_turns[turn_key] = "modern"
+	end
+end
+
+local function complete_legacy_compaction(turn_id)
+	local turn_key = present(turn_id) and tostring(turn_id) or nil
+	if turn_key and state.compaction_turns[turn_key] then
+		return
+	end
+	append_notice("notice", "Conversation context compacted.")
+	if turn_key then
+		state.compaction_turns[turn_key] = "legacy"
+	end
+end
+
 function M._handle_notification(method, params)
 	params = params or {}
 	if method == "account/login/completed" then
@@ -1830,7 +1877,9 @@ function M._handle_notification(method, params)
 		if item.id then
 			state.items[item.id] = item
 		end
-		if item.type == "agentMessage" then
+		if item.type == "contextCompaction" then
+			show_context_compaction(item, params.turnId)
+		elseif item.type == "agentMessage" then
 			consume_steering_instructions()
 			ensure_agent_item(item.id)
 		elseif action.kind(item) then
@@ -1869,7 +1918,9 @@ function M._handle_notification(method, params)
 		if item.id then
 			state.items[item.id] = item
 		end
-		if action.kind(item) then
+		if item.type == "contextCompaction" then
+			show_context_compaction(item, params.turnId)
+		elseif action.kind(item) then
 			append_chat_block(function(chat)
 				return chat:complete_item(item)
 			end)
@@ -1887,15 +1938,19 @@ function M._handle_notification(method, params)
 	elseif method == "turn/diff/updated" then
 		state.diff = params.diff or state.diff
 	elseif method == "thread/tokenUsage/updated" then
-		local context_window = params.tokenUsage and params.tokenUsage.modelContextWindow
-		if not present(context_window) then
-			context_window = nil
-		end
-		state.tokens = params.tokenUsage
-				and vim.tbl_extend("force", params.tokenUsage.total or {}, {
+		local usage = params.tokenUsage
+		if type(usage) == "table" then
+			local context_window = present(usage.modelContextWindow) and usage.modelContextWindow or nil
+			local current = type(usage.last) == "table" and usage.last or usage.total
+			if type(current) == "table" then
+				state.tokens = vim.tbl_extend("force", current, {
 					modelContextWindow = context_window,
 				})
-			or state.tokens
+			end
+			if type(usage.total) == "table" then
+				state.token_totals = vim.deepcopy(usage.total)
+			end
+		end
 		update_chrome()
 	elseif method == "model/rerouted" then
 		state.model = params.toModel or state.model
@@ -1909,8 +1964,8 @@ function M._handle_notification(method, params)
 		local message = params.message or params.warning or "Codex warning"
 		append_notice("warning", message)
 	elseif method == "thread/compacted" then
-		append_notice("notice", "Conversation context compacted.")
-		set_status("ready")
+		complete_legacy_compaction(params.turnId)
+		set_status(state.busy and "working" or "ready")
 	elseif method == "turn/completed" then
 		flush_output_text()
 		flush_action_output()
@@ -2052,6 +2107,7 @@ local function schedule_output_cursor_update()
 end
 
 local function register_commands()
+	treesitter.register_commands()
 	local function output_action(callback)
 		return function()
 			if not state then

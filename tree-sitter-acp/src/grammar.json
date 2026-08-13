@@ -252,35 +252,107 @@
       ]
     },
     "command_marker": {
-      "type": "TOKEN",
-      "content": {
-        "type": "PREC",
-        "value": 5,
-        "content": {
-          "type": "PATTERN",
-          "value": "• (You ran|Running|Ran)"
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "command_active_marker"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "command_complete_marker"
         }
-      }
+      ]
     },
     "tool_marker": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "tool_active_marker"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "tool_complete_marker"
+        }
+      ]
+    },
+    "exploration_marker": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "exploration_active_marker"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "exploration_complete_marker"
+        }
+      ]
+    },
+    "command_active_marker": {
       "type": "TOKEN",
       "content": {
         "type": "PREC",
-        "value": 5,
+        "value": 6,
         "content": {
-          "type": "PATTERN",
-          "value": "• (Calling|Called)"
+          "type": "STRING",
+          "value": "• Running"
         }
       }
     },
-    "exploration_marker": {
+    "command_complete_marker": {
       "type": "TOKEN",
       "content": {
         "type": "PREC",
-        "value": 5,
+        "value": 6,
         "content": {
           "type": "PATTERN",
-          "value": "• (Exploring|Explored)"
+          "value": "• (You ran|Ran)"
+        }
+      }
+    },
+    "tool_active_marker": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 6,
+        "content": {
+          "type": "STRING",
+          "value": "• Calling"
+        }
+      }
+    },
+    "tool_complete_marker": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 6,
+        "content": {
+          "type": "STRING",
+          "value": "• Called"
+        }
+      }
+    },
+    "exploration_active_marker": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 6,
+        "content": {
+          "type": "STRING",
+          "value": "• Exploring"
+        }
+      }
+    },
+    "exploration_complete_marker": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 6,
+        "content": {
+          "type": "STRING",
+          "value": "• Explored"
         }
       }
     },
@@ -296,14 +368,170 @@
       }
     },
     "tool_subject": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "tool_name"
+          }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "open",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "tool_arguments_open"
+                  }
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "FIELD",
+                      "name": "arguments",
+                      "content": {
+                        "type": "SYMBOL",
+                        "name": "tool_arguments"
+                      }
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                },
+                {
+                  "type": "FIELD",
+                  "name": "close",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "tool_arguments_close"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "tool_name": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "namespace",
+              "content": {
+                "type": "SYMBOL",
+                "name": "tool_namespace"
+              }
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "FIELD",
+          "name": "method",
+          "content": {
+            "type": "SYMBOL",
+            "name": "tool_method"
+          }
+        }
+      ]
+    },
+    "tool_namespace": {
       "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 3,
+        "content": {
+          "type": "PATTERN",
+          "value": "[^\\s.(\\r\\n]+\\."
+        }
+      }
+    },
+    "tool_method": {
+      "type": "IMMEDIATE_TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 2,
+        "content": {
+          "type": "PATTERN",
+          "value": "[^\\s.(\\r\\n]+"
+        }
+      }
+    },
+    "tool_arguments_open": {
+      "type": "IMMEDIATE_TOKEN",
+      "content": {
+        "type": "STRING",
+        "value": "("
+      }
+    },
+    "tool_arguments": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "tool_json_arguments"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "tool_raw_arguments"
+        }
+      ]
+    },
+    "tool_json_arguments": {
+      "type": "IMMEDIATE_TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 2,
+        "content": {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "PATTERN",
+              "value": "\\{[^\\r\\n]*\\}"
+            },
+            {
+              "type": "PATTERN",
+              "value": "\\[[^\\r\\n]*\\]"
+            }
+          ]
+        }
+      }
+    },
+    "tool_raw_arguments": {
+      "type": "IMMEDIATE_TOKEN",
       "content": {
         "type": "PREC",
         "value": 1,
         "content": {
           "type": "PATTERN",
-          "value": "[^\\r\\n]+"
+          "value": "[^)\\r\\n]+"
         }
+      }
+    },
+    "tool_arguments_close": {
+      "type": "IMMEDIATE_TOKEN",
+      "content": {
+        "type": "STRING",
+        "value": ")"
       }
     },
     "command_continuation": {
@@ -507,6 +735,55 @@
       }
     },
     "exploration_detail": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "verb",
+          "content": {
+            "type": "SYMBOL",
+            "name": "exploration_verb"
+          }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": " "
+                },
+                {
+                  "type": "FIELD",
+                  "name": "target",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "exploration_target"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "exploration_verb": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 2,
+        "content": {
+          "type": "PATTERN",
+          "value": "(Read|List|Search)"
+        }
+      }
+    },
+    "exploration_target": {
       "type": "TOKEN",
       "content": {
         "type": "PREC",

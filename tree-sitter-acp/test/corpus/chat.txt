@@ -32,7 +32,8 @@ return true
     (text))
   (blank_line)
   (command_action
-    state: (command_marker)
+    state: (command_marker
+      (command_complete_marker))
     subject: (command_subject)
     (action_result
       (action_branch)
@@ -45,20 +46,33 @@ return true
       content: (result_text)))
   (blank_line)
   (tool_action
-    state: (tool_marker)
-    subject: (tool_subject)
+    state: (tool_marker
+      (tool_complete_marker))
+    subject: (tool_subject
+      name: (tool_name
+        namespace: (tool_namespace)
+        method: (tool_method))
+      open: (tool_arguments_open)
+      arguments: (tool_arguments
+        (tool_json_arguments))
+      close: (tool_arguments_close))
     (action_result
       (action_branch)
       content: (result_text)))
   (blank_line)
   (exploration_action
-    state: (exploration_marker)
+    state: (exploration_marker
+      (exploration_complete_marker))
     (exploration_result
       (action_branch)
-      content: (exploration_detail))
+      content: (exploration_detail
+        verb: (exploration_verb)
+        target: (exploration_target)))
     (exploration_continuation
       (action_indent)
-      content: (exploration_detail)))
+      content: (exploration_detail
+        verb: (exploration_verb)
+        target: (exploration_target))))
   (blank_line)
   (agent_header)
   (text_line
@@ -86,12 +100,21 @@ Live action states
 (document
   (blank_line)
   (command_action
-    state: (command_marker)
+    state: (command_marker
+      (command_active_marker))
     subject: (command_subject)
     (command_continuation
       (action_pipe)
       content: (command_detail)))
   (blank_line)
   (tool_action
-    state: (tool_marker)
-    subject: (tool_subject)))
+    state: (tool_marker
+      (tool_active_marker))
+    subject: (tool_subject
+      name: (tool_name
+        namespace: (tool_namespace)
+        method: (tool_method))
+      open: (tool_arguments_open)
+      arguments: (tool_arguments
+        (tool_json_arguments))
+      close: (tool_arguments_close))))

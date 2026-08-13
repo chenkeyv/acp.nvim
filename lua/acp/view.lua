@@ -101,24 +101,35 @@ function M.define_highlights()
 		AcpTranscriptTool = { fg = "#737aa2" },
 		AcpTranscriptError = { link = "DiagnosticError" },
 		AcpTranscriptWarning = { link = "DiagnosticWarn" },
-		AcpActionTitle = { bold = true },
 		AcpActionActive = { fg = "#e0af68", bold = true },
 		AcpActionSuccess = { link = "DiagnosticOk" },
 		AcpActionFailure = { link = "DiagnosticError" },
 		AcpActionCommand = { fg = "#2ac3de" },
 		AcpActionTool = { fg = "#bb9af7" },
+		AcpActionNamespace = { link = "Comment" },
+		AcpActionArguments = { link = "String" },
+		AcpActionPunctuation = { link = "Delimiter" },
+		AcpActionVerb = { fg = "#7aa2f7", bold = true },
 		AcpActionTree = { link = "Comment" },
 		AcpActionOutput = { link = "Comment" },
+		AcpActionMeta = { link = "Comment" },
 		AcpCodeFence = { fg = "#e0af68", bold = true },
 		AcpInlineCode = { fg = "#7dcfff" },
 		["@acp.user.header"] = { link = "AcpUserHeader" },
 		["@acp.agent.header"] = { link = "AcpAgentHeader" },
 		["@acp.section.header"] = { link = "AcpSectionHeader" },
-		["@acp.action.title"] = { link = "AcpActionTitle" },
+		["@acp.action.active"] = { link = "AcpActionActive" },
+		["@acp.action.success"] = { link = "AcpActionSuccess" },
 		["@acp.action.command"] = { link = "AcpActionCommand" },
 		["@acp.action.tool"] = { link = "AcpActionTool" },
+		["@acp.action.namespace"] = { link = "AcpActionNamespace" },
+		["@acp.action.arguments"] = { link = "AcpActionArguments" },
+		["@acp.action.punctuation"] = { link = "AcpActionPunctuation" },
+		["@acp.action.verb"] = { link = "AcpActionVerb" },
 		["@acp.action.tree"] = { link = "AcpActionTree" },
 		["@acp.action.output"] = { link = "AcpActionOutput" },
+		["@acp.action.failure"] = { link = "AcpActionFailure" },
+		["@acp.action.meta"] = { link = "AcpActionMeta" },
 		["@acp.code.fence"] = { link = "AcpCodeFence" },
 		["@acp.code.language"] = { link = "AcpInjectedLanguage" },
 	}) do
@@ -618,7 +629,7 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 		if title ~= "" then
 			mark(bufnr, row, title_col, {
 				end_col = title_col + #title,
-				hl_group = "AcpActionTitle",
+				hl_group = bullet_highlight,
 				priority = 190,
 			})
 		end
@@ -627,7 +638,9 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 			mark(bufnr, row, detail_col, {
 				end_col = #line,
 				hl_group = row_info.detail_kind == "tool" and "AcpActionTool" or "AcpActionCommand",
-				priority = 180,
+				-- ACP captures sit above this fallback, while injected Bash/JSON captures
+				-- sit above both and can style the command or arguments token by token.
+				priority = 80,
 			})
 		end
 		return true
@@ -636,8 +649,13 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 	local tree = math.max(0, tonumber(row_info.tree_width) or 0)
 	if tree > 0 then
 		mark(bufnr, row, 0, { end_col = tree, hl_group = "AcpActionTree", priority = 170 })
-		local highlight = row_info.role == "action_command" and "AcpActionCommand" or "AcpActionOutput"
-		mark(bufnr, row, tree, { end_col = #line, hl_group = highlight, priority = 160 })
+		local content = line:sub(tree + 1)
+		local highlight = row_info.role == "action_command" and "AcpActionCommand"
+			or content:match("^Error:") and "AcpActionFailure"
+			or content:match("^… %+%d+ lines") and "AcpActionMeta"
+			or content == "(no output)" and "AcpActionMeta"
+			or "AcpActionOutput"
+		mark(bufnr, row, tree, { end_col = #line, hl_group = highlight, priority = 80 })
 	end
 	return true
 end

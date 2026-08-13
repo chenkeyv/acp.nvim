@@ -152,6 +152,25 @@
     "fields": {}
   },
   {
+    "type": "command_marker",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "command_active_marker",
+          "named": true
+        },
+        {
+          "type": "command_complete_marker",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "command_subject",
     "named": true,
     "fields": {}
@@ -267,7 +286,47 @@
   {
     "type": "exploration_detail",
     "named": true,
-    "fields": {}
+    "fields": {
+      "target": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "exploration_target",
+            "named": true
+          }
+        ]
+      },
+      "verb": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "exploration_verb",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "exploration_marker",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "exploration_active_marker",
+          "named": true
+        },
+        {
+          "type": "exploration_complete_marker",
+          "named": true
+        }
+      ]
+    }
   },
   {
     "type": "exploration_result",
@@ -294,6 +353,11 @@
         }
       ]
     }
+  },
+  {
+    "type": "exploration_target",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "fence_end",
@@ -441,9 +505,114 @@
     }
   },
   {
+    "type": "tool_arguments",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "tool_json_arguments",
+          "named": true
+        },
+        {
+          "type": "tool_raw_arguments",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tool_marker",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "tool_active_marker",
+          "named": true
+        },
+        {
+          "type": "tool_complete_marker",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tool_name",
+    "named": true,
+    "fields": {
+      "method": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "tool_method",
+            "named": true
+          }
+        ]
+      },
+      "namespace": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "tool_namespace",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "tool_subject",
     "named": true,
-    "fields": {}
+    "fields": {
+      "arguments": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "tool_arguments",
+            "named": true
+          }
+        ]
+      },
+      "close": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "tool_arguments_close",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "tool_name",
+            "named": true
+          }
+        ]
+      },
+      "open": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "tool_arguments_open",
+            "named": true
+          }
+        ]
+      }
+    }
   },
   {
     "type": " ",
@@ -466,11 +635,23 @@
     "named": true
   },
   {
-    "type": "command_marker",
+    "type": "command_active_marker",
     "named": true
   },
   {
-    "type": "exploration_marker",
+    "type": "command_complete_marker",
+    "named": true
+  },
+  {
+    "type": "exploration_active_marker",
+    "named": true
+  },
+  {
+    "type": "exploration_complete_marker",
+    "named": true
+  },
+  {
+    "type": "exploration_verb",
     "named": true
   },
   {
@@ -498,7 +679,35 @@
     "named": true
   },
   {
-    "type": "tool_marker",
+    "type": "tool_active_marker",
+    "named": true
+  },
+  {
+    "type": "tool_arguments_close",
+    "named": true
+  },
+  {
+    "type": "tool_arguments_open",
+    "named": true
+  },
+  {
+    "type": "tool_complete_marker",
+    "named": true
+  },
+  {
+    "type": "tool_json_arguments",
+    "named": true
+  },
+  {
+    "type": "tool_method",
+    "named": true
+  },
+  {
+    "type": "tool_namespace",
+    "named": true
+  },
+  {
+    "type": "tool_raw_arguments",
     "named": true
   },
   {

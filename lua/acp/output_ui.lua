@@ -970,18 +970,9 @@ function M.schedule_refresh(state, delay_ms)
 	if not state or not valid_buf(state.output_buf) then
 		return
 	end
-	local uv = vim.uv or vim.loop
-	if not uv or not uv.new_timer then
-		vim.schedule(function()
-			if not state.busy then
-				M.refresh(state)
-			end
-		end)
-		return
-	end
 	local timer = state.output_refresh_timer
 	if not timer then
-		timer = uv.new_timer()
+		timer = vim.uv.new_timer()
 		state.output_refresh_timer = timer
 	end
 	state.output_refresh_pending = true
