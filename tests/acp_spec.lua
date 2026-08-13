@@ -1953,13 +1953,7 @@ test("output UI restores semantic visuals and section drafting", function()
 		end
 	end
 	ok(reference_highlighted, "transcript references should remain highlighted")
-	local current_marks = vim.api.nvim_buf_get_extmarks(output_buf, output_ui.namespaces.current, 0, -1, {
-		details = true,
-	})
-	ok(#current_marks > 0, "the current reference should remain highlighted")
-	for _, extmark in ipairs(current_marks) do
-		ok(not (extmark[4] or {}).virt_text, "cursor highlights should not add virtual text")
-	end
+	eq(output_ui.namespaces.current, nil, "the chat cursor must not add a row highlight")
 	eq(#vim.diagnostic.get(output_buf), 0)
 	ok(output_ui.yank_section(state))
 	contains(vim.fn.getreg('"'), "Review")

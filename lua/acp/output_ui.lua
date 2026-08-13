@@ -6,12 +6,10 @@ local treesitter = require("acp.treesitter")
 local M = {}
 
 local visual_ns = vim.api.nvim_create_namespace("acp.nvim.output.visual")
-local current_ns = vim.api.nvim_create_namespace("acp.nvim.output.current")
 local pulse_ns = vim.api.nvim_create_namespace("acp.nvim.output.pulse")
 
 M.namespaces = {
 	visual = visual_ns,
-	current = current_ns,
 	pulse = pulse_ns,
 }
 
@@ -1002,28 +1000,6 @@ function M.flush_refresh(state)
 	M.refresh(state)
 end
 
-local function refresh_current(state)
-	if not state or not valid_buf(state.output_buf) then
-		return
-	end
-	vim.api.nvim_buf_clear_namespace(state.output_buf, current_ns, 0, -1)
-	if not valid_win(state.output_win) then
-		return
-	end
-	local cursor = output_cursor(state)
-	local item = cached_item_at(state, cursor[1], cursor[2])
-	if item then
-		local line1 = item.kind == "activity" and cursor[1] or item.line or cursor[1]
-		local line2 = item.kind == "activity" and line1 or item.line2 or item.line or cursor[1]
-		for line = line1, line2 do
-			pcall(vim.api.nvim_buf_set_extmark, state.output_buf, current_ns, line - 1, 0, {
-				line_hl_group = "AcpCurrentItem",
-				priority = 20,
-			})
-		end
-	end
-end
-
 local function build_item_index(items)
 	local index = { references = {}, activity = {}, code = {}, problem = {} }
 	for item_index, item in ipairs(items or {}) do
@@ -1058,7 +1034,6 @@ function M.refresh(state)
 		vim.b[bufnr].acp_language_injection = mode
 	end
 	if cache_is_current(state) then
-		refresh_current(state)
 		M.refresh_map(state)
 		return
 	end
@@ -1124,12 +1099,10 @@ function M.refresh(state)
 		end
 	end
 
-	refresh_current(state)
 	M.refresh_map(state)
 end
 
 function M.cursor_moved(state)
-	refresh_current(state)
 	M.refresh_map(state)
 end
 
@@ -1149,7 +1122,6 @@ function M.close(state)
 	state.output_cache = nil
 	if valid_buf(state.output_buf) then
 		vim.api.nvim_buf_clear_namespace(state.output_buf, visual_ns, 0, -1)
-		vim.api.nvim_buf_clear_namespace(state.output_buf, current_ns, 0, -1)
 		vim.api.nvim_buf_clear_namespace(state.output_buf, pulse_ns, 0, -1)
 	end
 	if type(state._sync_composer) == "function" then
