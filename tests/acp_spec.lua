@@ -2476,6 +2476,7 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		contains(prompt_footer, "<C-CR> send")
 		eq(prompt.footer_pos, "left")
 		eq(vim.fn.strdisplaywidth(prompt_footer), prompt.width)
+		eq(ui.get_config().window.input_padding, 1)
 		eq(turn_panel.relative, "win")
 		eq(turn_panel.win, state.output_host_win)
 		eq(turn_panel.focusable, false)

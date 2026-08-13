@@ -441,7 +441,7 @@ function M.stack_geometry(bounds, state, opts)
 	local minimum_chat_height = 2
 	local minimum_prompt_outer_height = 3
 	local desired_prompt_outer_height = math.max(3, math.floor(tonumber(opts.input_height) or 6))
-	local desired_bottom_padding = math.max(0, math.floor(tonumber(opts.input_padding) or 2))
+	local desired_bottom_padding = math.max(0, math.floor(tonumber(opts.input_padding) or 1))
 	local requested_turn_height = math.max(1, math.floor(tonumber(opts.instruction_height) or 4))
 
 	local bottom_padding =

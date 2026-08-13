@@ -78,7 +78,7 @@ require("acp").setup({
 	thread_sources = { "cli", "vscode", "appServer" },
 	window = {
 		input_height = 6,
-		input_padding = 2,
+		input_padding = 1,
 		instruction_height = 4,
 		sessions_width = 30,
 	},
@@ -100,8 +100,9 @@ stack's only visible border. The surfaces never overlap, so
 the transcript contains no composer-protection spacer rows. One host-relative
 geometry keeps their widths and edges aligned as the tab resizes.
 `input_height` includes the prompt frame, while `input_padding` controls the
-vertical gap below the stack. A blank two-column native gutter pads transcript
-text without showing fold or sign markers. Model, reasoning, remaining-context
+vertical gap below the stack and defaults to one row. A blank two-column native
+gutter pads transcript text without showing fold or sign markers. Model,
+reasoning, remaining-context
 percentage and window size, and attached-context metadata sit on the prompt's
 lower-left border, while the send and steer hints remain on the lower-right.
 Model/reasoning and remaining context are kept ahead of other metadata and key

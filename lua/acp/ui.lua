@@ -32,7 +32,7 @@ local defaults = {
 	max_threads = 100,
 	window = {
 		input_height = 6,
-		input_padding = 2,
+		input_padding = 1,
 		instruction_height = 4,
 		sessions_width = 30,
 	},
