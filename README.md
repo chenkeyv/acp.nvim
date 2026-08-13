@@ -162,11 +162,20 @@ scrolling remains available only until the next content update arrives.
 The chat window disables editor indent guides and wrapped-line indentation, and
 the output and sessions buffers keep no undo history. Each command or tool gets
 one level-two Codex-style cell; compatible read/list/search commands coalesce
-under a single `Exploring` or `Explored` cell. Command and tool results keep a
-five-row head/ellipsis/tail preview in the chat, with the omitted-line count
-written directly into the buffer. `<Enter>` or `K` opens the complete command or
-tool transcript in a focused detail float. Action previews start open and remain
-manually foldable; warnings and failures stay visible in the transcript.
+under a single `Exploring` or `Explored` cell. Command invocations keep a
+three-row preview, with long shell lines condensed rather than wrapped through
+the chat. Command, MCP, and dynamic-tool results also keep at most three rows:
+the first row, an omitted-line count, and the final row. The same limit applies
+while a command is streaming and after it completes. `<Enter>` or `K` opens the
+complete command or tool transcript in a focused detail float. Action previews
+start open and remain manually foldable; warnings and failures stay visible in
+the transcript.
+
+Command cells apply live Bash token highlighting even while ACP language
+injection is paused during a turn. Exploration verbs and tool methods use
+distinct Search, Read, List, and Edit highlights; file-change verbs use Edit.
+Untyped command and action text keeps the editor's normal text color. These
+structural highlights do not depend on the optional ACP parser.
 
 The sessions split is scoped to the current working directory, like
 `codex resume` without `--all`. It includes the CLI and VS Code interactive

@@ -2,8 +2,12 @@ local output = require("acp.output")
 
 local M = {}
 
-M.output_preview_limit = 5
-M.command_continuation_limit = 2
+M.command_output_preview_limit = 3
+M.output_preview_limit = M.command_output_preview_limit
+M.tool_output_preview_limit = 3
+M.tool_preview_width = 80
+M.command_preview_limit = 3
+M.command_preview_width = 80
 
 local action_types = {
 	commandExecution = "command",
@@ -91,6 +95,28 @@ local function preview(lines, limit)
 	return values, omitted
 end
 
+local function truncate_display(value, width)
+	value = tostring(value or "")
+	width = math.max(1, math.floor(tonumber(width) or 1))
+	if vim.fn.strdisplaywidth(value) <= width then
+		return value
+	end
+
+	local suffix = "… (K to inspect)"
+	local target = math.max(0, width - vim.fn.strdisplaywidth(suffix))
+	local low = 0
+	local high = vim.fn.strchars(value)
+	while low < high do
+		local middle = math.ceil((low + high) / 2)
+		if vim.fn.strdisplaywidth(vim.fn.strcharpart(value, 0, middle)) <= target then
+			low = middle
+		else
+			high = middle - 1
+		end
+	end
+	return vim.fn.strcharpart(value, 0, low) .. suffix
+end
+
 local function row(text, role, opts)
 	return vim.tbl_extend("force", {
 		text = tostring(text or ""),
@@ -170,7 +196,7 @@ local function tool_result_lines(child)
 	return values
 end
 
-local function tool_invocation(item)
+local function tool_invocation(item, max_width)
 	item = item or {}
 	local name = tostring(item.tool or "tool")
 	if present(item.server) and tostring(item.server) ~= "" then
@@ -179,7 +205,37 @@ local function tool_invocation(item)
 		name = tostring(item.namespace) .. "." .. name
 	end
 	local arguments = encode(item.arguments)
-	return arguments and (name .. "(" .. arguments .. ")") or name
+	local invocation = arguments and (name .. "(" .. arguments .. ")") or name
+	if max_width and arguments and vim.fn.strdisplaywidth(invocation) > max_width then
+		invocation = name .. "(…)"
+	end
+	return max_width and truncate_display(invocation, max_width) or invocation
+end
+
+local tool_action_kinds = {
+	{
+		kind = "edit",
+		words = { "apply", "create", "delete", "edit", "move", "patch", "remove", "rename", "replace", "write" },
+	},
+	{ kind = "search", words = { "find", "grep", "lookup", "query", "search" } },
+	{ kind = "read", words = { "fetch", "get", "inspect", "open", "read", "view" } },
+	{ kind = "list", words = { "glob", "list", "scan" } },
+}
+
+local function tool_action_kind(item)
+	local name = tostring(item and item.tool or ""):gsub("(%l)(%u)", "%1_%2"):lower()
+	local name_words = {}
+	for word in name:gmatch("[%w]+") do
+		name_words[word] = true
+	end
+	for _, candidate in ipairs(tool_action_kinds) do
+		for _, word in ipairs(candidate.words) do
+			if name_words[word] then
+				return candidate.kind
+			end
+		end
+	end
+	return "tool"
 end
 
 function M.kind(item)
@@ -275,24 +331,32 @@ local function command_rows(child)
 		command = { "command" }
 	end
 	local title = M.is_active(child) and "Running" or (item.source == "userShell" and "You ran" or "Ran")
+	local header_prefix = ("• %s "):format(title)
+	local visible_command = preview(command, M.command_preview_limit)
 	local rows = {
-		row(("• %s %s"):format(title, command[1]), "action_header", {
-			title = title,
-			title_col = #"• ",
-			detail_col = #"• " + #title + 1,
-			detail_kind = "command",
-		}),
+		row(
+			header_prefix
+				.. truncate_display(visible_command[1], M.command_preview_width - vim.fn.strdisplaywidth(header_prefix)),
+			"action_header",
+			{
+				title = title,
+				title_col = #"• ",
+				detail_col = #"• " + #title + 1,
+				detail_kind = "command",
+				syntax = "bash",
+			}
+		),
 	}
 
-	local continuation_count = math.min(M.command_continuation_limit, math.max(0, #command - 1))
-	for index = 1, continuation_count do
-		table.insert(rows, row("  │ " .. command[index + 1], "action_command", { tree_width = #"  │ " }))
-	end
-	if #command - 1 > continuation_count then
+	for index = 2, #visible_command do
+		local prefix = "  │ "
+		local line = truncate_display(visible_command[index], M.command_preview_width - vim.fn.strdisplaywidth(prefix))
 		table.insert(
 			rows,
-			row(("  │ … +%d lines"):format(#command - 1 - continuation_count), "action_command", {
-				tree_width = #"  │ ",
+			row(prefix .. line, "action_command", {
+				is_meta = line:match("… %+%d+ lines") ~= nil,
+				syntax = "bash",
+				tree_width = #prefix,
 			})
 		)
 	end
@@ -305,10 +369,11 @@ local function command_rows(child)
 		child.preview_omitted = 0
 		return rows
 	end
-	local visible, omitted = preview(output_lines)
+	local visible, omitted = preview(output_lines, M.command_output_preview_limit)
 	child.preview_omitted = omitted
 	for index, line in ipairs(visible) do
 		local prefix = index == 1 and "  └ " or "    "
+		line = truncate_display(line, M.command_preview_width - vim.fn.strdisplaywidth(prefix))
 		table.insert(rows, row(prefix .. line, "action_output", { tree_width = #prefix }))
 	end
 	return rows
@@ -316,19 +381,27 @@ end
 
 local function tool_rows(child)
 	local title = M.is_active(child) and "Calling" or "Called"
+	local header_prefix = ("• %s "):format(title)
+	local action_kind = tool_action_kind(child.item)
 	local rows = {
-		row(("• %s %s"):format(title, tool_invocation(child.item)), "action_header", {
-			title = title,
-			title_col = #"• ",
-			detail_col = #"• " + #title + 1,
-			detail_kind = "tool",
-		}),
+		row(
+			header_prefix .. tool_invocation(child.item, M.tool_preview_width - vim.fn.strdisplaywidth(header_prefix)),
+			"action_header",
+			{
+				action_kind = action_kind,
+				title = title,
+				title_col = #"• ",
+				detail_col = #"• " + #title + 1,
+				detail_kind = "tool",
+			}
+		),
 	}
 	local details = tool_result_lines(child)
-	local visible, omitted = preview(details)
+	local visible, omitted = preview(details, M.tool_output_preview_limit)
 	child.preview_omitted = omitted
 	for index, line in ipairs(visible) do
 		local prefix = index == 1 and "  └ " or "    "
+		line = truncate_display(line, M.tool_preview_width - vim.fn.strdisplaywidth(prefix))
 		table.insert(rows, row(prefix .. line, "action_output", { tree_width = #prefix }))
 	end
 	return rows
@@ -368,15 +441,12 @@ local function exploration_actions(children)
 		end
 	end
 
-	local lines = {}
 	for _, row in ipairs(rows) do
 		if row.kind == "read" then
-			table.insert(lines, "Read " .. table.concat(row.values, ", "))
-		else
-			table.insert(lines, row.text)
+			row.text = "Read " .. table.concat(row.values, ", ")
 		end
 	end
-	return lines
+	return rows
 end
 
 local function exploration_rows(block)
@@ -392,9 +462,15 @@ local function exploration_rows(block)
 			detail_kind = "command",
 		}),
 	}
-	for index, line in ipairs(exploration_actions(block.children)) do
+	for index, action_row in ipairs(exploration_actions(block.children)) do
 		local prefix = index == 1 and "  └ " or "    "
-		table.insert(rows, row(prefix .. line, "action_command", { tree_width = #prefix }))
+		table.insert(
+			rows,
+			row(prefix .. action_row.text, "action_command", {
+				action_kind = action_row.kind,
+				tree_width = #prefix,
+			})
+		)
 	end
 	return rows
 end

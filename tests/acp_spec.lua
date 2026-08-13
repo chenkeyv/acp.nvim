@@ -945,11 +945,15 @@ test("Codex-style command cells stream a bounded head-tail preview", function()
 		"• Running printf output",
 		"  │ echo done",
 		"  └ line 1",
-		"    line 2",
-		"    … +6 lines (K to inspect)",
-		"    line 9",
+		"    … +8 lines (K to inspect)",
 		"    line 10",
 	})
+	for _, line in ipairs(vim.list_slice(activity_block.lines, 4)) do
+		ok(
+			vim.fn.strdisplaywidth(line) <= action.command_preview_width,
+			"command output rows must stay display-width bounded"
+		)
+	end
 
 	local completed = chat:complete_item({
 		id = "command-preview",
@@ -967,6 +971,8 @@ test("Codex-style command cells stream a bounded head-tail preview", function()
 	contains(detail_text, "line 1")
 	contains(detail_text, "line 10")
 	contains(detail_text, "✓ • 420ms")
+	eq(#activity_block.lines, 3 + action.command_output_preview_limit)
+	eq(activity_block.lines[5], "    … +8 lines (K to inspect)")
 	local activity = chat:activity_at(activity_block.line1)
 	eq(activity.counts, { command = 1, tool = 0, file = 0 })
 	eq(activity.presentation, "command")
@@ -988,6 +994,171 @@ test("Codex-style command cells stream a bounded head-tail preview", function()
 	ok(next(vim.api.nvim_get_hl(0, { name = "@acp.action.active", link = false })) ~= nil)
 	ok(next(vim.api.nvim_get_hl(0, { name = "@acp.action.arguments", link = false })) ~= nil)
 	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
+local function highlighted_text(bufnr, group)
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	local values = {}
+	for _, extmark in
+		ipairs(vim.api.nvim_buf_get_extmarks(bufnr, view.transcript_namespace, 0, -1, {
+			details = true,
+		}))
+	do
+		local details = extmark[4] or {}
+		if details.hl_group == group and details.end_col then
+			local line = lines[extmark[2] + 1] or ""
+			table.insert(values, line:sub(extmark[3] + 1, details.end_col))
+		end
+	end
+	return values
+end
+
+test("live action cells use structural Bash and semantic tool highlighting", function()
+	local chat = blocks.new()
+	chat:add_item({
+		id = "syntax-command",
+		type = "commandExecution",
+		command = [[printf '%s\n' "$HOME" && rg --glob '*.lua' acp]],
+		status = "completed",
+		exitCode = 0,
+		aggregatedOutput = "ok",
+		commandActions = {},
+	})
+	chat:add_item({
+		id = "semantic-search",
+		type = "mcpToolCall",
+		server = "docs",
+		tool = "find_docs",
+		arguments = { query = "action cells" },
+		status = "completed",
+		result = { content = { { type = "text", text = "found" } } },
+	})
+	chat:add_item({
+		id = "semantic-read",
+		type = "dynamicToolCall",
+		namespace = "workspace",
+		tool = "read_file",
+		status = "completed",
+		success = true,
+		contentItems = { { type = "text", text = "read" } },
+	})
+	chat:add_item({
+		id = "semantic-list",
+		type = "mcpToolCall",
+		server = "workspace",
+		tool = "list_files",
+		status = "completed",
+		result = { content = { { type = "text", text = "listed" } } },
+	})
+	chat:add_item({
+		id = "semantic-edit",
+		type = "dynamicToolCall",
+		namespace = "workspace",
+		tool = "apply_patch",
+		status = "completed",
+		success = true,
+		contentItems = { { type = "text", text = "edited" } },
+	})
+	chat:add_item({
+		id = "semantic-target",
+		type = "mcpToolCall",
+		server = "workspace",
+		tool = "target",
+		status = "completed",
+		result = { content = { { type = "text", text = "generic" } } },
+	})
+	chat:add_item({
+		id = "semantic-file-change",
+		type = "fileChange",
+		status = "completed",
+		changes = { { path = "lua/acp/view.lua", kind = { type = "update" } } },
+	})
+
+	chat:add_item({
+		id = "explore-search",
+		type = "commandExecution",
+		command = "rg action",
+		commandActions = { { type = "search", query = "action" } },
+		status = "completed",
+		exitCode = 0,
+	})
+	chat:add_item({
+		id = "explore-read",
+		type = "commandExecution",
+		command = "sed -n 1,20p lua/acp/view.lua",
+		commandActions = { { type = "read", path = "lua/acp/view.lua" } },
+		status = "completed",
+		exitCode = 0,
+	})
+	chat:add_item({
+		id = "explore-list",
+		type = "commandExecution",
+		command = "rg --files lua/acp",
+		commandActions = { { type = "listFiles", path = "lua/acp" } },
+		status = "completed",
+		exitCode = 0,
+	})
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, chat:render_lines())
+	view.define_highlights()
+	view.refresh_transcript(bufnr, 0, chat)
+
+	local shell_commands = highlighted_text(bufnr, "AcpShellCommand")
+	ok(vim.tbl_contains(shell_commands, "printf"))
+	ok(vim.tbl_contains(shell_commands, "rg"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpShellString"), "'%s\\n'"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpShellOperator"), "&&"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpShellVariable"), "HOME"))
+
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionSearch"), "find_docs"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionSearch"), "Search"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionRead"), "read_file"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionRead"), "Read"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionList"), "list_files"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionList"), "List"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionEdit"), "apply_patch"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionEdit"), "update"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionTool"), "target"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionNamespace"), "docs"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpActionArguments"), [[{"query":"action cells"}]]))
+
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+end)
+
+test("Codex-style command cells compact the command invocation itself", function()
+	local command_lines = {
+		"printf output " .. string.rep("界", 100),
+		"echo second",
+		"echo third",
+		"echo fourth",
+		"echo fifth",
+		"echo done",
+	}
+	local command = table.concat(command_lines, "\n")
+	local chat = blocks.new()
+	local _, activity_block = chat:start_item({
+		id = "command-invocation-preview",
+		type = "commandExecution",
+		command = command,
+		status = "inProgress",
+		commandActions = {},
+	})
+
+	eq(#activity_block.lines, 1 + action.command_preview_limit)
+	contains(activity_block.lines[2], "• Running printf output")
+	contains(activity_block.lines[2], "… (K to inspect)")
+	eq(activity_block.lines[3], "  │ … +4 lines (K to inspect)")
+	eq(activity_block.lines[4], "  │ echo done")
+	for _, line in ipairs(vim.list_slice(activity_block.lines, 2)) do
+		ok(
+			vim.fn.strdisplaywidth(line) <= action.command_preview_width,
+			"command invocation rows must stay display-width bounded"
+		)
+	end
+
+	local detail_text = table.concat(chat:activity_detail_lines(activity_block.line1), "\n")
+	contains(detail_text, command)
+	contains(detail_text, "echo third")
 end)
 
 test("Codex-style tools and exploration use Calling and Explored hierarchies", function()
@@ -1063,6 +1234,58 @@ test("Codex-style tools and exploration use Calling and Explored hierarchies", f
 	})
 	eq(failed_block.status, "failed")
 	eq(#failed:diagnostics(), 1)
+end)
+
+test("MCP and dynamic tools keep compact transcript previews and complete details", function()
+	local long_argument = string.rep("documentation query ", 12)
+	local long_result = "Result 1 " .. string.rep("界", 100)
+	local result_lines = { long_result }
+	for index = 2, 12 do
+		table.insert(result_lines, "Result " .. index)
+	end
+	local result_text = table.concat(result_lines, "\n")
+
+	for _, item in ipairs({
+		{
+			id = "mcp-preview",
+			type = "mcpToolCall",
+			server = "search",
+			tool = "inspect",
+			arguments = { query = long_argument },
+			status = "completed",
+			result = { content = { { type = "text", text = result_text } } },
+		},
+		{
+			id = "dynamic-preview",
+			type = "dynamicToolCall",
+			namespace = "search",
+			tool = "inspect",
+			arguments = { query = long_argument },
+			status = "completed",
+			success = true,
+			contentItems = { { type = "text", text = result_text } },
+		},
+	}) do
+		local chat = blocks.new()
+		local _, tool_block = chat:add_item(item)
+		eq(#tool_block.lines, 2 + action.tool_output_preview_limit)
+		contains(tool_block.lines[2], "search.inspect(…)")
+		ok(not table.concat(tool_block.lines, "\n"):find(long_argument, 1, true))
+		eq(tool_block.lines[4], "    … +10 lines (K to inspect)")
+		eq(tool_block.lines[5], "    Result 12")
+		for _, line in ipairs(vim.list_slice(tool_block.lines, 2)) do
+			ok(
+				vim.fn.strdisplaywidth(line) <= action.tool_preview_width,
+				"tool preview rows must stay display-width bounded"
+			)
+		end
+
+		local detail_text = table.concat(chat:activity_detail_lines(tool_block.line1), "\n")
+		contains(detail_text, long_argument)
+		contains(detail_text, long_result)
+		contains(detail_text, "Result 6")
+		contains(detail_text, "Result 12")
+	end
 end)
 
 test("ACP Tree-sitter grammar is distributable and keeps the acp filetype", function()
@@ -2224,7 +2447,7 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		ok(
 			vim.wait(250, function()
 				local block = state.chat.by_id["command-1"]
-				return block and table.concat(block.lines, "\n"):find("… +6 lines", 1, true) ~= nil
+				return block and table.concat(block.lines, "\n"):find("… +8 lines", 1, true) ~= nil
 			end, 5),
 			"expected bounded command output to flush promptly"
 		)

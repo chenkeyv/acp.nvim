@@ -1,5 +1,6 @@
 local icons = require("acp.icons")
 local output = require("acp.output")
+local syntax = require("acp.syntax")
 
 local M = {}
 
@@ -104,8 +105,12 @@ function M.define_highlights()
 		AcpActionActive = { fg = "#e0af68", bold = true },
 		AcpActionSuccess = { link = "DiagnosticOk" },
 		AcpActionFailure = { link = "DiagnosticError" },
-		AcpActionCommand = { fg = "#2ac3de" },
+		AcpActionCommand = { link = "Normal" },
 		AcpActionTool = { fg = "#bb9af7" },
+		AcpActionSearch = { fg = "#7aa2f7", bold = true },
+		AcpActionRead = { fg = "#9ece6a", bold = true },
+		AcpActionList = { fg = "#e0af68", bold = true },
+		AcpActionEdit = { fg = "#f7768e", bold = true },
 		AcpActionNamespace = { link = "Comment" },
 		AcpActionArguments = { link = "String" },
 		AcpActionPunctuation = { link = "Delimiter" },
@@ -113,6 +118,15 @@ function M.define_highlights()
 		AcpActionTree = { link = "Comment" },
 		AcpActionOutput = { link = "Comment" },
 		AcpActionMeta = { link = "Comment" },
+		AcpShellCommand = { fg = "#7aa2f7", bold = true },
+		AcpShellString = { link = "String" },
+		AcpShellVariable = { fg = "#bb9af7" },
+		AcpShellOperator = { fg = "#89ddff", bold = true },
+		AcpShellKeyword = { link = "Keyword" },
+		AcpShellNumber = { link = "Number" },
+		AcpShellComment = { link = "Comment" },
+		AcpShellPunctuation = { link = "Delimiter" },
+		AcpShellArgument = { link = "Normal" },
 		AcpCodeFence = { fg = "#e0af68", bold = true },
 		AcpInlineCode = { fg = "#7dcfff" },
 		["@acp.user.header"] = { link = "AcpUserHeader" },
@@ -615,6 +629,105 @@ local function highlight_inline_code(bufnr, row, line)
 	end
 end
 
+local action_kind_highlights = {
+	edit = "AcpActionEdit",
+	list = "AcpActionList",
+	read = "AcpActionRead",
+	search = "AcpActionSearch",
+	tool = "AcpActionTool",
+}
+
+local function highlight_shell(bufnr, row, line, start_col)
+	start_col = math.max(0, tonumber(start_col) or 0)
+	if start_col >= #line then
+		return
+	end
+	for _, span in ipairs(syntax.shell_spans(line:sub(start_col + 1))) do
+		mark(bufnr, row, start_col + span.start_col, {
+			end_col = start_col + span.end_col,
+			hl_group = span.group,
+			priority = 140,
+		})
+	end
+end
+
+local function highlight_action_verb(bufnr, row, line, start_col, kind)
+	local group = action_kind_highlights[kind]
+	if not group or start_col >= #line then
+		return
+	end
+	local content = line:sub(start_col + 1)
+	local first, last = content:find("^%S+")
+	if first then
+		mark(bufnr, row, start_col + first - 1, {
+			end_col = start_col + last,
+			hl_group = group,
+			priority = 150,
+		})
+	end
+end
+
+local function highlight_tool(bufnr, row, line, start_col, kind)
+	local detail = line:sub(start_col + 1)
+	local name_end = detail:find("(", 1, true)
+	local name = name_end and detail:sub(1, name_end - 1) or detail
+	local method_start = 1
+	for index in name:gmatch("().") do
+		if name:sub(index, index) == "." then
+			method_start = index + 1
+		end
+	end
+
+	if method_start > 1 then
+		mark(bufnr, row, start_col, {
+			end_col = start_col + method_start - 2,
+			hl_group = "AcpActionNamespace",
+			priority = 140,
+		})
+		mark(bufnr, row, start_col + method_start - 2, {
+			end_col = start_col + method_start - 1,
+			hl_group = "AcpActionPunctuation",
+			priority = 150,
+		})
+	end
+	if #name >= method_start then
+		mark(bufnr, row, start_col + method_start - 1, {
+			end_col = start_col + #name,
+			hl_group = action_kind_highlights[kind] or "AcpActionTool",
+			priority = 150,
+		})
+	end
+
+	if name_end then
+		local close_col = detail:sub(-1) == ")" and #detail - 1 or nil
+		mark(bufnr, row, start_col + name_end - 1, {
+			end_col = start_col + name_end,
+			hl_group = "AcpActionPunctuation",
+			priority = 150,
+		})
+		if close_col and close_col > name_end then
+			mark(bufnr, row, start_col + name_end, {
+				end_col = start_col + close_col,
+				hl_group = "AcpActionArguments",
+				priority = 140,
+			})
+			mark(bufnr, row, start_col + close_col, {
+				end_col = start_col + close_col + 1,
+				hl_group = "AcpActionPunctuation",
+				priority = 150,
+			})
+		end
+	end
+end
+
+local function highlight_file_change(bufnr, row, line)
+	highlight_line(bufnr, row, line, "AcpTranscriptTool")
+	local separator_col = line:find("%s")
+	if separator_col then
+		highlight_action_verb(bufnr, row, line, separator_col, "edit")
+	end
+end
+
 local function highlight_action_row(bufnr, row, line, block, row_info)
 	if not row_info or not tostring(row_info.role or ""):match("^action_") then
 		return false
@@ -642,6 +755,11 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 				-- sit above both and can style the command or arguments token by token.
 				priority = 80,
 			})
+			if row_info.detail_kind == "tool" then
+				highlight_tool(bufnr, row, line, detail_col, row_info.action_kind)
+			elseif row_info.syntax == "bash" then
+				highlight_shell(bufnr, row, line, detail_col)
+			end
 		end
 		return true
 	end
@@ -656,6 +774,11 @@ local function highlight_action_row(bufnr, row, line, block, row_info)
 			or content == "(no output)" and "AcpActionMeta"
 			or "AcpActionOutput"
 		mark(bufnr, row, tree, { end_col = #line, hl_group = highlight, priority = 80 })
+		if row_info.action_kind then
+			highlight_action_verb(bufnr, row, line, tree, row_info.action_kind)
+		elseif row_info.syntax == "bash" and not row_info.is_meta then
+			highlight_shell(bufnr, row, line, tree)
+		end
 	end
 	return true
 end
@@ -706,6 +829,8 @@ function M.refresh_transcript(bufnr, start_row, chat, end_row)
 			highlight_line(bufnr, row, line, "AcpSectionHeader")
 		elseif row_info and row_info.role == "code_fence" then
 			highlight_line(bufnr, row, line, "AcpCodeFence")
+		elseif row_info and row_info.role == "change" then
+			highlight_file_change(bufnr, row, line)
 		elseif row_info and structural_line_highlight(row_info.role) then
 			highlight_line(bufnr, row, line, structural_line_highlight(row_info.role))
 		end
