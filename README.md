@@ -156,7 +156,10 @@ The repository ships a lightweight `acp` Tree-sitter grammar and queries for
 role headers, command/tool/exploration cells, tree branches, and fenced-code
 injection. The logical block model remains authoritative: Tree-sitter adds idle
 syntax control and language injection but never reconstructs streaming state
-from rendered text.
+from rendered text. Shell commands passed through recognized `sh`, `bash`, or
+`zsh`-family `-c`/`-lc` wrappers receive a nested Bash Tree-sitter pass, so the
+quoted command payload retains token-level highlighting without a lexical
+fallback.
 
 Large transcripts use indexed block lookup and cache references, code blocks,
 and problem metadata per logical block, plus one model-wide semantic snapshot for

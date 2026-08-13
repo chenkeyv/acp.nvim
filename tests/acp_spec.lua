@@ -14,6 +14,7 @@ local permission = require("acp.permission")
 local render = require("acp.render")
 local requests = require("acp.requests")
 local server_log = require("acp.server_log")
+local syntax = require("acp.syntax")
 local transcript = require("acp.transcript")
 local treesitter = require("acp.treesitter")
 local turn = require("acp.turn")
@@ -1018,7 +1019,7 @@ test("Codex-style command cells bound output by wrapped screen rows", function()
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
-local function highlighted_text(bufnr, group)
+local function highlighted_text(bufnr, group, minimum_priority)
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local values = {}
 	for _, extmark in
@@ -1027,7 +1028,11 @@ local function highlighted_text(bufnr, group)
 		}))
 	do
 		local details = extmark[4] or {}
-		if details.hl_group == group and details.end_col then
+		if
+			details.hl_group == group
+			and details.end_col
+			and (not minimum_priority or (tonumber(details.priority) or 0) >= minimum_priority)
+		then
 			local line = lines[extmark[2] + 1] or ""
 			table.insert(values, line:sub(extmark[3] + 1, details.end_col))
 		end
@@ -1064,6 +1069,15 @@ test("live action cells use structural Bash and semantic tool highlighting", fun
 		status = "completed",
 		exitCode = 0,
 		aggregatedOutput = "ok",
+		commandActions = {},
+	})
+	chat:add_item({
+		id = "syntax-wrapped-command",
+		type = "commandExecution",
+		command = [[/bin/zsh -lc "git status && printf '%s\n' \"$HOME\""]],
+		status = "completed",
+		exitCode = 0,
+		aggregatedOutput = "clean",
 		commandActions = {},
 	})
 	chat:add_item({
@@ -1151,6 +1165,11 @@ test("live action cells use structural Bash and semantic tool highlighting", fun
 	local shell_commands = highlighted_text(bufnr, "AcpShellCommand")
 	ok(vim.tbl_contains(shell_commands, "printf"))
 	ok(vim.tbl_contains(shell_commands, "rg"))
+	local nested_commands = highlighted_text(bufnr, "AcpShellCommand", 160)
+	ok(vim.tbl_contains(nested_commands, "git"))
+	ok(vim.tbl_contains(nested_commands, "printf"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpShellOperator", 160), "&&"))
+	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpShellVariable", 160), "HOME"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpShellString"), "'%s\\n'"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpShellOperator"), "&&"))
 	ok(vim.tbl_contains(highlighted_text(bufnr, "AcpShellVariable"), "HOME"))
@@ -1509,6 +1528,49 @@ test("Bash highlighting has no lexical fallback", function()
 	vim.treesitter.get_string_parser = original_parser
 	ok(passed, spans)
 	eq(spans, {})
+end)
+
+test("shell wrapper command strings use nested Tree-sitter highlighting", function()
+	local wrapped = [[/bin/zsh -lc "git status && printf '%s\n' \"$HOME\""]]
+	local spans = syntax.shell_spans(wrapped)
+	local values = {}
+	for _, span in ipairs(spans) do
+		values[span.group] = values[span.group] or {}
+		table.insert(values[span.group], {
+			text = wrapped:sub(span.start_col + 1, span.end_col),
+			priority = span.priority,
+		})
+	end
+	local function has(group, text, minimum_priority)
+		for _, value in ipairs(values[group] or {}) do
+			if value.text == text and value.priority >= minimum_priority then
+				return true
+			end
+		end
+		return false
+	end
+
+	ok(has("AcpShellCommand", "/bin/zsh", 140))
+	ok(has("AcpShellCommand", "git", 160), "expected nested git command highlighting")
+	ok(has("AcpShellCommand", "printf", 160), "expected nested printf command highlighting")
+	ok(has("AcpShellOperator", "&&", 160), "expected nested operator highlighting")
+	ok(has("AcpShellVariable", "HOME", 160), "expected nested variable highlighting")
+
+	local raw = [[zsh -c 'jq .name package.json && rg action']]
+	local raw_spans = syntax.shell_spans(raw)
+	local raw_commands = {}
+	for _, span in ipairs(raw_spans) do
+		if span.group == "AcpShellCommand" and span.priority >= 160 then
+			raw_commands[raw:sub(span.start_col + 1, span.end_col)] = true
+		end
+	end
+	ok(raw_commands.jq)
+	ok(raw_commands.rg)
+
+	local ordinary = [[printf '%s\n' "git status"]]
+	for _, span in ipairs(syntax.shell_spans(ordinary)) do
+		ok(span.priority == 140, "ordinary string arguments must not receive a nested shell parse")
+	end
 end)
 
 test("structural adoption normalizes spacing and action rows", function()

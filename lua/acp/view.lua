@@ -706,7 +706,7 @@ local function highlight_shell(bufnr, row, line, start_col)
 		mark(bufnr, row, start_col + span.start_col, {
 			end_col = start_col + span.end_col,
 			hl_group = span.group,
-			priority = 140,
+			priority = tonumber(span.priority) or 140,
 		})
 	end
 end
