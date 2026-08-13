@@ -2037,9 +2037,9 @@ end
 
 local function handle_stderr(data)
 	for _, entry in ipairs(server_log.parse(data)) do
-		-- Model catalog refreshes run independently of turns. Their timeout is
-		-- non-actionable here; explicit model/list failures still notify users.
-		if not server_log.is_background_noise(entry) then
+		-- Background refresh failures are non-actionable here. Tool-router
+		-- failures already belong to their command or tool action cell.
+		if not server_log.should_suppress(entry) then
 			if state and valid_buf(state.output_buf) then
 				append_notice(entry.kind, entry.message, {
 					lines = entry.lines,

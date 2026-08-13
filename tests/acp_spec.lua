@@ -183,7 +183,7 @@ test("line buffer emits complete non-empty JSONL records", function()
 	eq(buffer.data, "")
 end)
 
-test("Codex server logs become native transcript notices", function()
+test("Codex server logs normalize and classify transcript notices", function()
 	local notices = server_log.parse(server_error_stderr())
 	eq(#notices, 1)
 	local notice = notices[1]
@@ -212,11 +212,15 @@ test("Codex server logs become native transcript notices", function()
 	local refresh = server_log.parse(model_refresh_stderr())
 	eq(#refresh, 1)
 	ok(server_log.is_background_noise(refresh[1]))
-	ok(not server_log.is_background_noise(notice), "tool failures must remain visible")
+	ok(server_log.should_suppress(refresh[1]))
+	ok(not server_log.is_background_noise(notice), "tool failures are not background work")
+	ok(server_log.is_duplicate_tool_failure(notice))
+	ok(server_log.should_suppress(notice), "command failures already render in their action cell")
 	local other_manager_error = server_log.parse(
 		"2026-08-10T08:00:00.000000Z ERROR codex_models_manager::manager: failed to load configured model\n"
 	)
 	ok(not server_log.is_background_noise(other_manager_error[1]), "other model-manager errors must remain visible")
+	ok(not server_log.should_suppress(other_manager_error[1]), "actionable model-manager errors must remain visible")
 
 	local patch_notices = server_log.parse(apply_patch_error_stderr())
 	eq(#patch_notices, 1)
@@ -232,6 +236,8 @@ test("Codex server logs become native transcript notices", function()
 		"  sit on the lower-left border, while the send and steer hints remain on the",
 		"  right. A blank top row separates the turn panel from the chat, while the",
 	})
+	ok(server_log.is_duplicate_tool_failure(patch_notice))
+	ok(server_log.should_suppress(patch_notice), "patch failures already render in their action cell")
 	local followed_by_warning = server_log.parse(
 		apply_patch_error_stderr() .. "2026-08-10T08:00:01.000000Z WARN codex_core::client: connection warning\n"
 	)
@@ -239,6 +245,11 @@ test("Codex server logs become native transcript notices", function()
 	eq(followed_by_warning[1].kind, "error")
 	eq(followed_by_warning[2].kind, "warning")
 	eq(followed_by_warning[2].metadata.server_log.source, "codex_core::client")
+	ok(not server_log.should_suppress(followed_by_warning[2]), "transport warnings must remain visible")
+
+	local other_router_error =
+		server_log.parse("2026-08-10T08:00:02.000000Z ERROR codex_core::tools::router: tool registry unavailable\n")
+	ok(not server_log.should_suppress(other_router_error[1]), "unknown router failures must remain visible")
 end)
 
 test("client performs the app-server handshake in order", function()
@@ -2974,17 +2985,11 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 		fake.handlers.on_stderr("connection warning\n")
 		eq(#state.chat.blocks, blocks_before_stderr + 1)
 		eq(state.chat.blocks[#state.chat.blocks].kind, "warning")
+		local blocks_after_warning = #state.chat.blocks
 		fake.handlers.on_stderr(apply_patch_error_stderr())
-		local server_block = state.chat.blocks[#state.chat.blocks]
-		eq(server_block.kind, "error")
-		eq(server_block.metadata.server_log.source, "codex_core::tools::router")
-		local server_text = table.concat(server_block.lines, "\n")
-		contains(server_text, "Codex server · tools/router")
-		contains(server_text, "apply_patch verification failed")
-		contains(server_text, "its inset from the chat text area")
-		contains(server_text, "sit on the lower-left border")
-		eq(count(server_text, "Codex server"), 1)
-		ok(not server_text:find("\27", 1, true))
+		eq(#state.chat.blocks, blocks_after_warning, "duplicate patch stderr must stay in its action cell")
+		fake.handlers.on_stderr(server_error_stderr())
+		eq(#state.chat.blocks, blocks_after_warning, "duplicate command stderr must stay in its action cell")
 		eq(ui.new_chat({ keep_layout = true }), true)
 		eq(#ui._state().chat.blocks, 0)
 		eq(fake.unsubscribed, "thread-1")

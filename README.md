@@ -128,7 +128,8 @@ diagnostic underlines, signs, or virtual text.
 ANSI-decorated app-server log messages are normalized before they enter the
 transcript. Transport timestamps remain block metadata, while log levels,
 module names, escaped multiline messages, and common process-error wrappers
-become native notice, warning, or error blocks.
+become native notice, warning, or error blocks. Failures already represented by
+command or tool action cells are not repeated as server-log blocks.
 
 The visible chat remains one native buffer, backed by ordered logical blocks
 for user prompts, agent responses, plans, individual actions, notices, warnings,

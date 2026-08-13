@@ -176,6 +176,22 @@ function M.is_background_noise(entry)
 	return tostring(entry.message or ""):find("failed to refresh available models:", 1, true) == 1
 end
 
+function M.is_duplicate_tool_failure(entry)
+	local metadata = type(entry) == "table" and entry.metadata or nil
+	local server = type(metadata) == "table" and metadata.server_log or nil
+	if type(server) ~= "table" or server.source ~= "codex_core::tools::router" then
+		return false
+	end
+
+	local message = tostring(entry.message or "")
+	return message:find("apply_patch verification failed:", 1, true) == 1
+		or message:find("exec_command failed for ", 1, true) == 1
+end
+
+function M.should_suppress(entry)
+	return M.is_background_noise(entry) or M.is_duplicate_tool_failure(entry)
+end
+
 function M.parse(value)
 	local entries = {}
 	local pending
