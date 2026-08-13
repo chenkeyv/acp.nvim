@@ -3,6 +3,7 @@ local action = require("acp.action")
 local blocks = require("acp.blocks")
 local Client = require("acp.codex").Client
 local completion = require("acp.completion")
+local dictionary_source = require("acp.completion.dictionary")
 local completion_source = require("acp.completion.source")
 local context = require("acp.context")
 local health = require("acp.health")
@@ -359,16 +360,8 @@ test("Codex completion parses native tokens and publishes the documented command
 	eq(completion_source.token(completion_context("/mod")), { prefix = "/", query = "mod", start_col = 0 })
 	eq(completion_source.token(completion_context("Use $skill")), { prefix = "$", query = "skill", start_col = 4 })
 	eq(completion_source.token(completion_context("Open @lua/acp")), { prefix = "@", query = "lua/acp", start_col = 5 })
-	eq(completion_source.token(completion_context("dictionary")), {
-		prefix = "word",
-		query = "dictionary",
-		start_col = 0,
-	})
-	eq(completion_source.token(completion_context("https://example.com")), {
-		prefix = "word",
-		query = "com",
-		start_col = 16,
-	})
+	eq(completion_source.token(completion_context("dictionary")), nil)
+	eq(completion_source.token(completion_context("https://example.com")), nil)
 
 	local commands = completion_source._command_items(completion_context("/"), {
 		prefix = "/",
@@ -521,7 +514,7 @@ test("Codex mentions become structured app-server input with byte ranges", funct
 end)
 
 test("dictionary completion is asynchronous, bounded, and cached", function()
-	completion_source.clear_cache()
+	dictionary_source.clear_cache()
 	local dictionary = vim.fn.tempname()
 	vim.fn.writefile({ "completion", "completions", "compiler", "compare", "other" }, dictionary)
 	local bufnr = vim.api.nvim_create_buf(false, true)
@@ -542,7 +535,7 @@ test("dictionary completion is asynchronous, bounded, and cached", function()
 		process_callback = callback
 		return process
 	end
-	completion_source._dictionary_words(bufnr, "comp", function(result)
+	dictionary_source._words(bufnr, "comp", function(result)
 		synchronous = false
 		words = result
 	end, spawn)
@@ -562,16 +555,24 @@ test("dictionary completion is asynchronous, bounded, and cached", function()
 	eq(words, { "completion", "completions", "compiler", "compare" })
 
 	local cached
-	completion_source._dictionary_words(bufnr, "comp", function(result)
+	dictionary_source._words(bufnr, "comp", function(result)
 		cached = result
 	end)
 	eq(cached, words)
-	local items = completion_source._dictionary_items(
-		completion_context("comp", bufnr),
-		{ prefix = "word", query = "comp", start_col = 0 },
-		words
-	)
+	local items = dictionary_source._items(completion_context("comp", bufnr), { query = "comp", start_col = 0 }, words)
 	eq(completion_labels(items), words)
+	eq(dictionary_source._token(completion_context("dictionary", bufnr)), {
+		query = "dictionary",
+		start_col = 0,
+	})
+	eq(dictionary_source._token(completion_context("Use comp", bufnr)), {
+		query = "comp",
+		start_col = 4,
+	})
+	eq(dictionary_source._token(completion_context("$skill", bufnr)), nil)
+	eq(dictionary_source._token(completion_context("@readme", bufnr)), nil)
+	eq(dictionary_source._token(completion_context("src/module", bufnr)), nil)
+	eq(dictionary_source._token(completion_context("https://example.com", bufnr)), nil)
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 	vim.fn.delete(dictionary)
 end)
@@ -2383,8 +2384,11 @@ test("Blink buffer completion includes ACP prompt and chat text", function()
 	vim.api.nvim_buf_delete(source_buf, { force = true })
 end)
 
-test("Blink registers ACP plus configured buffer and path completion", function()
-	local blink_root = vim.env.ACP_BLINK_CMP_PATH or vim.fn.expand("~/.local/share/nvim/lazy/blink.cmp")
+test("Blink registers ACP, dictionary, buffer, and path completion", function()
+	local blink_root = vim.env.ACP_BLINK_CMP_PATH or vim.fn.expand("~/.local/share/nvim/site/pack/core/opt/blink.cmp")
+	if vim.fn.isdirectory(blink_root) ~= 1 then
+		blink_root = vim.fn.expand("~/.local/share/nvim/lazy/blink.cmp")
+	end
 	if vim.fn.isdirectory(blink_root) ~= 1 then
 		return
 	end
@@ -2399,10 +2403,14 @@ test("Blink registers ACP plus configured buffer and path completion", function(
 	local config = require("blink.cmp.config")
 	eq(config.sources.providers.acp.module, "acp.completion.source")
 	eq(config.sources.providers.acp.name, "Codex")
-	eq(completion.sources(), { "acp", "buffer", "path" })
+	eq(config.sources.providers.dictionary.module, "acp.completion.dictionary")
+	eq(config.sources.providers.dictionary.name, "Dictionary")
+	eq(config.sources.providers.dictionary.min_keyword_length, 2)
+	eq(config.sources.providers.dictionary.max_items, 40)
+	eq(completion.sources(), { "acp", "dictionary", "buffer", "path" })
 	local sources = require("blink.cmp.sources.lib")
 	local prompt_sources = sources.per_filetype_provider_ids["acp-prompt"]
-	for _, source in ipairs({ "acp", "buffer", "path" }) do
+	for _, source in ipairs({ "acp", "dictionary", "buffer", "path" }) do
 		ok(vim.tbl_contains(prompt_sources, source), "missing Blink source: " .. source)
 	end
 
@@ -2411,23 +2419,51 @@ test("Blink registers ACP plus configured buffer and path completion", function(
 	vim.bo[source_buf].swapfile = false
 	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, { "workspaceBufferTerm" })
 	local prompt_buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[prompt_buf].swapfile = false
 	vim.bo[prompt_buf].filetype = "acp-prompt"
 	vim.b[prompt_buf].acp_cwd = "/tmp/acp-workspace"
+	local dictionary = vim.fn.tempname()
+	vim.fn.writefile({ "workspaceDictionaryTerm", "unrelated" }, dictionary)
+	vim.bo[prompt_buf].dictionary = dictionary
+	vim.api.nvim_buf_set_lines(prompt_buf, 0, -1, false, { "workspace" })
 	vim.api.nvim_win_set_buf(0, prompt_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, #"workspace" })
 	eq(config.sources.providers.path.opts.get_cwd({ bufnr = prompt_buf }), "/tmp/acp-workspace")
 	ok(config.sources.providers.path.should_show_items(completion_context("src/", prompt_buf), {}))
 	ok(not config.sources.providers.path.should_show_items(completion_context("/", prompt_buf), {}))
-	ok(vim.tbl_contains(config.sources.providers.buffer.opts.get_bufnrs(), source_buf))
+	local dictionary_items
+	sources
+		.get_provider_by_id("dictionary").module
+		:get_completions(completion_context("work", prompt_buf), function(response)
+			dictionary_items = completion_labels(response.items)
+		end)
+	ok(
+		vim.wait(1000, function()
+			return dictionary_items ~= nil
+		end),
+		"Blink dictionary completion timed out"
+	)
+	ok(vim.tbl_contains(dictionary_items, "workspaceDictionaryTerm"))
+	ok(not vim.tbl_contains(dictionary_items, "unrelated"))
 
 	local live = sources.get_provider_by_id("acp")
 	local old_module = live.module
+	local live_dictionary = sources.get_provider_by_id("dictionary")
+	local old_dictionary_module = live_dictionary.module
 	package.loaded["acp.completion.source"] = nil
+	package.loaded["acp.completion.dictionary"] = nil
 	completion.reload()
 	ok(live.module ~= old_module, "hot reload must replace Blink's instantiated ACP source")
+	ok(
+		live_dictionary.module ~= old_dictionary_module,
+		"hot reload must replace Blink's instantiated dictionary source"
+	)
 	eq(live.list, nil)
+	eq(live_dictionary.list, nil)
 
 	vim.api.nvim_buf_delete(prompt_buf, { force = true })
 	vim.api.nvim_buf_delete(source_buf, { force = true })
+	vim.fn.delete(dictionary)
 end)
 
 test("Codex chat uses a dedicated tab and preserves the source layout", function()

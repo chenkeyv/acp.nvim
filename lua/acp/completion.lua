@@ -1,6 +1,7 @@
 local M = {}
 
 M.provider_id = "acp"
+M.dictionary_provider_id = "dictionary"
 M.filetype = "acp-prompt"
 
 local registered_blink
@@ -88,18 +89,27 @@ local function patch_buffer_provider(provider)
 	provider._acp_loaded_buffers = true
 end
 
-local function refresh_live_provider()
+local function refresh_live_provider(provider_id, module_name)
 	local ok, sources = pcall(require, "blink.cmp.sources.lib")
-	local provider = ok and sources.providers[M.provider_id] or nil
+	local provider = ok and sources.providers[provider_id] or nil
 	if not provider then
 		return
 	end
 	if provider.list then
 		provider.list:destroy()
 	end
-	provider.module = require("acp.completion.source").new()
+	provider.module = require(module_name).new()
 	provider.list = nil
 	provider.resolve_cache = {}
+end
+
+local function register_provider(cmp, config, provider_id, provider_config)
+	local configured = config.sources.providers[provider_id]
+	if not configured then
+		cmp.add_source_provider(provider_id, provider_config)
+	elseif configured.module == provider_config.module then
+		refresh_live_provider(provider_id, provider_config.module)
+	end
 end
 
 local function sync_live_builtin_providers(config)
@@ -125,17 +135,22 @@ function M.setup()
 	end
 	if registered_blink ~= cmp then
 		local config = require("blink.cmp.config")
-		if not config.sources.providers[M.provider_id] then
-			cmp.add_source_provider(M.provider_id, {
-				name = "Codex",
-				module = "acp.completion.source",
-				async = true,
-				timeout_ms = 300,
-				score_offset = 100,
-			})
-		elseif config.sources.providers[M.provider_id].module == "acp.completion.source" then
-			refresh_live_provider()
-		end
+		register_provider(cmp, config, M.provider_id, {
+			name = "Codex",
+			module = "acp.completion.source",
+			async = true,
+			timeout_ms = 300,
+			score_offset = 100,
+		})
+		register_provider(cmp, config, M.dictionary_provider_id, {
+			name = "Dictionary",
+			module = "acp.completion.dictionary",
+			async = true,
+			timeout_ms = 300,
+			min_keyword_length = 2,
+			max_items = 40,
+			score_offset = -4,
+		})
 		patch_path_provider(config.sources.providers.path)
 		patch_buffer_provider(config.sources.providers.buffer)
 		sync_live_builtin_providers(config)
@@ -160,7 +175,7 @@ function M.ensure()
 end
 
 function M.sources()
-	local sources = { M.provider_id }
+	local sources = { M.provider_id, M.dictionary_provider_id }
 	local cmp = blink()
 	if not cmp then
 		return sources
@@ -337,9 +352,22 @@ function M.reload()
 	if ok then
 		source.clear_cache()
 	end
+	local dictionary_ok, dictionary = pcall(require, "acp.completion.dictionary")
+	if dictionary_ok then
+		dictionary.clear_cache()
+	end
 	local cmp = blink()
 	if cmp then
-		refresh_live_provider()
+		local config = require("blink.cmp.config")
+		if config.sources.providers[M.provider_id].module == "acp.completion.source" then
+			refresh_live_provider(M.provider_id, "acp.completion.source")
+		end
+		if
+			config.sources.providers[M.dictionary_provider_id]
+			and config.sources.providers[M.dictionary_provider_id].module == "acp.completion.dictionary"
+		then
+			refresh_live_provider(M.dictionary_provider_id, "acp.completion.dictionary")
+		end
 	end
 end
 

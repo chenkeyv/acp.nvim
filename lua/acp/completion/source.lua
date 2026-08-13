@@ -1,6 +1,6 @@
 local M = {}
 
-local cache = { dollar_items = {}, mention_items = {}, dictionaries = {} }
+local cache = { dollar_items = {}, mention_items = {} }
 
 local commands = {
 	{ "permissions", "Set what Codex can do without asking first" },
@@ -221,110 +221,6 @@ local function file_items(ctx, token, result)
 	return items
 end
 
-local function dictionary_paths(bufnr)
-	local paths = {}
-	local seen = {}
-	local ok, configured = pcall(vim.api.nvim_buf_call, bufnr, function()
-		return vim.opt_local.dictionary:get()
-	end)
-	for _, path in ipairs(ok and configured or {}) do
-		for _, expanded in ipairs(vim.fn.glob(vim.fn.expand(path), false, true)) do
-			if expanded ~= "" and vim.fn.filereadable(expanded) == 1 and not seen[expanded] then
-				seen[expanded] = true
-				table.insert(paths, expanded)
-			end
-		end
-	end
-	if #paths == 0 and vim.fn.filereadable("/usr/share/dict/words") == 1 then
-		table.insert(paths, "/usr/share/dict/words")
-	end
-	return paths
-end
-
-local function dictionary_process(query, paths, callback, spawn)
-	local escaped = query:gsub("([\\%^%$%.%[%]%*%+%-%?%(%)%{%}%|])", "\\%1")
-	local pattern = "^" .. escaped .. "[[:alpha:]'-]+$"
-	return (spawn or vim.system)(
-		vim.list_extend({
-			"rg",
-			"--no-config",
-			"--no-heading",
-			"--no-filename",
-			"--color=never",
-			"--ignore-case",
-			"-m",
-			"40",
-			pattern,
-		}, paths),
-		{ text = true },
-		function(result)
-			vim.schedule(function()
-				if result.code ~= 0 and result.code ~= 1 then
-					callback(nil)
-					return
-				end
-				local words = vim.split(result.stdout or "", "\n", { trimempty = true })
-				callback(words)
-			end)
-		end
-	)
-end
-
-local function dictionary_words(bufnr, query, callback, spawn)
-	local key = table.concat(dictionary_paths(bufnr), "\0")
-	if key == "" then
-		callback({})
-		return function() end
-	end
-	cache.dictionaries[key] = cache.dictionaries[key] or {}
-	local prefix = query:lower()
-	if cache.dictionaries[key][prefix] then
-		callback(vim.deepcopy(cache.dictionaries[key][prefix]))
-		return function() end
-	end
-	local handle = dictionary_process(query, dictionary_paths(bufnr), function(words)
-		if words then
-			cache.dictionaries[key][prefix] = words
-			callback(vim.deepcopy(words))
-		else
-			callback({})
-		end
-	end, spawn)
-	return function()
-		if handle then
-			handle:kill(15)
-		end
-	end
-end
-
-local function dictionary_items(ctx, token, words)
-	local query = token.query
-	if #query < 2 then
-		return {}
-	end
-	local items = {}
-	local edit_range = range(ctx, token.start_col)
-	local completion_kinds = kinds()
-	local prefix = query:lower()
-	local seen = {}
-	for _, suggestion in ipairs(words or {}) do
-		local lowered = suggestion:lower()
-		if lowered:sub(1, #prefix) == prefix and lowered ~= prefix and not seen[lowered] then
-			seen[lowered] = true
-			table.insert(items, {
-				label = suggestion,
-				kind = completion_kinds.Text,
-				detail = "Dictionary",
-				textEdit = { newText = suggestion, range = edit_range },
-			})
-			if #items == 40 then
-				break
-			end
-		end
-	end
-	return items
-end
-
 function M.token(ctx)
 	local before = ctx.line:sub(1, ctx.cursor[2])
 	local start, text = before:match("^%s*()(/[^%s]*)$")
@@ -334,10 +230,6 @@ function M.token(ctx)
 	start, text = before:match("()([$@][^%s$@]*)$")
 	if start and (start == 1 or before:sub(start - 1, start - 1):match("[%s%p]")) then
 		return { prefix = text:sub(1, 1), query = text:sub(2), start_col = start - 1 }
-	end
-	start, text = before:match("()([%a][%a'-]*)$")
-	if start then
-		return { prefix = "word", query = text, start_col = start - 1 }
 	end
 	return nil
 end
@@ -364,23 +256,6 @@ function M:get_completions(ctx, callback)
 		callback(response(command_items(ctx, token)))
 		return
 	end
-	if token.prefix == "word" then
-		if #token.query < 2 then
-			callback(response())
-			return
-		end
-		local cancelled = false
-		local cancel = dictionary_words(ctx.bufnr, token.query, function(words)
-			if not cancelled then
-				callback(response(dictionary_items(ctx, token, words)))
-			end
-		end)
-		return function()
-			cancelled = true
-			cancel()
-		end
-	end
-
 	local cancelled = false
 	if token.prefix == "$" then
 		local pending = 2
@@ -433,11 +308,6 @@ M._command_items = command_items
 M._skill_items = skill_items
 M._app_items = app_items
 M._file_items = file_items
-M._dictionary_items = dictionary_items
-M._dictionary_paths = dictionary_paths
-M._dictionary_words = dictionary_words
-M._dictionary_process = dictionary_process
-
 function M.cached_dollar_items()
 	local items = {}
 	for _, item in pairs(cache.dollar_items) do
@@ -456,7 +326,6 @@ end
 
 function M.clear_cache()
 	cache.dollar_items = {}
-	cache.dictionaries = {}
 	cache.mention_items = {}
 end
 
