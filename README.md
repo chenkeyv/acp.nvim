@@ -162,14 +162,14 @@ scrolling remains available only until the next content update arrives.
 The chat window disables editor indent guides and wrapped-line indentation, and
 the output and sessions buffers keep no undo history. Each command or tool gets
 one level-two Codex-style cell; compatible read/list/search commands coalesce
-under a single `Exploring` or `Explored` cell. Command invocations keep a
-compact preview, with long shell lines ending in `...` rather than wrapping
-through the chat. Shortened command, MCP, and dynamic-tool content shows its
-first row, a `... +N lines` omission marker, and its final three rows. The same
-policy applies while a command is streaming and after it completes. `<Enter>`
-or `K` opens the complete command or tool transcript in a focused detail float.
-Action previews start open and remain manually foldable; warnings and failures
-stay visible in the transcript.
+under a single `Exploring` or `Explored` cell. Multiline command, MCP, and
+dynamic-tool content shows its first row, a `... +N lines` omission marker, and
+its final three rows. Shell-command rows remain complete and wrap to the current
+chat-window width; command output and tool previews shorten past 120 display
+columns. The same policy applies while a command is streaming and after it
+completes. `<Enter>` or `K` opens the complete command or tool transcript in a
+focused detail float. Action previews start open and remain manually foldable;
+warnings and failures stay visible in the transcript.
 
 Command cells apply live Bash token highlighting even while ACP language
 injection is paused during a turn. Exploration verbs and tool methods use

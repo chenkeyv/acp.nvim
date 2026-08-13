@@ -971,7 +971,7 @@ test("Codex-style command cells show the first and final three output lines", fu
 	ok(not table.concat(activity_block.lines, "\n"):find("K to inspect", 1, true))
 	for _, line in ipairs(vim.list_slice(activity_block.lines, 4)) do
 		ok(
-			vim.fn.strdisplaywidth(line) <= action.command_preview_width,
+			vim.fn.strdisplaywidth(line) <= action.compact_preview_width,
 			"command output rows must stay display-width bounded"
 		)
 	end
@@ -1197,19 +1197,13 @@ test("Codex-style command cells use the shared first-and-final-three preview", f
 	})
 
 	eq(#activity_block.lines, 1 + action.preview_limit)
-	contains(activity_block.lines[2], "• Running printf output")
-	contains(activity_block.lines[2], "...")
+	eq(activity_block.lines[2], "• Running " .. command_lines[1])
+	ok(not activity_block.lines[2]:find("...", 1, true), "the complete shell command must remain in the buffer")
 	eq(activity_block.lines[3], "  │ ... +2 lines")
 	eq(activity_block.lines[4], "  │ echo fourth")
 	eq(activity_block.lines[5], "  │ echo fifth")
 	eq(activity_block.lines[6], "  │ echo done")
 	ok(not table.concat(activity_block.lines, "\n"):find("K to inspect", 1, true))
-	for _, line in ipairs(vim.list_slice(activity_block.lines, 2)) do
-		ok(
-			vim.fn.strdisplaywidth(line) <= action.command_preview_width,
-			"command invocation rows must stay display-width bounded"
-		)
-	end
 
 	local detail_text = table.concat(chat:activity_detail_lines(activity_block.line1), "\n")
 	contains(detail_text, command)
@@ -1348,10 +1342,11 @@ test("MCP and dynamic tools keep compact transcript previews and complete detail
 		ok(not table.concat(tool_block.lines, "\n"):find("K to inspect", 1, true))
 		for _, line in ipairs(vim.list_slice(tool_block.lines, 2)) do
 			ok(
-				vim.fn.strdisplaywidth(line) <= action.tool_preview_width,
+				vim.fn.strdisplaywidth(line) <= action.compact_preview_width,
 				"tool preview rows must stay display-width bounded"
 			)
 		end
+		ok(vim.fn.strdisplaywidth(tool_block.lines[3]) > 80, "tool output must use the extended width")
 
 		local detail_text = table.concat(chat:activity_detail_lines(tool_block.line1), "\n")
 		contains(detail_text, long_argument)
@@ -2211,6 +2206,8 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.wo[state.output_win].foldcolumn, "0")
 		eq(vim.wo[state.output_win].signcolumn, "no")
 		eq(vim.wo[state.output_win].statuscolumn, "  ")
+		eq(vim.wo[state.output_win].wrap, true)
+		eq(vim.wo[state.output_win].linebreak, true)
 		eq(vim.wo[state.output_win].breakindent, false)
 		eq(vim.wo[state.output_win].showbreak, "")
 		eq(vim.b[state.output_buf].indent_guide, false)

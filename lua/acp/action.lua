@@ -4,8 +4,7 @@ local M = {}
 
 M.preview_tail_lines = 3
 M.preview_limit = M.preview_tail_lines + 2
-M.tool_preview_width = 80
-M.command_preview_width = 80
+M.compact_preview_width = 120
 
 local action_types = {
 	commandExecution = "command",
@@ -321,23 +320,18 @@ local function command_rows(child)
 	local header_prefix = ("• %s "):format(title)
 	local visible_command = preview(command)
 	local rows = {
-		row(
-			header_prefix
-				.. truncate_display(visible_command[1], M.command_preview_width - vim.fn.strdisplaywidth(header_prefix)),
-			"action_header",
-			{
-				title = title,
-				title_col = #"• ",
-				detail_col = #"• " + #title + 1,
-				detail_kind = "command",
-				syntax = "bash",
-			}
-		),
+		row(header_prefix .. visible_command[1], "action_header", {
+			title = title,
+			title_col = #"• ",
+			detail_col = #"• " + #title + 1,
+			detail_kind = "command",
+			syntax = "bash",
+		}),
 	}
 
 	for index = 2, #visible_command do
 		local prefix = "  │ "
-		local line = truncate_display(visible_command[index], M.command_preview_width - vim.fn.strdisplaywidth(prefix))
+		local line = visible_command[index]
 		table.insert(
 			rows,
 			row(prefix .. line, "action_command", {
@@ -358,7 +352,7 @@ local function command_rows(child)
 	local visible = preview(output_lines)
 	for index, line in ipairs(visible) do
 		local prefix = index == 1 and "  └ " or "    "
-		line = truncate_display(line, M.command_preview_width - vim.fn.strdisplaywidth(prefix))
+		line = truncate_display(line, M.compact_preview_width - vim.fn.strdisplaywidth(prefix))
 		table.insert(
 			rows,
 			row(prefix .. line, "action_output", {
@@ -376,7 +370,8 @@ local function tool_rows(child)
 	local action_kind = tool_action_kind(child.item)
 	local rows = {
 		row(
-			header_prefix .. tool_invocation(child.item, M.tool_preview_width - vim.fn.strdisplaywidth(header_prefix)),
+			header_prefix
+				.. tool_invocation(child.item, M.compact_preview_width - vim.fn.strdisplaywidth(header_prefix)),
 			"action_header",
 			{
 				action_kind = action_kind,
@@ -391,7 +386,7 @@ local function tool_rows(child)
 	local visible = preview(details)
 	for index, line in ipairs(visible) do
 		local prefix = index == 1 and "  └ " or "    "
-		line = truncate_display(line, M.tool_preview_width - vim.fn.strdisplaywidth(prefix))
+		line = truncate_display(line, M.compact_preview_width - vim.fn.strdisplaywidth(prefix))
 		table.insert(
 			rows,
 			row(prefix .. line, "action_output", {
