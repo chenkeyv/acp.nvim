@@ -2318,6 +2318,71 @@ test("setup exposes only the focused Codex command surface", function()
 	eq(ui.get_config().command, { "codex", "app-server" })
 end)
 
+test("Blink buffer completion includes ACP prompt and chat text", function()
+	local blink_root = vim.env.ACP_BLINK_CMP_PATH or vim.fn.expand("~/.local/share/nvim/site/pack/core/opt/blink.cmp")
+	if vim.fn.isdirectory(blink_root) ~= 1 then
+		blink_root = vim.fn.expand("~/.local/share/nvim/lazy/blink.cmp")
+	end
+	if vim.fn.isdirectory(blink_root) ~= 1 then
+		return
+	end
+	vim.opt.runtimepath:prepend(blink_root)
+	local cmp = require("blink.cmp")
+	cmp.setup({
+		fuzzy = { implementation = "lua" },
+		sources = { default = { "buffer", "path" } },
+	})
+	completion.reset()
+	ok(completion.setup())
+	local config = require("blink.cmp.config")
+	local sources = require("blink.cmp.sources.lib")
+
+	local source_buf = vim.api.nvim_create_buf(false, false)
+	vim.bo[source_buf].buflisted = true
+	vim.bo[source_buf].swapfile = false
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, { "workspaceBufferTerm" })
+	local prompt_buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[prompt_buf].swapfile = false
+	vim.bo[prompt_buf].filetype = "acp-prompt"
+	vim.api.nvim_buf_set_lines(prompt_buf, 0, -1, false, { "promptHistoryTerm workspace" })
+	local chat_buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[chat_buf].swapfile = false
+	vim.bo[chat_buf].filetype = "acp"
+	vim.api.nvim_buf_set_name(chat_buf, "acp://codex/chat")
+	vim.api.nvim_buf_set_lines(chat_buf, 0, -1, false, { "conversationBufferTerm" })
+	local host_buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[host_buf].swapfile = false
+	vim.bo[host_buf].filetype = "acp-host"
+	vim.api.nvim_buf_set_lines(host_buf, 0, -1, false, { "hostChromeTerm" })
+	vim.api.nvim_win_set_buf(0, prompt_buf)
+	vim.api.nvim_win_set_cursor(0, { 1, #"promptHistoryTerm workspace" })
+
+	local buffer_bufnrs = config.sources.providers.buffer.opts.get_bufnrs()
+	ok(vim.tbl_contains(buffer_bufnrs, source_buf))
+	ok(vim.tbl_contains(buffer_bufnrs, prompt_buf))
+	ok(vim.tbl_contains(buffer_bufnrs, chat_buf))
+	ok(not vim.tbl_contains(buffer_bufnrs, host_buf))
+	local buffer_items
+	sources.get_provider_by_id("buffer").module:get_completions({}, function(response)
+		buffer_items = completion_labels(response.items)
+	end)
+	ok(
+		vim.wait(1000, function()
+			return buffer_items ~= nil
+		end),
+		"Blink buffer completion timed out"
+	)
+	for _, word in ipairs({ "workspaceBufferTerm", "promptHistoryTerm", "conversationBufferTerm" }) do
+		ok(vim.tbl_contains(buffer_items, word), "missing Blink buffer word: " .. word)
+	end
+	ok(not vim.tbl_contains(buffer_items, "hostChromeTerm"))
+
+	vim.api.nvim_buf_delete(prompt_buf, { force = true })
+	vim.api.nvim_buf_delete(chat_buf, { force = true })
+	vim.api.nvim_buf_delete(host_buf, { force = true })
+	vim.api.nvim_buf_delete(source_buf, { force = true })
+end)
+
 test("Blink registers ACP plus configured buffer and path completion", function()
 	local blink_root = vim.env.ACP_BLINK_CMP_PATH or vim.fn.expand("~/.local/share/nvim/lazy/blink.cmp")
 	if vim.fn.isdirectory(blink_root) ~= 1 then

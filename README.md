@@ -257,9 +257,10 @@ With Blink installed, completion opens automatically after `/`, `$`, and `@`:
 - `@` searches the active Codex workspace through `fuzzyFileSearch` and sends
   accepted files or directories as structured mentions.
 - ordinary words retain Blink's configured sources. acp.nvim explicitly keeps
-  the built-in buffer and path sources enabled for `acp-prompt`; buffer words
-  come from all loaded, listed file buffers and paths resolve from the Codex
-  workspace rather than the prompt buffer's `acp://` name.
+  the built-in buffer and path sources enabled for `acp-prompt`. Buffer words
+  come from the current prompt and chat transcript as well as all loaded,
+  listed file buffers. Paths resolve from the Codex workspace rather than the
+  prompt buffer's `acp://` name.
 - dictionary words come from the prompt buffer's `'dictionary'` files. When
   none are configured, macOS's `/usr/share/dict/words` is used when available.
 

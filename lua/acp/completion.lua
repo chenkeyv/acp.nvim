@@ -22,13 +22,21 @@ local function blink()
 	return ok and cmp or nil
 end
 
+local function is_acp_text_buffer(bufnr)
+	local filetype = vim.bo[bufnr].filetype
+	if filetype == M.filetype then
+		return true
+	end
+	return filetype == "acp" and vim.api.nvim_buf_get_name(bufnr) == "acp://codex/chat"
+end
+
 local function normal_buffers()
 	local bufnrs = {}
 	for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+		local listed_file = vim.bo[bufnr].buflisted and vim.bo[bufnr].buftype == ""
 		if
 			vim.api.nvim_buf_is_loaded(bufnr)
-			and vim.bo[bufnr].buflisted
-			and vim.bo[bufnr].buftype == ""
+			and (listed_file or is_acp_text_buffer(bufnr))
 			and vim.api.nvim_buf_line_count(bufnr) > 0
 		then
 			table.insert(bufnrs, bufnr)
