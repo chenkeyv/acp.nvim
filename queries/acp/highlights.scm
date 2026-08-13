@@ -48,5 +48,10 @@
 ((result_text) @acp.action.meta
   (#match? @acp.action.meta "^(\\.\\.\\. \\+|\\(no output\\))"))
 
-(fence_delimiter) @acp.code.fence
-(language) @acp.code.language
+((fence_delimiter) @acp.code.fence
+  (#set! conceal "")
+  (#set! conceal_lines ""))
+
+((language) @acp.code.language
+  (#set! conceal "")
+  (#set! conceal_lines ""))

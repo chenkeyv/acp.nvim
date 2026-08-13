@@ -673,11 +673,18 @@ local function highlight_inline_code(bufnr, row, line)
 		if not first then
 			return
 		end
-		mark(bufnr, row, first - 1, {
-			end_col = last,
+		mark(bufnr, row, first, {
+			end_col = last - 1,
 			hl_group = "AcpInlineCode",
 			priority = 70,
 		})
+		for _, col in ipairs({ first - 1, last - 1 }) do
+			mark(bufnr, row, col, {
+				end_col = col + 1,
+				conceal = "",
+				priority = 90,
+			})
+		end
 		start = last + 1
 	end
 end

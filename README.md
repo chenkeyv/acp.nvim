@@ -124,6 +124,9 @@ this panel instead of being repeated elsewhere.
 The chat transcript uses the custom `acp` filetype rather than Markdown, while
 the editable prompt uses `acp-prompt`. This keeps their styling and filetype
 options independent and lets `FileType acp` customizations target only chats.
+When the ACP Tree-sitter parser is active, chat concealment hides fenced-code
+marker lines and inline-code backticks without changing the underlying buffer
+text; no conceal fallback is applied when the parser is unavailable.
 Semantic icons for people, tools, changes, warnings, and errors are written
 directly into the transcript text. The chat therefore needs no sign column or
 icon-bearing extmarks; set `vim.g.have_nerd_font = false` to write compact text

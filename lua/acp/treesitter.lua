@@ -1,6 +1,7 @@
 local M = {}
 
 local configured = false
+local query_names = { "highlights", "injections", "folds" }
 
 local function plugin_root()
 	local source = debug.getinfo(1, "S").source:sub(2)
@@ -106,16 +107,29 @@ local function start_language(bufnr, language, known_available)
 	return pcall(vim.treesitter.start, bufnr, language)
 end
 
-local function start_acp_buffers()
+local function start_acp_buffers(restart)
 	for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
 		if
 			vim.api.nvim_buf_is_loaded(bufnr)
 			and vim.bo[bufnr].filetype == "acp"
 			and vim.b[bufnr].acp_language_injection ~= "paused"
 		then
+			if restart then
+				M.stop(bufnr)
+			end
 			start_language(bufnr, "acp")
 		end
 	end
+end
+
+local function refresh_queries()
+	local getter = vim.treesitter and vim.treesitter.query and vim.treesitter.query.get
+	if getter and type(getter.clear) == "function" then
+		for _, query_name in ipairs(query_names) do
+			getter:clear("acp", query_name)
+		end
+	end
+	start_acp_buffers(true)
 end
 
 function M.status()
@@ -197,6 +211,7 @@ function M.setup()
 	if configured then
 		configure_nvim_treesitter()
 		register_install_command()
+		refresh_queries()
 		return
 	end
 	configured = true
@@ -211,6 +226,7 @@ function M.setup()
 		callback = configure_nvim_treesitter,
 	})
 	register_install_command()
+	refresh_queries()
 end
 
 function M.register_commands()

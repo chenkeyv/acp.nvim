@@ -1413,11 +1413,33 @@ test("ACP Tree-sitter grammar is distributable and keeps the acp filetype", func
 	}) do
 		ok(vim.fn.filereadable(vim.fs.joinpath(parser.path, path)) == 1, "missing parser artifact: " .. path)
 	end
+	local highlights = table.concat(vim.fn.readfile(vim.fs.joinpath(parser.path, "queries/acp/highlights.scm")), "\n")
+	contains(highlights, '(#set! conceal "")')
+	contains(highlights, '(#set! conceal_lines "")')
 	local parser_source =
 		table.concat(vim.fn.readfile(vim.fs.joinpath(parser.path, "tree-sitter-acp/src/parser.c")), "\n")
 	contains(parser_source, "#define LANGUAGE_VERSION 15")
 	treesitter.setup()
 	eq(vim.treesitter.language.get_lang("acp"), "acp")
+end)
+
+test("Tree-sitter setup refreshes cached ACP queries", function()
+	local getter = vim.treesitter.query.get
+	local original_clear = getter.clear
+	local cleared = {}
+	getter.clear = function(self, language, query_name)
+		if language == "acp" then
+			table.insert(cleared, query_name)
+		end
+		return original_clear(self, language, query_name)
+	end
+
+	local passed, err = pcall(treesitter.setup)
+	getter.clear = original_clear
+	if not passed then
+		error(err, 2)
+	end
+	eq(cleared, { "highlights", "injections", "folds" })
 end)
 
 test("Tree-sitter highlighting has no parser fallbacks", function()
@@ -1902,13 +1924,16 @@ test("chat view stacks floating surfaces and styles transcript roles", function(
 	view.refresh_transcript(bufnr, 0, styled_chat)
 	local marks = vim.api.nvim_buf_get_extmarks(bufnr, view.transcript_namespace, 0, -1, { details = true })
 	local groups = {}
+	local concealed = {}
 	for _, extmark in ipairs(marks) do
 		local details = extmark[4] or {}
 		if details.hl_group then
 			groups[details.hl_group] = true
 		end
 		ok(not details.sign_text, "chat icons should be buffer text, not signs")
-		ok(details.conceal == nil, "direct transcript icons should not need conceal extmarks")
+		if details.conceal ~= nil then
+			concealed[extmark[2] .. ":" .. extmark[3]] = details.conceal
+		end
 	end
 	ok(groups.AcpUserHeader)
 	ok(groups.AcpAgentHeader)
@@ -1922,6 +1947,19 @@ test("chat view stacks floating surfaces and styles transcript roles", function(
 	ok(groups.AcpSectionHeader)
 	ok(groups.AcpCodeFence)
 	ok(groups.AcpInlineCode)
+	local inline_row
+	local inline_text
+	for index, line in ipairs(direct_lines) do
+		if line:find("`inline`", 1, true) then
+			inline_row = index - 1
+			inline_text = line
+			break
+		end
+	end
+	ok(inline_row ~= nil, "expected inline code in the rendered transcript")
+	local opening = inline_text:find("`inline`", 1, true) - 1
+	eq(concealed[inline_row .. ":" .. opening], "")
+	eq(concealed[inline_row .. ":" .. (opening + #"`inline")], "")
 	for _, capture in ipairs({
 		"@acp.action.active",
 		"@acp.action.success",
@@ -2316,6 +2354,8 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.wo[state.output_win].foldlevel, 2)
 		eq(vim.wo[state.output_win].foldcolumn, "0")
 		eq(vim.wo[state.output_win].signcolumn, "no")
+		eq(vim.wo[state.output_win].conceallevel, 2)
+		eq(vim.wo[state.output_win].concealcursor, "nvic")
 		eq(vim.wo[state.output_win].statuscolumn, "  ")
 		eq(vim.wo[state.output_win].wrap, true)
 		eq(vim.wo[state.output_win].linebreak, true)
@@ -3404,6 +3444,8 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 		"expected a structured block before reload"
 	)
 	vim.bo[state.output_buf].filetype = "markdown"
+	vim.wo[state.output_win].conceallevel = 0
+	vim.wo[state.output_win].concealcursor = ""
 
 	local tabpage = state.tabpage
 	local sessions_buf = state.sessions_buf
@@ -3489,6 +3531,8 @@ test("hot reload preserves the live client, thread, draft, and Codex tab", funct
 			"Preserve this queued instruction"
 		)
 		eq(vim.bo[state.output_buf].filetype, "acp")
+		eq(vim.wo[state.output_win].conceallevel, 2)
+		eq(vim.wo[state.output_win].concealcursor, "nvic")
 		local restored_chat = vim.api.nvim_win_get_config(state.output_win)
 		eq(restored_chat.relative, "win")
 		eq(restored_chat.win, state.output_host_win)
