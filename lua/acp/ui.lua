@@ -2,6 +2,7 @@ local Codex = require("acp.codex").Client
 local action = require("acp.action")
 local blocks = require("acp.blocks")
 local composer = require("acp.composer")
+local completion = require("acp.completion")
 local context = require("acp.context")
 local instructions = require("acp.instructions")
 local output_ui = require("acp.output_ui")
@@ -627,6 +628,10 @@ local function create_buffers()
 		vim.bo[state.input_buf].swapfile = false
 		vim.bo[state.input_buf].filetype = "acp-prompt"
 	end
+	vim.b[state.input_buf].acp_cwd = state.cwd
+	vim.b[state.input_buf].acp_thread_id = state.thread_id or nil
+	vim.b[state.input_buf].completion = true
+	completion.ensure()
 	if created then
 		state.keymaps_set = false
 	end
@@ -937,6 +942,10 @@ local function apply_thread_response(result)
 	end
 	state.thread_id = thread.id
 	state.cwd = result.cwd or thread.cwd or state.cwd
+	if valid_buf(state.input_buf) then
+		vim.b[state.input_buf].acp_cwd = state.cwd
+		vim.b[state.input_buf].acp_thread_id = state.thread_id
+	end
 	state.model = result.model or state.model
 	state.effort = present(result.reasoningEffort) and result.reasoningEffort or state.effort
 	state.service_tier = present(result.serviceTier) and result.serviceTier or state.service_tier
@@ -1039,6 +1048,9 @@ local function prepared_prompt(text)
 	end
 	local extra_input, additional, labels = context.turn_payload(contexts)
 	local input = { { type = "text", text = text, text_elements = {} } }
+	local completion_input, text_elements = completion.input(text, state.cwd)
+	vim.list_extend(input, completion_input)
+	input[1].text_elements = text_elements
 	vim.list_extend(input, extra_input)
 	return {
 		text = text,
@@ -1195,6 +1207,16 @@ local function set_buffer_keymaps()
 	local opts = { buffer = state.input_buf, silent = true }
 	vim.keymap.set({ "n", "i" }, "<C-s>", M.steer, vim.tbl_extend("force", opts, { desc = "Steer active Codex turn" }))
 	vim.keymap.set({ "n", "i" }, "<C-CR>", M.send, vim.tbl_extend("force", opts, { desc = "Send Codex prompt" }))
+	for _, trigger in ipairs({ "/", "$", "@" }) do
+		vim.keymap.set(
+			"i",
+			trigger,
+			trigger .. "<Cmd>lua require('acp.completion').trigger()<CR>",
+			vim.tbl_extend("force", opts, {
+				desc = "Open Codex completion",
+			})
+		)
+	end
 	vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "Close Codex tab" }))
 
 	local output_opts = { buffer = state.output_buf, silent = true }
@@ -1389,6 +1411,8 @@ function M.new_chat(opts)
 	end
 	if valid_buf(state.input_buf) then
 		set_input("")
+		vim.b[state.input_buf].acp_cwd = state.cwd
+		vim.b[state.input_buf].acp_thread_id = nil
 	end
 	render_sessions()
 	update_chrome()
@@ -1858,6 +1882,10 @@ function M._handle_notification(method, params)
 			params.success and "Codex sign-in completed" or (params.error or "Codex sign-in failed"),
 			params.success and vim.log.levels.INFO or vim.log.levels.ERROR
 		)
+		return
+	end
+	if method == "skills/changed" or method == "app/list/updated" then
+		completion.reload()
 		return
 	end
 	if not state then

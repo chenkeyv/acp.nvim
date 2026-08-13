@@ -2,6 +2,8 @@ local approval = require("acp.approval")
 local action = require("acp.action")
 local blocks = require("acp.blocks")
 local Client = require("acp.codex").Client
+local completion = require("acp.completion")
+local completion_source = require("acp.completion.source")
 local context = require("acp.context")
 local health = require("acp.health")
 local icons = require("acp.icons")
@@ -282,6 +284,276 @@ test("requests wait for initialization and route responses", function()
 	eq(models[1].id, "gpt-test")
 	eq(#process.writes, 3)
 	client:stop()
+end)
+
+test("client exposes the Codex completion request contracts", function()
+	local process = fake_process()
+	local client = Client.new({ spawn = process.spawn })
+	client:start()
+	client.initialized = true
+	local results = {}
+
+	client:list_skills("/tmp/project", function(result, err)
+		results.skills = { result = result, err = err }
+	end)
+	client:list_apps("thread-1", function(result, err)
+		results.apps = { result = result, err = err }
+	end)
+	client:search_files("comp", { "/tmp/project" }, function(result, err)
+		results.files = { result = result, err = err }
+	end)
+
+	eq(process.writes[1].method, "skills/list")
+	eq(process.writes[1].params, { cwds = { "/tmp/project" } })
+	eq(process.writes[2].method, "app/installed")
+	eq(process.writes[2].params, { forceRefresh = false, threadId = "thread-1" })
+	eq(process.writes[3].method, "fuzzyFileSearch")
+	eq(process.writes[3].params, { query = "comp", roots = { "/tmp/project" } })
+
+	client:handle_message({ id = 0, result = { data = { { cwd = "/tmp/project", skills = {} } } } })
+	client:handle_message({ id = 1, result = { apps = { { id = "github", callable = true, enabled = true } } } })
+	client:handle_message({ id = 2, result = { files = { { path = "lua/acp/ui.lua" } } } })
+	eq(results.skills.result.data[1].cwd, "/tmp/project")
+	eq(results.apps.result[1].id, "github")
+	eq(results.files.result.files[1].path, "lua/acp/ui.lua")
+	client:stop()
+end)
+
+local function completion_context(line, bufnr)
+	return {
+		bufnr = bufnr or vim.api.nvim_get_current_buf(),
+		line = line,
+		cursor = { 1, #line },
+		bounds = { line_number = 1, start_col = 1, length = #line },
+		trigger = { kind = "manual", initial_kind = "manual" },
+	}
+end
+
+local function completion_labels(items)
+	return vim.tbl_map(function(item)
+		return item.label
+	end, items or {})
+end
+
+test("Codex completion parses native tokens and publishes the documented commands", function()
+	eq(completion_source.token(completion_context("/mod")), { prefix = "/", query = "mod", start_col = 0 })
+	eq(completion_source.token(completion_context("Use $skill")), { prefix = "$", query = "skill", start_col = 4 })
+	eq(completion_source.token(completion_context("Open @lua/acp")), { prefix = "@", query = "lua/acp", start_col = 5 })
+	eq(completion_source.token(completion_context("dictionary")), {
+		prefix = "word",
+		query = "dictionary",
+		start_col = 0,
+	})
+	eq(completion_source.token(completion_context("https://example.com")), {
+		prefix = "word",
+		query = "com",
+		start_col = 16,
+	})
+
+	local commands = completion_source._command_items(completion_context("/"), {
+		prefix = "/",
+		query = "",
+		start_col = 0,
+	})
+	local labels = completion_labels(commands)
+	for _, command in ipairs({
+		"/permissions",
+		"/apps",
+		"/plugins",
+		"/skills",
+		"/mention",
+		"/model",
+		"/plan",
+		"/goal",
+		"/review",
+		"/status",
+		"/usage",
+		"/theme",
+		"/pet",
+	}) do
+		ok(vim.tbl_contains(labels, command), "missing Codex command: " .. command)
+	end
+	ok(vim.tbl_contains(labels, "/reasoning"), "expected the acp.nvim reasoning selector")
+	ok(not vim.tbl_contains(labels, "/clean"), "undocumented /clean must not be advertised")
+	for _, item in ipairs(commands) do
+		eq(item.textEdit.range.start.character, 0)
+		eq(item.textEdit.range["end"].character, 1)
+	end
+end)
+
+test("Codex completion maps skills, apps, and files to Blink items", function()
+	local ctx = completion_context("$")
+	local token = { prefix = "$", query = "", start_col = 0 }
+	local skills = completion_source._skill_items(ctx, token, {
+		data = {
+			{
+				cwd = "/tmp/project",
+				skills = {
+					{
+						name = "review-code",
+						path = "/tmp/skills/review-code/SKILL.md",
+						description = "Review code",
+						enabled = true,
+						scope = "user",
+					},
+					{ name = "disabled", path = "/tmp/disabled", description = "", enabled = false },
+				},
+			},
+		},
+	})
+	eq(#skills, 1)
+	eq(skills[1].label, "$review-code")
+	eq(skills[1].data, {
+		acp_kind = "skill",
+		name = "review-code",
+		path = "/tmp/skills/review-code/SKILL.md",
+	})
+
+	local apps = completion_source._app_items(ctx, token, {
+		{ id = "github", runtimeName = "GitHub", callable = true, enabled = true },
+		{ id = "off", runtimeName = "Off", callable = false, enabled = true },
+	})
+	eq(#apps, 1)
+	eq(apps[1].label, "$github")
+	eq(apps[1].data.acp_kind, "app")
+
+	ctx = completion_context("@lua")
+	local files = completion_source._file_items(ctx, { prefix = "@", query = "lua", start_col = 0 }, {
+		files = {
+			{
+				file_name = "completion.lua",
+				match_type = "file",
+				path = "lua/acp/completion.lua",
+				root = "/tmp/project",
+				score = 400,
+			},
+			{
+				file_name = "acp",
+				match_type = "directory",
+				path = "lua/acp",
+				root = "/tmp/project",
+				score = 300,
+			},
+		},
+	})
+	eq(completion_labels(files), { "@lua/acp/completion.lua", "@lua/acp/" })
+	eq(files[1].data.path, "/tmp/project/lua/acp/completion.lua")
+	eq(files[2].data.name, "acp")
+end)
+
+test("Codex mentions become structured app-server input with byte ranges", function()
+	completion_source.clear_cache()
+	local ctx = completion_context("$")
+	local source = completion_source.new()
+	local original_client = ui._client()
+	local fake = {}
+	function fake:set_handlers() end
+	function fake:list_skills(_, callback)
+		callback({
+			data = {
+				{
+					cwd = vim.fn.getcwd(),
+					skills = {
+						{
+							name = "review-code",
+							path = "/tmp/skills/review-code/SKILL.md",
+							description = "Review code",
+							enabled = true,
+							scope = "user",
+						},
+					},
+				},
+			},
+		})
+	end
+	function fake:list_apps(_, callback)
+		callback({ { id = "github", runtimeName = "GitHub", callable = true, enabled = true } })
+	end
+	function fake:search_files(_, _, callback)
+		callback({ files = {} })
+	end
+	function fake:stop() end
+	ui._set_client(fake)
+	source:get_completions(ctx, function() end)
+
+	local root = vim.fn.tempname()
+	vim.fn.mkdir(vim.fs.joinpath(root, "lua"), "p")
+	local path = vim.fs.joinpath(root, "lua", "demo.lua")
+	vim.fn.writefile({ "return true" }, path)
+	local text = "Use $review-code and $github on @lua/demo.lua; ignore $unknown."
+	local input, elements = completion.input(text, root)
+	eq(input, {
+		{ type = "skill", name = "review-code", path = "/tmp/skills/review-code/SKILL.md" },
+		{ type = "mention", name = "demo.lua", path = path },
+	})
+	eq(
+		vim.tbl_map(function(element)
+			return element.placeholder
+		end, elements),
+		{ "$review-code", "$github", "@lua/demo.lua" }
+	)
+	for _, element in ipairs(elements) do
+		eq(text:sub(element.byteRange.start + 1, element.byteRange["end"]), element.placeholder)
+	end
+
+	vim.fn.delete(root, "rf")
+	ui._set_client(original_client)
+end)
+
+test("dictionary completion is asynchronous, bounded, and cached", function()
+	completion_source.clear_cache()
+	local dictionary = vim.fn.tempname()
+	vim.fn.writefile({ "completion", "completions", "compiler", "compare", "other" }, dictionary)
+	local bufnr = vim.api.nvim_create_buf(false, true)
+	vim.bo[bufnr].dictionary = dictionary
+	local synchronous = true
+	local words
+	local started = vim.uv.hrtime()
+	local command
+	local options
+	local process_callback
+	local process = { killed = false }
+	function process:kill()
+		self.killed = true
+	end
+	local function spawn(cmd, opts, callback)
+		command = cmd
+		options = opts
+		process_callback = callback
+		return process
+	end
+	completion_source._dictionary_words(bufnr, "comp", function(result)
+		synchronous = false
+		words = result
+	end, spawn)
+	ok((vim.uv.hrtime() - started) / 1e6 < 50, "dictionary lookup must not block the prompt")
+	ok(synchronous, "dictionary process should complete asynchronously")
+	eq(options, { text = true })
+	ok(vim.tbl_contains(command, "--ignore-case"))
+	ok(vim.tbl_contains(command, "40"))
+	eq(command[#command], dictionary)
+	process_callback({ code = 0, stdout = "completion\ncompletions\ncompiler\ncompare\n" })
+	ok(
+		vim.wait(100, function()
+			return words ~= nil
+		end, 5),
+		"dictionary callback timed out"
+	)
+	eq(words, { "completion", "completions", "compiler", "compare" })
+
+	local cached
+	completion_source._dictionary_words(bufnr, "comp", function(result)
+		cached = result
+	end)
+	eq(cached, words)
+	local items = completion_source._dictionary_items(
+		completion_context("comp", bufnr),
+		{ prefix = "word", query = "comp", start_col = 0 },
+		words
+	)
+	eq(completion_labels(items), words)
+	vim.api.nvim_buf_delete(bufnr, { force = true })
+	vim.fn.delete(dictionary)
 end)
 
 test("turn requests use the current stable app-server shape", function()
@@ -1479,6 +1751,53 @@ test("setup exposes only the focused Codex command surface", function()
 	eq(ui.get_config().command, { "codex", "app-server" })
 end)
 
+test("Blink registers ACP plus configured buffer and path completion", function()
+	local blink_root = vim.env.ACP_BLINK_CMP_PATH or vim.fn.expand("~/.local/share/nvim/lazy/blink.cmp")
+	if vim.fn.isdirectory(blink_root) ~= 1 then
+		return
+	end
+	vim.opt.runtimepath:prepend(blink_root)
+	local cmp = require("blink.cmp")
+	cmp.setup({
+		fuzzy = { implementation = "lua" },
+		sources = { default = { "buffer", "path" } },
+	})
+	completion.reset()
+	ok(completion.setup())
+	local config = require("blink.cmp.config")
+	eq(config.sources.providers.acp.module, "acp.completion.source")
+	eq(config.sources.providers.acp.name, "Codex")
+	eq(completion.sources(), { "acp", "buffer", "path" })
+	local sources = require("blink.cmp.sources.lib")
+	local prompt_sources = sources.per_filetype_provider_ids["acp-prompt"]
+	for _, source in ipairs({ "acp", "buffer", "path" }) do
+		ok(vim.tbl_contains(prompt_sources, source), "missing Blink source: " .. source)
+	end
+
+	local source_buf = vim.api.nvim_create_buf(false, false)
+	vim.bo[source_buf].buflisted = true
+	vim.bo[source_buf].swapfile = false
+	vim.api.nvim_buf_set_lines(source_buf, 0, -1, false, { "workspaceBufferTerm" })
+	local prompt_buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[prompt_buf].filetype = "acp-prompt"
+	vim.b[prompt_buf].acp_cwd = "/tmp/acp-workspace"
+	vim.api.nvim_win_set_buf(0, prompt_buf)
+	eq(config.sources.providers.path.opts.get_cwd({ bufnr = prompt_buf }), "/tmp/acp-workspace")
+	ok(config.sources.providers.path.should_show_items(completion_context("src/", prompt_buf), {}))
+	ok(not config.sources.providers.path.should_show_items(completion_context("/", prompt_buf), {}))
+	ok(vim.tbl_contains(config.sources.providers.buffer.opts.get_bufnrs(), source_buf))
+
+	local live = sources.get_provider_by_id("acp")
+	local old_module = live.module
+	package.loaded["acp.completion.source"] = nil
+	completion.reload()
+	ok(live.module ~= old_module, "hot reload must replace Blink's instantiated ACP source")
+	eq(live.list, nil)
+
+	vim.api.nvim_buf_delete(prompt_buf, { force = true })
+	vim.api.nvim_buf_delete(source_buf, { force = true })
+end)
+
 test("Codex chat uses a dedicated tab and preserves the source layout", function()
 	ui._reset()
 	ui.setup({ auto_context = false, command = { "missing-codex" } })
@@ -1519,6 +1838,15 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 			"expected an ACP parser or the Markdown injection fallback"
 		)
 		eq(vim.bo[state.input_buf].filetype, "acp-prompt")
+		eq(vim.b[state.input_buf].completion, true)
+		eq(vim.b[state.input_buf].acp_cwd, state.cwd)
+		local input_keymaps = {}
+		for _, keymap in ipairs(vim.api.nvim_buf_get_keymap(state.input_buf, "i")) do
+			input_keymaps[keymap.lhs] = keymap.desc
+		end
+		eq(input_keymaps["/"], "Open Codex completion")
+		eq(input_keymaps["$"], "Open Codex completion")
+		eq(input_keymaps["@"], "Open Codex completion")
 		eq(vim.bo[state.sessions_buf].undolevels, -1)
 		eq(vim.bo[state.output_host_buf].undolevels, -1)
 		eq(vim.bo[state.output_buf].undolevels, -1)

@@ -459,6 +459,26 @@ function Client:list_models(callback)
 	return true
 end
 
+function Client:list_skills(cwd, callback)
+	return self:request("skills/list", { cwds = { cwd } }, callback)
+end
+
+function Client:list_apps(thread_id, callback)
+	local params = { forceRefresh = false }
+	put(params, "threadId", thread_id)
+	return self:request("app/installed", params, function(result, err)
+		if err or type(result) ~= "table" then
+			callback(nil, error_message(err, "Failed to list installed Codex apps"))
+			return
+		end
+		callback(result.apps or {})
+	end)
+end
+
+function Client:search_files(query, roots, callback)
+	return self:request("fuzzyFileSearch", { query = query or "", roots = roots or {} }, callback)
+end
+
 local function turn_params(thread_id, payload)
 	payload = payload or {}
 	local params = {

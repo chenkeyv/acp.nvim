@@ -27,6 +27,8 @@ phase.
 - Codex `request_user_input` questions and basic MCP elicitation when enabled
   by the server's negotiated capabilities
 - review, context compaction, login, and a read-only unified diff view
+- Blink completion in the prompt for Codex commands, skills, installed apps,
+  workspace files, loaded-buffer words, paths, and dictionaries
 - transactional Lua hot reloads that preserve the Codex process, thread, tab,
   prompt draft, and active turn
 
@@ -40,6 +42,7 @@ runner.
 - Neovim nightly 0.13-dev or newer; stable releases are intentionally unsupported
 - a recent Codex CLI on `PATH`
 - an authenticated Codex session (`codex login` or `:AcpLogin`)
+- [blink.cmp](https://github.com/Saghen/blink.cmp) for prompt completion
 
 The included ACP Tree-sitter grammar is optional. With `nvim-treesitter` on the
 runtime path, acp.nvim registers its local parser. Run `:AcpInstallParser` to
@@ -217,6 +220,24 @@ require("acp").setup({
 
 The prompt also accepts `/model`, `/reasoning`, `/review`, `/compact`,
 `/status`, `/new`, `/threads`, `/login`, and `/reload`.
+
+With Blink installed, completion opens automatically after `/`, `$`, and `@`:
+
+- `/` lists the current documented Codex command catalog plus acp.nvim's local
+  prompt commands.
+- `$` lists enabled skills from `skills/list` and callable installed apps from
+  `app/installed`.
+- `@` searches the active Codex workspace through `fuzzyFileSearch` and sends
+  accepted files or directories as structured mentions.
+- ordinary words retain Blink's configured sources. acp.nvim explicitly keeps
+  the built-in buffer and path sources enabled for `acp-prompt`; buffer words
+  come from all loaded, listed file buffers and paths resolve from the Codex
+  workspace rather than the prompt buffer's `acp://` name.
+- dictionary words come from the prompt buffer's `'dictionary'` files. When
+  none are configured, macOS's `/usr/share/dict/words` is used when available.
+
+Blink remains optional at runtime: the prompt still sends normally when it is
+not installed, but none of these completion menus are available.
 
 Codex tab keymaps:
 
