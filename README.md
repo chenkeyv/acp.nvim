@@ -162,11 +162,13 @@ scrolling remains available only until the next content update arrives.
 The chat window disables editor indent guides and wrapped-line indentation, and
 the output and sessions buffers keep no undo history. Each command or tool gets
 one level-two Codex-style cell; compatible read/list/search commands coalesce
-under a single `Exploring` or `Explored` cell. Multiline command, MCP, and
-dynamic-tool content shows its first row, a `... +N lines` omission marker, and
-its final three rows. Shell-command rows remain complete and wrap to the current
-chat-window width; command output and tool previews shorten past 120 display
-columns. The same policy applies while a command is streaming and after it
+under a single `Exploring` or `Explored` cell. Shell-command rows remain complete
+and wrap to the current chat-window width. Command output plus MCP and dynamic
+tool results use a five-screen-row budget at that width, preserving the first
+line and as many final lines as fit around a `... +N lines` omission marker.
+Individual result lines shorten past 120 display columns. The preview reflows
+when the chat is resized, while ordinary user and assistant text is never
+shortened. The same policy applies while a command is streaming and after it
 completes. `<Enter>` or `K` opens the complete command or tool transcript in a
 focused detail float. Action previews start open and remain manually foldable;
 warnings and failures stay visible in the transcript.

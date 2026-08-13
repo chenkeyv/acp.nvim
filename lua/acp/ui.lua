@@ -125,6 +125,7 @@ local function fresh_state(cwd)
 		thread_rows = {},
 		prompt_chrome_key = nil,
 		composer_layout_pending = false,
+		chat_render_width = nil,
 		pending_output_text = nil,
 		output_text_scheduled = false,
 		output_text_generation = 0,
@@ -227,7 +228,7 @@ local function cancel_action_output()
 	state.action_output_generation = (state.action_output_generation or 0) + 1
 end
 
-local function set_output(lines)
+local function set_output(lines, follow)
 	if not state or not valid_buf(state.output_buf) then
 		return
 	end
@@ -238,7 +239,35 @@ local function set_output(lines)
 		vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, lines)
 	end)
 	refresh_output_view(0)
-	scroll_output_to_end()
+	if follow ~= false then
+		scroll_output_to_end()
+	end
+end
+
+local function output_render_width()
+	if not state or not valid_win(state.output_win) then
+		return action.compact_preview_width
+	end
+	local info = vim.fn.getwininfo(state.output_win)[1] or {}
+	return math.max(1, vim.api.nvim_win_get_width(state.output_win) - (tonumber(info.textoff) or 0))
+end
+
+local function sync_chat_render_width(render)
+	if not state or not state.chat then
+		return false
+	end
+	local width = output_render_width()
+	if state.chat_render_width == width and state.chat.render_width == width then
+		return false
+	end
+	state.chat_render_width = width
+	if not state.chat:set_render_width(width) then
+		return false
+	end
+	if render ~= false and valid_buf(state.output_buf) then
+		set_output(state.chat:render_lines(), false)
+	end
+	return true
 end
 
 local function set_chat(model)
@@ -246,6 +275,9 @@ local function set_chat(model)
 		return
 	end
 	state.chat = blocks.adopt(model)
+	state.chat_render_width = nil
+	state.chat:set_render_width(output_render_width())
+	state.chat_render_width = state.chat.render_width
 	if valid_buf(state.output_buf) then
 		blocks.bind(state.output_buf, state.chat)
 		set_output(state.chat:render_lines())
@@ -700,6 +732,7 @@ local function sync_output_float(layout, create)
 	vim.api.nvim_win_set_buf(state.output_win, state.output_buf)
 	configure_window(state.output_win, true)
 	update_output_winbar()
+	sync_chat_render_width()
 	return true
 end
 
@@ -2374,6 +2407,9 @@ function M._adopt_runtime(runtime)
 		else
 			state.chat = blocks.new()
 		end
+		state.chat_render_width = nil
+		state.chat:set_render_width(output_render_width())
+		state.chat_render_width = state.chat.render_width
 		if valid_buf(state.output_buf) then
 			blocks.bind(state.output_buf, state.chat)
 			local current = vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false)

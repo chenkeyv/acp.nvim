@@ -2,8 +2,7 @@ local output = require("acp.output")
 
 local M = {}
 
-M.preview_tail_lines = 3
-M.preview_limit = M.preview_tail_lines + 2
+M.preview_rows = 5
 M.compact_preview_width = 120
 
 local action_types = {
@@ -68,19 +67,6 @@ local function merge_item(base, update)
 	return merged
 end
 
-local function preview(lines)
-	local visible_lines = M.preview_tail_lines + 1
-	if #lines <= visible_lines then
-		return vim.deepcopy(lines)
-	end
-
-	local values = { lines[1], ("... +%d lines"):format(#lines - visible_lines) }
-	for index = #lines - M.preview_tail_lines + 1, #lines do
-		table.insert(values, lines[index])
-	end
-	return values
-end
-
 local function truncate_display(value, width)
 	value = tostring(value or "")
 	width = math.max(1, math.floor(tonumber(width) or 1))
@@ -101,6 +87,77 @@ local function truncate_display(value, width)
 		end
 	end
 	return vim.fn.strcharpart(value, 0, low) .. suffix
+end
+
+local function display_rows(value, width)
+	width = math.max(1, math.floor(tonumber(width) or 1))
+	local display_width = vim.fn.strdisplaywidth(tostring(value or ""))
+	return math.max(1, math.ceil(display_width / width))
+end
+
+local function compact_lines(lines)
+	local prefix_width = vim.fn.strdisplaywidth("    ")
+	local line_width = math.max(1, M.compact_preview_width - prefix_width)
+	return vim.tbl_map(function(line)
+		return truncate_display(line, line_width)
+	end, lines)
+end
+
+local function omission_row(count)
+	return {
+		text = ("... +%d lines"):format(count),
+		omitted = count,
+		is_meta = true,
+	}
+end
+
+local function preview(lines, width, max_rows, prefix)
+	lines = lines or {}
+	width = math.max(1, math.floor(tonumber(width) or 1))
+	max_rows = math.max(1, math.floor(tonumber(max_rows) or 1))
+	prefix = tostring(prefix or "")
+	local costs = vim.tbl_map(function(line)
+		return display_rows(prefix .. line, width)
+	end, lines)
+	local total_rows = 0
+	for _, cost in ipairs(costs) do
+		total_rows = total_rows + cost
+	end
+	if total_rows <= max_rows then
+		return vim.tbl_map(function(line)
+			return { text = line }
+		end, lines)
+	end
+
+	local marker_rows = display_rows(prefix .. "... +0 lines", width)
+	if marker_rows >= max_rows then
+		return { omission_row(#lines) }
+	end
+	local available = max_rows - marker_rows
+	local head = {}
+	local head_rows = 0
+	local head_end = 0
+	if costs[1] and costs[1] <= available then
+		head_end = 1
+		head_rows = costs[1]
+		table.insert(head, { text = lines[1] })
+	end
+
+	local tail = {}
+	local tail_rows = 0
+	local tail_start = #lines + 1
+	local tail_budget = available - head_rows
+	while tail_start - 1 > head_end and tail_rows + costs[tail_start - 1] <= tail_budget do
+		tail_start = tail_start - 1
+		tail_rows = tail_rows + costs[tail_start]
+		table.insert(tail, 1, { text = lines[tail_start] })
+	end
+
+	local omitted = #lines - #head - #tail
+	local values = head
+	table.insert(values, omission_row(omitted))
+	vim.list_extend(values, tail)
+	return values
 end
 
 local function row(text, role, opts)
@@ -251,7 +308,12 @@ function M.failed(child)
 end
 
 function M.is_exploration(item)
-	if type(item) ~= "table" or item.type ~= "commandExecution" or #(item.commandActions or {}) == 0 then
+	if
+		type(item) ~= "table"
+		or item.type ~= "commandExecution"
+		or item.source == "userShell"
+		or #(item.commandActions or {}) == 0
+	then
 		return false
 	end
 	for _, action in ipairs(item.commandActions) do
@@ -310,7 +372,7 @@ function M.set_progress(child, message)
 	return true
 end
 
-local function command_rows(child)
+local function command_rows(child, width)
 	local item = child.item or {}
 	local command = split_lines(item.command or "command")
 	if #command == 0 then
@@ -318,9 +380,8 @@ local function command_rows(child)
 	end
 	local title = M.is_active(child) and "Running" or (item.source == "userShell" and "You ran" or "Ran")
 	local header_prefix = ("• %s "):format(title)
-	local visible_command = preview(command)
 	local rows = {
-		row(header_prefix .. visible_command[1], "action_header", {
+		row(header_prefix .. command[1], "action_header", {
 			title = title,
 			title_col = #"• ",
 			detail_col = #"• " + #title + 1,
@@ -329,9 +390,9 @@ local function command_rows(child)
 		}),
 	}
 
-	for index = 2, #visible_command do
+	for index = 2, #command do
 		local prefix = "  │ "
-		local line = visible_command[index]
+		local line = command[index]
 		table.insert(
 			rows,
 			row(prefix .. line, "action_command", {
@@ -349,14 +410,14 @@ local function command_rows(child)
 		end
 		return rows
 	end
-	local visible = preview(output_lines)
-	for index, line in ipairs(visible) do
+	local visible = preview(compact_lines(output_lines), width, M.preview_rows, "  └ ")
+	for index, value in ipairs(visible) do
 		local prefix = index == 1 and "  └ " or "    "
-		line = truncate_display(line, M.compact_preview_width - vim.fn.strdisplaywidth(prefix))
+		local line = value.text
 		table.insert(
 			rows,
 			row(prefix .. line, "action_output", {
-				is_meta = line:match("^%.%.%. %+%d+ lines$") ~= nil,
+				is_meta = value.is_meta == true,
 				tree_width = #prefix,
 			})
 		)
@@ -364,7 +425,7 @@ local function command_rows(child)
 	return rows
 end
 
-local function tool_rows(child)
+local function tool_rows(child, width)
 	local title = M.is_active(child) and "Calling" or "Called"
 	local header_prefix = ("• %s "):format(title)
 	local action_kind = tool_action_kind(child.item)
@@ -383,14 +444,14 @@ local function tool_rows(child)
 		),
 	}
 	local details = tool_result_lines(child)
-	local visible = preview(details)
-	for index, line in ipairs(visible) do
+	local visible = preview(compact_lines(details), width, M.preview_rows, "  └ ")
+	for index, value in ipairs(visible) do
 		local prefix = index == 1 and "  └ " or "    "
-		line = truncate_display(line, M.compact_preview_width - vim.fn.strdisplaywidth(prefix))
+		local line = value.text
 		table.insert(
 			rows,
 			row(prefix .. line, "action_output", {
-				is_meta = line:match("^%.%.%. %+%d+ lines$") ~= nil,
+				is_meta = value.is_meta == true,
 				tree_width = #prefix,
 			})
 		)
@@ -466,10 +527,11 @@ local function exploration_rows(block)
 	return rows
 end
 
-function M.render_rows(block)
+function M.render_rows(block, width)
 	if type(block) ~= "table" then
 		return {}
 	end
+	width = math.max(1, math.floor(tonumber(width) or M.compact_preview_width))
 	if block.metadata and block.metadata.presentation == "explore" then
 		return exploration_rows(block)
 	end
@@ -477,17 +539,17 @@ function M.render_rows(block)
 	if not child then
 		return {}
 	elseif child.kind == "command" then
-		return command_rows(child)
+		return command_rows(child, width)
 	elseif child.kind == "tool" then
-		return tool_rows(child)
+		return tool_rows(child, width)
 	end
 	return vim.tbl_map(function(line)
 		return row(line, "action_output")
 	end, child.lines or {})
 end
 
-function M.render_block(block)
-	return row_lines(M.render_rows(block))
+function M.render_block(block, width)
+	return row_lines(M.render_rows(block, width))
 end
 
 local function command_detail(child)

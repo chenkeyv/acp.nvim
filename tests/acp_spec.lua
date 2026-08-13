@@ -940,8 +940,9 @@ test("live chat consumers use structural rows instead of reparsing rendered text
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
-test("Codex-style command cells show the first and final three output lines", function()
+test("Codex-style command cells bound output by wrapped screen rows", function()
 	local chat = blocks.new()
+	chat:set_render_width(120)
 	local _, activity_block = chat:start_item({
 		id = "command-preview",
 		type = "commandExecution",
@@ -957,7 +958,6 @@ test("Codex-style command cells show the first and final three output lines", fu
 	end
 	local update = chat:append_command_output("command-preview", table.concat(output_lines, "\n"))
 	eq(update.type, "replace")
-	eq(#activity_block.lines, 3 + action.preview_limit)
 	eq(activity_block.lines, {
 		"",
 		"• Running printf output",
@@ -992,7 +992,7 @@ test("Codex-style command cells show the first and final three output lines", fu
 	contains(detail_text, "line 1")
 	contains(detail_text, "line 10")
 	contains(detail_text, "✓ • 420ms")
-	eq(#activity_block.lines, 3 + action.preview_limit)
+	eq(#activity_block.lines, 8)
 	eq(activity_block.lines[5], "    ... +6 lines")
 	local activity = chat:activity_at(activity_block.line1)
 	eq(activity.counts, { command = 1, tool = 0, file = 0 })
@@ -1177,7 +1177,36 @@ test("live action cells use structural Bash and semantic tool highlighting", fun
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
-test("Codex-style command cells use the shared first-and-final-three preview", function()
+test("action previews reflow with the current chat width", function()
+	local long_line = "result " .. string.rep("wide ", 18)
+	local prose = "ordinary chat " .. string.rep("must remain complete ", 12)
+	local chat = blocks.new()
+	chat:set_render_width(120)
+	chat:add_user(prose, {})
+	local _, activity_block = chat:add_item({
+		id = "width-aware-preview",
+		type = "commandExecution",
+		command = "printf output",
+		status = "completed",
+		exitCode = 0,
+		aggregatedOutput = table.concat({ long_line, "line 2", "line 3", "line 4", "line 5" }, "\n"),
+	})
+	local wide_lines = vim.deepcopy(activity_block.lines)
+	ok(table.concat(wide_lines, "\n"):find("line 5", 1, true) ~= nil)
+
+	ok(chat:set_render_width(30))
+	local narrow_lines = activity_block.lines
+	ok(#narrow_lines < #wide_lines, "narrow wrapping must consume the preview's screen-row budget")
+	contains(table.concat(narrow_lines, "\n"), "... +4 lines")
+	ok(not table.concat(narrow_lines, "\n"):find("line 5", 1, true))
+	contains(table.concat(chat:render_lines(), "\n"), prose)
+	contains(table.concat(chat:activity_detail_lines(activity_block.line1), "\n"), "line 5")
+
+	ok(chat:set_render_width(120))
+	eq(activity_block.lines, wide_lines)
+end)
+
+test("Codex-style command cells preserve complete wrapping shell commands", function()
 	local command_lines = {
 		"printf output " .. string.rep("界", 100),
 		"echo second",
@@ -1196,13 +1225,14 @@ test("Codex-style command cells use the shared first-and-final-three preview", f
 		commandActions = {},
 	})
 
-	eq(#activity_block.lines, 1 + action.preview_limit)
+	eq(#activity_block.lines, 1 + #command_lines)
 	eq(activity_block.lines[2], "• Running " .. command_lines[1])
 	ok(not activity_block.lines[2]:find("...", 1, true), "the complete shell command must remain in the buffer")
-	eq(activity_block.lines[3], "  │ ... +2 lines")
-	eq(activity_block.lines[4], "  │ echo fourth")
-	eq(activity_block.lines[5], "  │ echo fifth")
-	eq(activity_block.lines[6], "  │ echo done")
+	eq(activity_block.lines[3], "  │ echo second")
+	eq(activity_block.lines[4], "  │ echo third")
+	eq(activity_block.lines[5], "  │ echo fourth")
+	eq(activity_block.lines[6], "  │ echo fifth")
+	eq(activity_block.lines[7], "  │ echo done")
 	ok(not table.concat(activity_block.lines, "\n"):find("K to inspect", 1, true))
 
 	local detail_text = table.concat(chat:activity_detail_lines(activity_block.line1), "\n")
@@ -1218,10 +1248,6 @@ test("Codex-style command cells use the shared first-and-final-three preview", f
 	if treesitter.status().available then
 		ok(active, "expected the ACP highlighter to start for the preview-marker regression")
 	end
-	local omission_meta = highlight_at(bufnr, activity_block.line1 + 2, "... +2 lines", "AcpActionMeta")
-	eq(omission_meta.hl_group_link, "Comment")
-	local meta_text = highlighted_text(bufnr, "AcpActionMeta")
-	ok(vim.tbl_contains(meta_text, "... +2 lines"))
 	vim.api.nvim_buf_delete(bufnr, { force = true })
 end)
 
@@ -1287,6 +1313,19 @@ test("Codex-style tools and exploration use Calling and Explored hierarchies", f
 	contains(detail, "$ rg shimmer_spans")
 	contains(detail, "$ sed -n 1,80p")
 
+	local user_shell = blocks.new()
+	local _, user_shell_block = user_shell:add_item({
+		id = "user-search",
+		type = "commandExecution",
+		source = "userShell",
+		command = "rg shimmer_spans",
+		commandActions = { { type = "search", query = "shimmer_spans" } },
+		status = "completed",
+		exitCode = 0,
+	})
+	contains(user_shell_block.lines[2], "• You ran rg shimmer_spans")
+	eq(user_shell:activity_at(user_shell_block.line1).presentation, "command")
+
 	local failed = blocks.new()
 	local _, failed_block = failed:add_item({
 		id = "tool-failed",
@@ -1331,8 +1370,9 @@ test("MCP and dynamic tools keep compact transcript previews and complete detail
 		},
 	}) do
 		local chat = blocks.new()
+		chat:set_render_width(120)
 		local _, tool_block = chat:add_item(item)
-		eq(#tool_block.lines, 2 + action.preview_limit)
+		eq(#tool_block.lines, 7)
 		contains(tool_block.lines[2], "search.inspect(...)")
 		ok(not table.concat(tool_block.lines, "\n"):find(long_argument, 1, true))
 		eq(tool_block.lines[4], "    ... +8 lines")
@@ -2325,6 +2365,7 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		eq(vim.api.nvim_win_get_config(state.input_win).relative, "win")
 
 		local old_prompt_width = vim.api.nvim_win_get_config(state.input_win).width
+		local old_render_width = state.chat.render_width
 		vim.api.nvim_win_set_width(state.sessions_win, 20)
 		vim.api.nvim_exec_autocmds("WinResized", {})
 		ok(
@@ -2336,6 +2377,13 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		local resized_prompt = vim.api.nvim_win_get_config(state.input_win)
 		local resized_turn = vim.api.nvim_win_get_config(state.instruction_win)
 		local resized_chat = vim.api.nvim_win_get_config(state.output_win)
+		local resized_output_info = vim.fn.getwininfo(state.output_win)[1]
+		eq(
+			state.chat.render_width,
+			vim.api.nvim_win_get_width(state.output_win) - resized_output_info.textoff,
+			"action preview width must track the usable chat width"
+		)
+		ok(state.chat.render_width > old_render_width, "widening the chat must update its preview budget")
 		eq(resized_turn.win, state.output_host_win)
 		eq(resized_turn.width, resized_prompt.width)
 		eq(resized_chat.width, resized_prompt.width + 2)
@@ -2676,7 +2724,7 @@ test("native Codex tab starts a thread, streams a turn, and tracks its diff", fu
 			"expected bounded command output to flush promptly"
 		)
 		local command_block = state.chat.by_id["command-1"]
-		eq(#command_block.lines, action.preview_limit + 2)
+		eq(#command_block.lines, action.preview_rows + 2)
 		fake.handlers.on_notification("item/completed", {
 			threadId = "thread-1",
 			turnId = "turn-1",

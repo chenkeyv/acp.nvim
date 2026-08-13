@@ -304,6 +304,10 @@ local function touch_model(model)
 	model.semantic_cache = nil
 end
 
+local function render_width(model)
+	return math.max(1, math.floor(tonumber(model and model.render_width) or action.compact_preview_width))
+end
+
 local function shift_after(model, block, delta)
 	if delta == 0 then
 		return
@@ -402,7 +406,7 @@ function Model:_render_action_block(block)
 		child.relative_line2 = nil
 	end
 	block.status = active and "in progress" or failed and "failed" or "completed"
-	local rows = action.render_rows(block)
+	local rows = action.render_rows(block, render_width(self))
 	local lines = row_lines(rows)
 	if #block.children == 1 then
 		block.children[1].lines = copy_lines(lines)
@@ -579,7 +583,7 @@ function Model:start_item(item, opts)
 	local activity_rows = action.render_rows({
 		children = { child },
 		metadata = { presentation = presentation },
-	})
+	}, render_width(self))
 	local block = new_block(self, "activity", {
 		id = item.id or opts.id,
 		status = normalize_status(item.status),
@@ -590,7 +594,7 @@ function Model:start_item(item, opts)
 		metadata = { presentation = presentation },
 	})
 	block.status = action.is_active(child) and "in progress" or action.failed(child) and "failed" or "completed"
-	child.lines = action.render_block(block)
+	child.lines = action.render_block(block, render_width(self))
 	child.relative_line1 = block.header_offset or 1
 	child.relative_line2 = (block.header_offset or 1) + #child.lines - 1
 	self.activity_open = presentation == "explore"
@@ -733,6 +737,16 @@ function Model:render_lines()
 		vim.list_extend(lines, copy_lines(block.lines))
 	end
 	return lines
+end
+
+function Model:set_render_width(width)
+	width = math.max(1, math.floor(tonumber(width) or action.compact_preview_width))
+	if self.render_width == width then
+		return false
+	end
+	self.render_width = width
+	self:reindex()
+	return true
 end
 
 function Model:block_at(line)
@@ -1077,7 +1091,7 @@ function Model:reindex()
 			block.kind == "activity"
 			and (presentation == "command" or presentation == "tool" or presentation == "explore")
 		then
-			local rendered_rows = action.render_rows(block)
+			local rendered_rows = action.render_rows(block, render_width(self))
 			local rendered = row_lines(rendered_rows)
 			block.lines = vim.list_extend({ "" }, rendered)
 			block.rows = vim.list_extend({ { text = "", role = "separator" } }, rendered_rows)
@@ -1140,6 +1154,7 @@ function M.new()
 		sequence = 0,
 		activity_open = false,
 		revision = 0,
+		render_width = action.compact_preview_width,
 	}, Model)
 end
 
@@ -1149,6 +1164,7 @@ function M.adopt(value)
 	end
 	value.sequence = tonumber(value.sequence) or #value.blocks
 	value.revision = tonumber(value.revision) or 0
+	value.render_width = math.max(1, math.floor(tonumber(value.render_width) or action.compact_preview_width))
 	return setmetatable(value, Model):reindex()
 end
 
