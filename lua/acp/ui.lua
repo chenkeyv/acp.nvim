@@ -6,6 +6,7 @@ local completion = require("acp.completion")
 local context = require("acp.context")
 local instructions = require("acp.instructions")
 local output_ui = require("acp.output_ui")
+local pagination = require("acp.pagination")
 local reloader = require("acp.reload")
 local render = require("acp.render")
 local requests = require("acp.requests")
@@ -30,6 +31,10 @@ local defaults = {
 	review_delivery = "inline",
 	thread_sources = { "cli", "vscode", "appServer" },
 	max_threads = 100,
+	chat = {
+		page_size = 20,
+		overscan = 5,
+	},
 	window = {
 		input_height = 6,
 		input_padding = 1,
@@ -61,6 +66,7 @@ local sync_composer
 local refresh_composer
 local flush_output_text
 local flush_action_output
+local update_chrome
 
 local function valid_buf(bufnr)
 	return bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -95,6 +101,7 @@ local function current_cwd()
 end
 
 local function fresh_state(cwd)
+	local chat = blocks.new()
 	return {
 		cwd = cwd or current_cwd(),
 		model = config.model,
@@ -136,7 +143,11 @@ local function fresh_state(cwd)
 		action_output_generation = 0,
 		cursor_update_pending = false,
 		output_winbar = nil,
-		chat = blocks.new(),
+		chat = chat,
+		chat_pages = { chat },
+		chat_page = 1,
+		chat_page_turns = { 0 },
+		chat_page_scroll_suppressed_until = 0,
 		tokens = nil,
 		token_totals = nil,
 		compaction_items = {},
@@ -148,11 +159,24 @@ local function apply_state_defaults(value)
 	if type(value) ~= "table" then
 		return value
 	end
+	local had_chat_pages = type(value.chat_pages) == "table" and #value.chat_pages > 0
 	for key, default in pairs(fresh_state(value.cwd)) do
 		if value[key] == nil then
 			value[key] = default
 		end
 	end
+	if not had_chat_pages then
+		value.chat_pages = { value.chat }
+		value.chat_page_turns = { pagination.model_turn_count(value.chat) }
+	end
+	value.chat_page = math.max(1, math.min(#value.chat_pages, tonumber(value.chat_page) or #value.chat_pages))
+	value.chat_page_turns = type(value.chat_page_turns) == "table" and value.chat_page_turns or {}
+	for index, page in ipairs(value.chat_pages) do
+		if value.chat_page_turns[index] == nil then
+			value.chat_page_turns[index] = pagination.model_turn_count(page)
+		end
+	end
+	value.chat = value.chat_pages[value.chat_page] or value.chat
 	value.prompt_layout_pending = nil
 	value._position_prompt = nil
 	value.prompt_reserved_rows = nil
@@ -230,12 +254,19 @@ local function cancel_action_output()
 	state.action_output_generation = (state.action_output_generation or 0) + 1
 end
 
+local function suppress_chat_auto_page()
+	if state then
+		state.chat_page_scroll_suppressed_until = vim.uv.hrtime() / 1000000 + 50
+	end
+end
+
 local function set_output(lines, follow)
 	if not state or not valid_buf(state.output_buf) then
 		return
 	end
 	cancel_output_text()
 	cancel_action_output()
+	suppress_chat_auto_page()
 	output_ui.pause_language_injection(state)
 	with_modifiable(state.output_buf, function()
 		vim.api.nvim_buf_set_lines(state.output_buf, 0, -1, false, lines)
@@ -272,7 +303,7 @@ local function sync_chat_render_width(render)
 	return true
 end
 
-local function set_chat(model)
+local function activate_chat(model, follow)
 	if not state then
 		return
 	end
@@ -282,8 +313,157 @@ local function set_chat(model)
 	state.chat_render_width = state.chat.render_width
 	if valid_buf(state.output_buf) then
 		blocks.bind(state.output_buf, state.chat)
-		set_output(state.chat:render_lines())
+		set_output(state.chat:render_lines(), follow)
 	end
+end
+
+local function set_chat(model, turn_count)
+	if not state then
+		return
+	end
+	model = blocks.adopt(model)
+	state.chat_pages = { model }
+	state.chat_page = 1
+	state.chat_page_turns = { tonumber(turn_count) or pagination.model_turn_count(model) }
+	activate_chat(model)
+end
+
+local function set_thread_chat(thread)
+	local chat_config = type(config.chat) == "table" and config.chat or {}
+	local pages, counts = pagination.from_thread(thread, chat_config.page_size, chat_config.overscan)
+	state.chat_pages = pages
+	state.chat_page_turns = counts
+	state.chat_page = #pages
+	activate_chat(pages[state.chat_page])
+end
+
+local function ensure_chat_pages()
+	if type(state.chat_pages) ~= "table" or #state.chat_pages == 0 then
+		state.chat_pages = { state.chat or blocks.new() }
+		state.chat_page_turns = { pagination.model_turn_count(state.chat_pages[1]) }
+		state.chat_page = 1
+	end
+	state.chat_page = math.max(1, math.min(#state.chat_pages, tonumber(state.chat_page) or #state.chat_pages))
+	return state.chat_pages
+end
+
+local function activate_latest_chat(follow)
+	local pages = ensure_chat_pages()
+	local latest = #pages
+	if state.chat_page ~= latest or state.chat ~= pages[latest] then
+		state.chat_page = latest
+		activate_chat(pages[latest], follow)
+		if update_chrome then
+			update_chrome()
+		end
+	end
+	return state.chat
+end
+
+local function begin_chat_turn()
+	local pages = ensure_chat_pages()
+	local latest = #pages
+	state.chat_page_turns = type(state.chat_page_turns) == "table" and state.chat_page_turns or {}
+	local count = tonumber(state.chat_page_turns[latest]) or pagination.model_turn_count(pages[latest])
+	local chat_config = type(config.chat) == "table" and config.chat or {}
+	if count >= pagination.page_size(chat_config.page_size) then
+		local page = pagination.tail_turns(pages[latest], chat_config.overscan)
+		table.insert(pages, page)
+		table.insert(state.chat_page_turns, 0)
+		latest = #pages
+		activate_chat(page)
+	else
+		activate_latest_chat()
+	end
+	state.chat_page = latest
+	state.chat_page_turns[latest] = (tonumber(state.chat_page_turns[latest]) or 0) + 1
+	if update_chrome then
+		update_chrome()
+	end
+end
+
+local function chat_line_anchor(model, line)
+	local block = model and model:block_at(line)
+	return block and { id = block.id, offset = line - block.line1 } or nil
+end
+
+local function capture_chat_view()
+	if not valid_win(state.output_win) then
+		return nil
+	end
+	local saved
+	vim.api.nvim_win_call(state.output_win, function()
+		saved = vim.fn.winsaveview()
+	end)
+	if not saved then
+		return nil
+	end
+	return {
+		view = saved,
+		top = chat_line_anchor(state.chat, saved.topline),
+		cursor = chat_line_anchor(state.chat, saved.lnum),
+	}
+end
+
+local function anchored_line(model, anchor)
+	local block = anchor and model and model.by_id[anchor.id] or nil
+	return block and math.min(block.line2, block.line1 + anchor.offset) or nil
+end
+
+local function restore_chat_view(anchor)
+	if not anchor or not valid_win(state.output_win) then
+		return
+	end
+	local view_state = anchor.view
+	view_state.topline = anchored_line(state.chat, anchor.top) or 1
+	view_state.lnum = anchored_line(state.chat, anchor.cursor) or view_state.topline
+	vim.api.nvim_win_call(state.output_win, function()
+		vim.fn.winrestview(view_state)
+	end)
+end
+
+local function select_chat_page(index, preserve_view)
+	local pages = ensure_chat_pages()
+	local target = math.max(1, math.min(#pages, tonumber(index) or state.chat_page or #pages))
+	local anchor = preserve_view and capture_chat_view() or nil
+	state.chat_page = target
+	activate_chat(pages[target], preserve_view and false or nil)
+	restore_chat_view(anchor)
+	return target
+end
+
+function M._handle_chat_scroll(winid, topline_delta)
+	if
+		not state
+		or winid ~= state.output_win
+		or not valid_win(state.output_win)
+		or vim.uv.hrtime() / 1000000 < (tonumber(state.chat_page_scroll_suppressed_until) or 0)
+	then
+		return false
+	end
+	local delta = tonumber(topline_delta) or 0
+	if delta == 0 then
+		return false
+	end
+	local pages = ensure_chat_pages()
+	local current = tonumber(state.chat_page) or #pages
+	local info = vim.fn.getwininfo(state.output_win)[1] or {}
+	local target
+	if delta < 0 and tonumber(info.topline) == 1 and current > 1 then
+		target = current - 1
+	elseif
+		delta > 0
+		and tonumber(info.botline) >= vim.api.nvim_buf_line_count(state.output_buf)
+		and current < #pages
+	then
+		target = current + 1
+	end
+	if not target then
+		return false
+	end
+	select_chat_page(target, true)
+	update_chrome()
+	return true
 end
 
 local function apply_chat_operation(operation)
@@ -292,6 +472,7 @@ local function apply_chat_operation(operation)
 	end
 	local start_row = math.max(0, tonumber(operation.start_row) or 0)
 	local end_row = math.max(start_row, tonumber(operation.end_row) or start_row)
+	suppress_chat_auto_page()
 	output_ui.pause_language_injection(state)
 	with_modifiable(state.output_buf, function()
 		vim.api.nvim_buf_set_lines(state.output_buf, start_row, end_row, false, operation.lines or {})
@@ -336,6 +517,7 @@ local function append_text(block_id, text)
 	if not state or not valid_buf(state.output_buf) or not text or text == "" then
 		return
 	end
+	activate_latest_chat()
 	if state.pending_output_block_id and state.pending_output_block_id ~= block_id then
 		flush_output_text()
 	end
@@ -362,6 +544,7 @@ local function append_action_output(item_id, delta)
 	if not state or not valid_buf(state.output_buf) or not item_id or not delta or delta == "" then
 		return
 	end
+	activate_latest_chat()
 	state.pending_action_output = state.pending_action_output or {}
 	state.pending_action_output[item_id] = (state.pending_action_output[item_id] or "") .. delta
 	if state.action_output_scheduled then
@@ -384,6 +567,7 @@ local function append_chat_block(callback)
 	if not state or not state.chat then
 		return nil
 	end
+	activate_latest_chat()
 	flush_output_text()
 	flush_action_output()
 	local operation, block = callback(state.chat)
@@ -483,7 +667,7 @@ local function update_output_winbar()
 	end
 end
 
-local function update_chrome()
+update_chrome = function()
 	if not state then
 		return
 	end
@@ -640,7 +824,7 @@ local function create_buffers()
 		vim.bo[state.output_buf].undolevels = -1
 		vim.bo[state.output_buf].filetype = "acp"
 		vim.bo[state.output_buf].modifiable = false
-		set_chat(state.chat or blocks.new())
+		activate_chat(state.chat or blocks.new())
 	end
 	-- Chat transcripts are presentation surfaces, so editor-wide indent guide
 	-- plugins should leave their literal whitespace alone.
@@ -931,6 +1115,7 @@ local function active_stream_block(block_id, kind)
 end
 
 local function ensure_agent_item(item_id)
+	activate_latest_chat()
 	local block = state.agent_item == item_id and active_stream_block(state.agent_block_id, "agent")
 	if block then
 		return block.id
@@ -944,6 +1129,7 @@ local function ensure_agent_item(item_id)
 end
 
 local function ensure_plan_item(item_id)
+	activate_latest_chat()
 	local block = state.plan_item == item_id and active_stream_block(state.plan_block_id, "plan")
 	if block then
 		return block.id
@@ -1011,7 +1197,7 @@ local function apply_thread_response(result)
 	local turn = active_turn(thread)
 	state.turn_id = turn and turn.id or nil
 	state.busy = turn ~= nil
-	set_chat(blocks.from_thread(thread))
+	set_thread_chat(thread)
 	set_status(state.busy and "running" or "ready")
 	update_chrome()
 	local found = false
@@ -1115,6 +1301,7 @@ end
 
 local function start_envelope(envelope)
 	remove_pending_instruction(envelope._acp_instruction_id, false)
+	begin_chat_turn()
 	state.busy = true
 	state.agent_item = nil
 	state.agent_block_id = nil
@@ -2310,7 +2497,10 @@ local function register_autocmds()
 	vim.api.nvim_create_autocmd("WinScrolled", {
 		group = group,
 		callback = function(event)
-			if state and tonumber(event.match) == state.output_win then
+			local winid = state and tonumber(event.match) or nil
+			if winid and winid == state.output_win then
+				local scroll = vim.v.event[tostring(winid)]
+				M._handle_chat_scroll(winid, type(scroll) == "table" and scroll.topline or 0)
 				defer_semantic_refresh()
 			end
 		end,
@@ -2400,11 +2590,13 @@ function M._adopt_runtime(runtime)
 	local had_chat = type(previous_state) == "table" and type(previous_state.chat) == "table"
 	state = apply_state_defaults(previous_state)
 	if state then
-		if had_chat then
-			state.chat = blocks.adopt(state.chat)
-		else
-			state.chat = blocks.new()
+		local pages = pagination.adopt_pages(state.chat_pages)
+		if #pages == 0 then
+			pages = { had_chat and blocks.adopt(state.chat) or blocks.new() }
 		end
+		state.chat_pages = pages
+		state.chat_page = math.max(1, math.min(#pages, tonumber(state.chat_page) or #pages))
+		state.chat = pages[state.chat_page]
 		state.chat_render_width = nil
 		state.chat:set_render_width(output_render_width())
 		state.chat_render_width = state.chat.render_width

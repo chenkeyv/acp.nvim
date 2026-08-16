@@ -76,6 +76,10 @@ require("acp").setup({
 	auto_context = true,
 	follow_up = "queue", -- busy-turn delivery for <C-CR> and :AcpSend: "queue" or "steer"
 	thread_sources = { "cli", "vscode", "appServer" },
+	chat = {
+		page_size = 20, -- conversation turns per chat-buffer page
+		overscan = 5, -- neighboring turns retained on each side while scrolling
+	},
 	window = {
 		input_height = 6,
 		input_padding = 1,
@@ -172,6 +176,13 @@ turn ends, and typing or scrolling can defer the final semantic refresh by
 `semantic_debounce_ms`. Cursor-only updates are capped by `cursor_interval_ms`.
 Every transcript mutation returns the chat to its final line, so manual
 scrolling remains available only until the next content update arrives.
+Chat history is paginated at conversation-turn boundaries, with 20 turns per
+page by default. Five preceding and following turns remain rendered around each
+page so scrolling stays continuous. Reaching the top or bottom automatically
+reveals the adjacent page, while resumed threads and new streamed output return
+to the newest page. The winbar shows the current page when more than one exists.
+Starting a turn on a full newest page creates the next page. Output search,
+maps, outlines, and quickfix projections operate on the displayed page.
 The chat window disables editor indent guides and wrapped-line indentation, and
 the output and sessions buffers keep no undo history. Each command or tool gets
 one level-two Codex-style cell; compatible read/list/search commands coalesce

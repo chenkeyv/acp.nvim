@@ -199,6 +199,15 @@ function M.chat_winbar(state)
 		table.insert(chunks, separator())
 		table.insert(chunks, statusline_chunk(("%s %s"):format(icons.get("section"), title), "AcpChatMeta"))
 	end
+	local page_count = type(state.chat_pages) == "table" and #state.chat_pages or 0
+	if page_count > 1 then
+		local page = math.max(1, math.min(page_count, tonumber(state.chat_page) or page_count))
+		table.insert(chunks, separator())
+		table.insert(
+			chunks,
+			statusline_chunk(("%s page %d/%d"):format(icons.get("history"), page, page_count), "AcpChatMeta")
+		)
+	end
 	if state.tokens then
 		local used = format_count(state.tokens.totalTokens or 0)
 		local window = state.tokens.modelContextWindow

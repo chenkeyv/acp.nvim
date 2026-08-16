@@ -11,6 +11,7 @@ local icons = require("acp.icons")
 local jsonrpc = require("acp.jsonrpc")
 local output = require("acp.output")
 local output_ui = require("acp.output_ui")
+local pagination = require("acp.pagination")
 local permission = require("acp.permission")
 local render = require("acp.render")
 local requests = require("acp.requests")
@@ -727,6 +728,35 @@ test("structured thread model renders history and diffs", function()
 		changes = { { path = "lua/acp/ui.lua", kind = { type = "update", move_path = vim.NIL } } },
 	})[1]
 	contains(failed_change, "File changes: failed")
+end)
+
+test("chat pagination preserves turn boundaries with five turns of overlap", function()
+	local thread = { turns = {} }
+	for index = 1, 20 do
+		thread.turns[index] = {
+			items = {
+				{
+					id = "page-user-" .. index,
+					type = "userMessage",
+					content = { { type = "text", text = "Prompt " .. index } },
+				},
+				{ id = "page-agent-" .. index, type = "agentMessage", text = "Response " .. index },
+			},
+		}
+	end
+
+	local pages, counts, ranges = pagination.from_thread(thread, 4)
+	eq(counts, { 4, 4, 4, 4, 4 })
+	eq(#pages, 5)
+	eq(ranges[3], { first = 4, last = 17, core_first = 9, core_last = 12 })
+	local middle = table.concat(pages[3]:render_lines(), "\n")
+	contains(middle, "Prompt 4")
+	contains(middle, "Response 17")
+	ok(not middle:find("Prompt 3", 1, true))
+	ok(not middle:find("Prompt 18", 1, true))
+	eq(pagination.model_turn_count(pages[3]), 14)
+	eq(pagination.page_size(0), 1)
+	eq(pagination.overscan(nil), 5)
 end)
 
 test("chat blocks preserve roles, action cells, code, and failures", function()
@@ -2539,6 +2569,8 @@ test("Codex chat uses a dedicated tab and preserves the source layout", function
 		}) do
 			ok(output_keymaps[description], "missing output keymap: " .. description)
 		end
+		ok(not output_keymaps["Previous Codex chat page"])
+		ok(not output_keymaps["Next Codex chat page"])
 		ok(
 			not output_keymaps["Center active Codex response or redraw"],
 			"legacy output centering keymap must be removed"
@@ -2790,6 +2822,142 @@ test("sessions split lists and resumes Codex threads", function()
 		vim.cmd("AcpSessions")
 		lines = vim.api.nvim_buf_get_lines(state.sessions_buf, 0, -1, false)
 		eq(lines, { "* Second session", "  First session" })
+	end)
+	ui._reset()
+	if not passed then
+		error(err, 2)
+	end
+end)
+
+test("chat pages reveal while scrolling and keep five turns across live rollover", function()
+	ui._reset()
+	ui.setup({ auto_context = false, command = { "missing-codex" }, chat = { page_size = 4 } })
+	local fake = {
+		threads = { { id = "paged-thread", preview = "Paged session", cwd = "/tmp/project" } },
+		turns = 0,
+	}
+
+	function fake:set_handlers(handlers)
+		self.handlers = handlers
+	end
+
+	function fake:list_threads(_, callback)
+		callback(vim.deepcopy(self.threads))
+	end
+
+	function fake:resume_thread(thread_id, opts, callback)
+		local turns = {}
+		for index = 1, 15 do
+			turns[index] = {
+				id = "history-turn-" .. index,
+				status = "completed",
+				items = {
+					{
+						id = "history-user-" .. index,
+						type = "userMessage",
+						content = { { type = "text", text = "History prompt " .. index } },
+					},
+					{
+						id = "history-agent-" .. index,
+						type = "agentMessage",
+						text = "History response " .. index,
+					},
+				},
+			}
+		end
+		callback({ thread = { id = thread_id, cwd = opts.cwd, turns = turns }, cwd = opts.cwd })
+	end
+
+	function fake:start_turn(_, payload, callback)
+		self.turns = self.turns + 1
+		self.last_payload = payload
+		callback({ turn = { id = "live-turn-" .. self.turns, status = "inProgress" } })
+	end
+
+	function fake:stop() end
+
+	ui._set_client(fake)
+	local passed, err = pcall(function()
+		ui.open()
+		local state = ui._state()
+		vim.api.nvim_set_current_win(state.sessions_win)
+		vim.api.nvim_win_set_cursor(state.sessions_win, { 2, 0 })
+		ui.select_session()
+
+		eq(#state.chat_pages, 4)
+		eq(state.chat_page_turns, { 4, 4, 4, 3 })
+		eq(state.chat_page, 4)
+		local text = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+		contains(text, "History prompt 8")
+		contains(text, "History prompt 15")
+		ok(not text:find("History prompt 7", 1, true))
+		local winbar = vim.api.nvim_eval_statusline(vim.wo[state.output_win].winbar, { winid = state.output_win }).str
+		contains(winbar, "page 4/4")
+
+		state.chat_page_scroll_suppressed_until = 0
+		vim.api.nvim_win_call(state.output_win, function()
+			vim.cmd("normal! ggzt")
+		end)
+		ok(ui._handle_chat_scroll(state.output_win, -1))
+		eq(state.chat_page, 3)
+		text = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+		contains(text, "History prompt 4")
+		contains(text, "History response 15")
+		ok(not text:find("History prompt 3", 1, true))
+		state.chat_page_scroll_suppressed_until = 0
+		vim.api.nvim_win_call(state.output_win, function()
+			vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(state.output_buf), 0 })
+			vim.cmd("normal! zb")
+		end)
+		ok(ui._handle_chat_scroll(state.output_win, 1))
+		eq(state.chat_page, 4)
+
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Live prompt 16" })
+		ui.send()
+		eq(#state.chat_pages, 4)
+		eq(state.chat_page_turns, { 4, 4, 4, 4 })
+		state.chat_page_scroll_suppressed_until = 0
+		vim.api.nvim_win_call(state.output_win, function()
+			vim.cmd("normal! ggzt")
+		end)
+		ok(ui._handle_chat_scroll(state.output_win, -1))
+		eq(state.chat_page, 3)
+		fake.handlers.on_notification("item/agentMessage/delta", {
+			threadId = state.thread_id,
+			turnId = "live-turn-1",
+			itemId = "live-agent-16",
+			delta = "Live response 16",
+		})
+		ok(
+			vim.wait(250, function()
+				return state.chat_page == 4
+					and table
+							.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+							:find("Live response 16", 1, true)
+						~= nil
+			end, 5),
+			"streamed output should return an older view to the newest page"
+		)
+		fake.handlers.on_notification("turn/completed", {
+			threadId = state.thread_id,
+			turn = { id = "live-turn-1", status = "completed" },
+		})
+		vim.api.nvim_buf_set_lines(state.input_buf, 0, -1, false, { "Live prompt 17" })
+		ui.send()
+		eq(#state.chat_pages, 5)
+		eq(state.chat_page_turns, { 4, 4, 4, 4, 1 })
+		eq(state.chat_page, 5)
+		text = table.concat(vim.api.nvim_buf_get_lines(state.output_buf, 0, -1, false), "\n")
+		contains(text, "History prompt 12")
+		contains(text, "History prompt 15")
+		contains(text, "Live prompt 16")
+		contains(text, "Live prompt 17")
+		ok(not text:find("History prompt 11", 1, true))
+		eq(pagination.model_turn_count(state.chat_pages[5]), 6)
+		contains(
+			vim.api.nvim_eval_statusline(vim.wo[state.output_win].winbar, { winid = state.output_win }).str,
+			"page 5/5"
+		)
 	end)
 	ui._reset()
 	if not passed then
